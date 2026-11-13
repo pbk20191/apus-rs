@@ -15,7 +15,7 @@ fn main() {
     println!("run_main_runs_swift_main_task ... ok");
 
     // The task finishes while a run loop callback (like an AppKit event handler running a modal loop) is inside
-    // a nested run: the stop issued for the result lands on that nested run, and run_main must still return.
+    // a nested run: run_main must not stop that nested run, and must still return once it ends.
     use objc2_core_foundation::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopSource, CFRunLoopSourceContext};
     unsafe extern "C-unwind" fn run_nested(_info: *mut std::ffi::c_void) {
         CFRunLoop::run_in_mode(kCFRunLoopDefaultMode, 0.5, false);
@@ -39,6 +39,8 @@ fn main() {
     });
     nested.invalidate();
     assert_eq!(value, 7);
-    assert!(started.elapsed() < Duration::from_secs(2), "took {:?}", started.elapsed());
+    // The nested run is someone else's: it must run its full 0.5 s, not be cut short by our stop.
+    let took = started.elapsed();
+    assert!(took >= Duration::from_millis(450) && took < Duration::from_secs(2), "took {took:?}");
     println!("run_main_returns_when_finished_inside_a_nested_run_loop ... ok");
 }

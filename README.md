@@ -52,7 +52,8 @@ Dispatch backend only: `SerialQueue`, `block_on` (not on the main thread).
 ## The main run loop
 
 Main tasks run when the main queue is drained by `CFRunLoopRun`/`NSApplication.run` (or `run_main`, which drives
-the main run loop through `objc2-core-foundation` ; the task handle is polled inside a `CFRunLoopSource`, which stops the run loop when the task is done).
+the main run loop through `objc2-core-foundation` ; the task handle is polled inside a `CFRunLoopSource`, which stops the run loop when the task is done, and a
+`CFRunLoopObserver` tracks nesting so a nested run loop in progress is never cut short).
 **Do not use `dispatch_main()`**: it drains the main queue on a worker thread, so MainActor code runs off the
 main thread.
 
