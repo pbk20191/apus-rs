@@ -13,4 +13,32 @@ fn main() {
     });
     assert!(ok, "run_main future was not a MainActor Swift task after a suspension");
     println!("run_main_runs_swift_main_task ... ok");
+
+    // The task finishes while a run loop callback (like an AppKit event handler running a modal loop) is inside
+    // a nested run: the stop issued for the result lands on that nested run, and run_main must still return.
+    use objc2_core_foundation::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopSource, CFRunLoopSourceContext};
+    unsafe extern "C-unwind" fn run_nested(_info: *mut std::ffi::c_void) {
+        CFRunLoop::run_in_mode(kCFRunLoopDefaultMode, 0.5, false);
+    }
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_secs(5));
+        eprintln!("run_main_returns_when_finished_inside_a_nested_run_loop ... FAILED: hung");
+        std::process::exit(2);
+    });
+    let mut context = CFRunLoopSourceContext {
+        version: 0, info: std::ptr::null_mut(), retain: None, release: None, copyDescription: None,
+        equal: None, hash: None, schedule: None, cancel: None, perform: Some(run_nested),
+    };
+    let nested = unsafe { CFRunLoopSource::new(None, 0, &mut context) }.unwrap();
+    CFRunLoop::main().unwrap().add_source(Some(&nested), unsafe { kCFRunLoopDefaultMode });
+    nested.signal(); // fires once run_main starts the run loop
+    let started = std::time::Instant::now();
+    let value = run_main(async {
+        sleep(Duration::from_millis(50)).await;
+        7
+    });
+    nested.invalidate();
+    assert_eq!(value, 7);
+    assert!(started.elapsed() < Duration::from_secs(2), "took {:?}", started.elapsed());
+    println!("run_main_returns_when_finished_inside_a_nested_run_loop ... ok");
 }
