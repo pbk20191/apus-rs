@@ -69,6 +69,17 @@ unsafe impl Send for CallShared {}
 unsafe impl Sync for CallShared {}
 
 impl CallShared {
+    fn new(closure: *mut c_void, force_child: bool) -> CallShared {
+        CallShared {
+            closure,
+            result: UnsafeCell::new([0; 4]),
+            state: Mutex::new(CallState::Registered),
+            waker: Mutex::new(None),
+            child: AtomicPtr::default(),
+            force_child,
+        }
+    }
+
     fn result_ptr(&self) -> *mut c_void {
         self.result.get().cast()
     }
@@ -97,14 +108,34 @@ impl Drop for CallShared {
 /// Pops a registered call. Same-Task only when it is the poll's only call, no wake is pending and it is not
 /// forced to a child; otherwise any registered call (for the child path).
 pub(crate) fn take_registered(t: &task::Task, same_task: bool) -> Option<Arc<CallShared>> {
-    let mut calls = t.calls.lock().unwrap();
+    take_registered_from(&t.calls, same_task, task::notified(t))
+}
+
+fn take_registered_from(calls: &Mutex<Vec<Arc<CallShared>>>, same_task: bool, notified: bool) -> Option<Arc<CallShared>> {
+    let mut calls = calls.lock().unwrap();
     calls.retain(|c| matches!(*c.state.lock().unwrap(), CallState::Registered));
-    if same_task && !(calls.len() == 1 && !calls[0].force_child && !task::notified(t)) {
+    if same_task && !(calls.len() == 1 && !calls[0].force_child && !notified) {
         return None;
     }
-    let call = calls.pop()?;
-    *call.state.lock().unwrap() = CallState::Running;
-    Some(call)
+    // Check and transition under the call's own lock: a future dropped meanwhile (Abandoned) is skipped.
+    while let Some(call) = calls.pop() {
+        let mut state = call.state.lock().unwrap();
+        if matches!(*state, CallState::Registered) {
+            *state = CallState::Running;
+            drop(state);
+            return Some(call);
+        }
+    }
+    None
+}
+
+/// The record pointer given to the funclet for a child Task. It carries two references: one consumed by
+/// rs_call_done when the child finishes, one by rs_set_child. The child may finish before spawn_child gets
+/// to rs_set_child, so the second keeps the record alive until then.
+fn hand_to_child(call: Arc<CallShared>) -> *const c_void {
+    let record = Arc::into_raw(call);
+    unsafe { Arc::increment_strong_count(record) };
+    record.cast()
 }
 
 #[no_mangle]
@@ -125,7 +156,7 @@ extern "C" fn rs_take_call(rust: *mut c_void, closure: *mut *mut c_void, result:
 extern "C" fn rs_take_child(rust: *mut c_void, record: *mut *const c_void) -> i32 {
     let t = unsafe { &*(rust as *const task::Task) };
     let Some(call) = take_registered(t, false) else { return 0 };
-    unsafe { *record = Arc::into_raw(call).cast() };
+    unsafe { *record = hand_to_child(call) };
     1
 }
 
@@ -138,9 +169,11 @@ extern "C" fn rs_call_closure(record: *const c_void, closure: *mut *mut c_void, 
     }
 }
 
+/// Stores the child Task (+1) and releases the reference hand_to_child added for this call.
 #[no_mangle]
 extern "C" fn rs_set_child(record: *const c_void, child: *mut c_void) {
-    unsafe { &*(record as *const CallShared) }.child.store(child, SeqCst);
+    let call = unsafe { Arc::from_raw(record as *const CallShared) };
+    call.child.store(child, SeqCst);
 }
 
 #[no_mangle]
@@ -183,17 +216,7 @@ impl SwiftAsync {
     }
 
     fn with_mode(closure_box: *mut c_void, force_child: bool) -> SwiftAsync {
-        SwiftAsync {
-            registered: false,
-            shared: Arc::new(CallShared {
-                closure: closure_box,
-                result: UnsafeCell::new([0; 4]),
-                state: Mutex::new(CallState::Registered),
-                waker: Mutex::new(None),
-                child: AtomicPtr::default(),
-                force_child,
-            }),
-        }
+        SwiftAsync { registered: false, shared: Arc::new(CallShared::new(closure_box, force_child)) }
     }
 }
 
@@ -254,4 +277,37 @@ pub async fn timeout(duration: std::time::Duration, call: SwiftAsync) -> Option<
         deadline.as_mut().poll(cx).map(|()| None)
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn registered(force_child: bool) -> Arc<CallShared> {
+        // A null closure: CallShared::drop's swift_release(NULL) is a no-op.
+        Arc::new(CallShared::new(std::ptr::null_mut(), force_child))
+    }
+
+    /// spawn_child calls rs_set_child after creating the child, and the child may already have finished
+    /// (rs_call_done consumed the record) and the awaiting future may be gone. The record must still be alive.
+    #[test]
+    fn child_record_outlives_early_completion() {
+        let call = registered(true);
+        let calls = Mutex::new(vec![call.clone()]);
+        let taken = take_registered_from(&calls, false, false).expect("a registered call");
+        let record = hand_to_child(taken);
+        rs_call_done(record, std::ptr::null_mut()); // the child finished first
+        assert!(Arc::strong_count(&call) >= 2, "only the test's reference is left: rs_set_child would read freed memory");
+        drop(call); // the awaiting future is gone too
+        rs_set_child(record, std::ptr::null_mut()); // must be the last user of the record
+    }
+
+    /// A call abandoned before the funclet takes it must never be started.
+    #[test]
+    fn abandoned_call_is_not_taken() {
+        let call = registered(false);
+        let calls = Mutex::new(vec![call.clone()]);
+        *call.state.lock().unwrap() = CallState::Abandoned;
+        assert!(take_registered_from(&calls, false, false).is_none());
+    }
 }
