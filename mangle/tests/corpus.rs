@@ -78,6 +78,50 @@ const DECLARATIONS: &[&str] = &[
     // an extension in the type's own module mangles like a member; deep nesting
     "Probe.Counter(class).extra(_: Int) -> Int",
     "static Probe.Outer(enum).Mid(enum).Leaf(struct).deep(_: Outer(enum), _: Outer(enum).Mid(enum)) -> Outer(enum).Mid(enum).Leaf(struct)",
+    // extensions of other modules' types
+    "(extension in Probe) Swift.Int.doubled() -> Int",
+    "static (extension in Probe) Swift.Int.make(_: String) -> Int",
+    "(extension in Probe) Swift.Int.half: Int { get }",
+    "(extension in Probe) Swift.String.shout(times: Int) -> String",
+    "(extension in Probe) Swift.Array<Element>.firstTwo() -> [Element]",
+    "(extension in Probe) Swift.Array<Element>.second: Element? { get }",
+    "(extension in Probe) Swift.Array<Element>.pair(with: [Element]) -> [[Element]]",
+    "(extension in Probe) Swift.Optional<Wrapped>.orThrow() throws -> Wrapped",
+    "(extension in Probe) Swift.Dictionary<Key, Value>.keysArray() -> [Key]",
+    "(extension in Probe) Swift.Dictionary<Key, Value>.value(for: Key) -> Value?",
+    "(extension in Probe) _Concurrency.Task<Success, Failure>.poke()",
+    "(extension in Probe) _Concurrency.AsyncStream<Element>.tag() -> Int",
+    // constrained extensions
+    "(extension in Probe where Element == Int) Swift.Array<Element>.total() -> Int",
+    "(extension in Probe where Element == Int) Swift.Array<Element>.firstOr(_: Element) -> Element",
+    "(extension in Probe where Element: Hashable) Swift.Array<Element>.unique() -> [Element]",
+    "(extension in Probe where Wrapped: Shape) Swift.Optional<Wrapped>.areaOrZero() -> Double",
+    "(extension in Probe where Value: Equatable) Swift.Dictionary<Key, Value>.hasEqual() -> Bool",
+    "(extension in Probe where Key == String) Swift.Dictionary<Key, Value>.stringKeys() -> [Key]",
+    "(extension in Probe where Element == Int) Swift.Set<Element>.sum() -> Int",
+    "(extension in Probe where T: Shape) Probe.Box(struct)<T>.areas() -> Double",
+    "(extension in Probe where A == Int, B: Hashable) Probe.Pair(struct)<A, B>.keyed() -> [B: Int]",
+    "(extension in Probe where K == String) Probe.Keyed(struct)<K: Hashable>.name() -> String",
+    "static (extension in Probe where Success == Never, Failure == Never) _Concurrency.Task<Success, Failure>.nap(_: UInt64) async throws",
+    // members of generic types
+    "Probe.Box(struct)<T>.get() -> T?",
+    "Probe.Box(struct)<T>.put(_: T, at: Int)",
+    "Probe.Box(struct)<T>.count: Int { get }",
+    "static Probe.Box(struct)<T>.empty() -> Box(struct)<T>",
+    "Probe.Box(struct)<T>.map<U>(_: U) -> Box(struct)<U>",
+    "Probe.Box(struct)<T>.same(_: Box(struct)<T>) -> Box(struct)<T>",
+    "Probe.Box(struct)<T>.contextual() -> Int where T: Hashable",
+    "Probe.Box(struct)<T>.two<U, V>(_: U, _: V) where U: Hashable",
+    "Probe.Pair(struct)<A, B>.swap() -> Pair(struct)<B, A>",
+    "Probe.Pair(struct)<A, B>.first(_: A) -> B?",
+    "Probe.Pair(struct)<A, B>.Inner(struct).f(_: A) -> B?",
+    "Probe.Keyed(struct)<K: Hashable>.key() -> K?",
+    // protocol extensions
+    "(extension in Probe) Probe.Shape(protocol).twice() -> Double",
+    "(extension in Probe) Probe.Shape(protocol).same(as: Self) -> Self",
+    "(extension in Probe) Swift.Collection.countTwice() -> Int",
+    "(extension in Probe) Swift.Collection.firstElement() -> Self.Element?",
+    "(extension in Probe where Self.Element == String) Swift.Sequence.joinedTwice() -> String",
     // the functions the runtime tests call
     "Probe.addAsync(_: Int, _: Int) async -> Int",
     "Probe.greet(_: String, times: Int, sleepMs: Int) async throws -> String",
@@ -131,6 +175,20 @@ fn framework_symbols() {
     );
     assert_eq!(mangle("StoreKit.Product(struct).displayName: String { get }").unwrap(), "$s8StoreKit7ProductV11displayNameSSvg");
     assert_eq!(mangle("StoreKit.Product(struct).id: String { get }").unwrap(), "$s8StoreKit7ProductV2idSSvg");
+    assert_eq!(
+        mangle("static StoreKit.Transaction(struct).updates: Transaction(struct).Transactions(struct) { get }").unwrap(),
+        "$s8StoreKit11TransactionV7updatesAC12TransactionsVvgZ"
+    );
+    assert_eq!(mangle("StoreKit.Transaction(struct).finish() async").unwrap(), "$s8StoreKit11TransactionV6finishyyYaF");
+    // `Task.sleep(nanoseconds:)`: a constrained extension inside the type's own module.
+    assert_eq!(
+        mangle(
+            "static (extension in _Concurrency where Success == Never, Failure == Never) \
+             _Concurrency.Task<Success, Failure>.sleep(nanoseconds: UInt64) async throws"
+        )
+        .unwrap(),
+        "$sScTss5NeverORszABRs_rlE5sleep11nanosecondsys6UInt64V_tYaKFZ"
+    );
 }
 
 #[test]

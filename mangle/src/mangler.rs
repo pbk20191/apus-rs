@@ -188,8 +188,8 @@ impl Mangler {
 
     fn module(&mut self, module: &str) -> Result<(), String> {
         match module {
-            "Swift" => self.push("s"),
-            "_Concurrency" => self.push("Sc"),
+            // The concurrency library's ABI name is Swift (`Sc` only prefixes its abbreviated types).
+            "Swift" | "_Concurrency" => self.push("s"),
             "__C" => self.push("So"),
             _ => self.identifier(module)?,
         }
@@ -200,9 +200,11 @@ impl Mangler {
     fn nominal(&mut self, module: &str, path: &[(String, Kind)]) -> Result<(), String> {
         let (name, kind) = path.last().ok_or("empty type path")?;
         if path.len() == 1 {
-            let standard = match module {
-                "Swift" => names::standard_type(name),
-                "_Concurrency" => names::concurrency_type(name),
+            let standard = match (module, kind) {
+                ("Swift", Kind::Protocol) => names::standard_protocol(name).map(|subst| (subst, *kind)),
+                ("_Concurrency", Kind::Protocol) => names::concurrency_protocol(name).map(|subst| (subst, *kind)),
+                ("Swift", _) => names::standard_type(name),
+                ("_Concurrency", _) => names::concurrency_type(name),
                 _ => None,
             };
             if let Some((subst, _)) = standard {
@@ -299,13 +301,13 @@ impl Mangler {
                 self.push("_p");
                 Ok(())
             }
-            Ty::Param(0) => {
+            Ty::Param(GenericParam { depth: 0, index: 0 }) => {
                 self.push("x");
                 Ok(())
             }
-            Ty::Param(n) => {
+            Ty::Param(param) => {
                 self.push("q");
-                self.push(&index(n - 1));
+                self.param_index(*param);
                 Ok(())
             }
             Ty::Member(param, name) => {
@@ -314,11 +316,11 @@ impl Mangler {
                     return Ok(());
                 }
                 self.identifier(name)?;
-                if *param == 0 {
+                if *param == (GenericParam { depth: 0, index: 0 }) {
                     self.push("Qz");
                 } else {
                     self.push("Qy");
-                    self.push(&index(param - 1));
+                    self.param_index(*param);
                 }
                 self.add_substitution(key);
                 Ok(())
@@ -326,12 +328,23 @@ impl Mangler {
         }
     }
 
-    /// The generic parameter a requirement is about: `z` for the first, an index for the others.
-    fn generic_param_index(&mut self, param: usize) {
-        if param == 0 {
+    /// A generic parameter other than the first: its index at depth 0, `d<depth><index>` deeper.
+    fn param_index(&mut self, param: GenericParam) {
+        if param.depth == 0 {
+            self.push(&index(param.index - 1));
+        } else {
+            self.push("d");
+            self.push(&index(param.depth - 1));
+            self.push(&index(param.index));
+        }
+    }
+
+    /// The generic parameter a requirement is about: `z` for the first, else as `param_index`.
+    fn generic_param_index(&mut self, param: GenericParam) {
+        if param == (GenericParam { depth: 0, index: 0 }) {
             self.push("z");
         } else {
-            self.push(&index(param - 1));
+            self.param_index(param);
         }
     }
 
@@ -417,19 +430,26 @@ fn sorted_requirements(requirements: &[Requirement]) -> Vec<Requirement> {
 
 /// Associated types that a same-type requirement pins down: the signature is mangled with them replaced
 /// (`S.Element == Int` makes a parameter of type `S.Element` an `Int`).
-fn same_types(requirements: &[Requirement]) -> HashMap<(usize, String), Ty> {
-    let mut map = HashMap::new();
+fn same_types<'a>(requirements: impl Iterator<Item = &'a Requirement>) -> SameTypes {
+    let mut map = SameTypes::default();
     for requirement in requirements {
+        // A generic parameter fixed to a concrete type.
+        if let Requirement::SameType(Subject::Param(param), ty) = requirement {
+            if !matches!(ty, Ty::Member(..) | Ty::Param(_)) {
+                map.params.insert(*param, ty.clone());
+                continue;
+            }
+        }
         match requirement {
             Requirement::SameType(Subject::Member(param, name), ty) if !matches!(ty, Ty::Member(..)) => {
-                map.insert((*param, name.clone()), ty.clone());
+                map.members.insert((*param, name.clone()), ty.clone());
             }
             Requirement::SameType(Subject::Param(param), Ty::Member(other, name)) => {
-                map.insert((*other, name.clone()), Ty::Param(*param));
+                map.members.insert((*other, name.clone()), Ty::Param(*param));
             }
             // `T.A == U.B`: the later one is spelled as the earlier one.
             Requirement::SameType(Subject::Member(param, name), Ty::Member(other, other_name)) => {
-                map.insert((*other, other_name.clone()), Ty::Member(*param, name.clone()));
+                map.members.insert((*other, other_name.clone()), Ty::Member(*param, name.clone()));
             }
             _ => {}
         }
@@ -437,25 +457,57 @@ fn same_types(requirements: &[Requirement]) -> HashMap<(usize, String), Ty> {
     map
 }
 
-fn canonical(ty: &Ty, same_types: &HashMap<(usize, String), Ty>) -> Ty {
+/// What same-type requirements pin down: the signature is mangled with these replaced.
+#[derive(Default)]
+struct SameTypes {
+    params: HashMap<GenericParam, Ty>,
+    members: HashMap<(GenericParam, String), Ty>,
+}
+
+fn canonical(ty: &Ty, same_types: &SameTypes) -> Ty {
     match ty {
-        Ty::Member(param, name) => same_types.get(&(*param, name.clone())).cloned().unwrap_or_else(|| ty.clone()),
+        Ty::Param(param) => same_types.params.get(param).cloned().unwrap_or_else(|| ty.clone()),
+        Ty::Member(param, name) => same_types.members.get(&(*param, name.clone())).cloned().unwrap_or_else(|| ty.clone()),
         Ty::Optional(wrapped) => Ty::Optional(Box::new(canonical(wrapped, same_types))),
         Ty::Tuple(elements) => Ty::Tuple(elements.iter().map(|(label, element)| (label.clone(), canonical(element, same_types))).collect()),
         Ty::Nominal { module, path, args } => {
             Ty::Nominal { module: module.clone(), path: path.clone(), args: args.iter().map(|arg| canonical(arg, same_types)).collect() }
         }
-        Ty::Any | Ty::AnyObject | Ty::Existential(_) | Ty::Param(_) => ty.clone(),
+        Ty::Any | Ty::AnyObject | Ty::Existential(_) => ty.clone(),
     }
 }
 
+fn all_same_types(decl: &Decl) -> SameTypes {
+    same_types(decl.extension.iter().flat_map(|e| e.requirements.iter()).chain(decl.requirements.iter()))
+}
+
+/// How a generic signature that adds no parameters to its context ends (ASTMangler::gatherGenericSignatureParts):
+/// with a lone unconstrained context parameter the whole signature is mangled (`l`); otherwise only the new
+/// requirements are, after an empty parameter count (`rl`).
+fn contextual_signature_end(decl: &Decl, inside_constrained_extension: bool) -> &'static str {
+    if decl.context_params == 1 && !decl.context_is_constrained && !inside_constrained_extension { "l" } else { "rl" }
+}
+
 pub fn mangle(decl: &Decl) -> Result<String, String> {
-    let same_types = same_types(&decl.requirements);
+    let same_types = all_same_types(decl);
     let mut m = Mangler { buffer: "$s".into(), ..Default::default() };
     if decl.context.is_empty() {
         m.module(&decl.module)?;
     } else {
         m.nominal(&decl.module, &decl.context)?;
+    }
+    let mut in_constrained_extension = false;
+    if let Some(extension) = &decl.extension {
+        // ASTMangler::appendExtension: the type, the extension's module, the constraints it adds, `E`.
+        m.module(&extension.module)?;
+        if !extension.requirements.is_empty() {
+            for requirement in sorted_requirements(&extension.requirements) {
+                m.requirement(&requirement)?;
+            }
+            m.push(contextual_signature_end(decl, false));
+            in_constrained_extension = true;
+        }
+        m.push("E");
     }
     m.identifier(&decl.name)?;
     match &decl.signature {
@@ -501,6 +553,15 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
                     m.push(&index(decl.generic_params - 1));
                 }
                 m.push("l");
+            } else if !decl.requirements.is_empty() {
+                // A `where` clause on a member that adds no parameters of its own.
+                if decl.context_params == 0 {
+                    return Err("a `where` clause needs generic parameters".into());
+                }
+                for requirement in sorted_requirements(&decl.requirements) {
+                    m.requirement(&requirement)?;
+                }
+                m.push(contextual_signature_end(decl, in_constrained_extension));
             }
             m.push("F");
         }
@@ -524,7 +585,7 @@ fn is_concrete(ty: &Ty) -> bool {
 /// The mangled name of the declaration's result type (a function's result, a getter's type), as the runtime
 /// resolves type names; `None` when it depends on a generic parameter.
 pub fn result_type(decl: &Decl) -> Result<Option<String>, String> {
-    let same_types = same_types(&decl.requirements);
+    let same_types = all_same_types(decl);
     let ty = match &decl.signature {
         Signature::Function { result, .. } => canonical(result, &same_types),
         Signature::Getter(ty) => canonical(ty, &same_types),

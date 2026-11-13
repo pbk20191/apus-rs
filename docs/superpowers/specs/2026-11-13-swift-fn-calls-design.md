@@ -135,6 +135,20 @@ mangling 구현이 큰 작업이라 1단계와 분리한다.
 - 지원하지 않는 것: 다른 모듈의 extension 멤버, 제네릭 타입의 멤버, 함수 타입 인자, 연산자, init, subscript, setter,
   비ASCII 이름, 격리/소유권 속성. 이런 경우 컴파일 에러가 나며, `#[symbol]`로 심볼을 직접 줄 수 있다.
 
+**3단계와 그 밖의 확장 구현 완료 (2026-11-13)**
+- `SwiftStream`: 임의의 `AsyncSequence`를 소비한다. 프로토콜의 dispatch thunk로 `makeAsyncIterator()`(consuming self)와
+  `next()`(inout self)를 부르고, iterator와 element 타입은 `swift_getAssociatedTypeWitness`로 얻는다.
+  요소는 호출한 Task에서 await하며, `.child()`로 자식 Task에서 기다리게 할 수 있다. `stream` feature로 `futures_core::Stream`을 구현한다.
+- `swift!`의 receiver(`self: &SwiftValue` / `&SwiftObject`)와 불투명 결과: `SwiftValue`(주소로 반환)와 `DirectValue`(레지스터로 반환)의
+  Swift 타입은 선언에서 계산한다 (`result_type!`).
+- mangler: extension 멤버(다른 모듈의 extension, 제약 있는 extension, 프로토콜 extension), 제네릭 타입의 멤버(타입 인자는 depth 0,
+  메서드 자신의 인자는 depth 1), 프로토콜 멤버. 제약 있는 extension의 시그니처 끝(`l` / `rl`)은
+  `ASTMangler::gatherGenericSignatureParts`의 규칙을 따른다. `_Concurrency` 모듈은 `s`(Swift)로 mangling된다.
+  swiftc 대조 선언은 110개가 됐고, `Task.sleep(nanoseconds:)`와 StoreKit `Transaction.updates`/`finish()` 심볼도 일치한다.
+- 실제 프레임워크로 끝까지 확인: 선언으로 `Task.sleep`을 호출하고, StoreKit `Transaction.updates`를 선언된 static getter로 얻어
+  `SwiftStream`으로 만든다 (요소 타입 `VerificationResult<Transaction>`).
+
 **남은 것**
-- 3단계: `AsyncSequence` → `Stream`.
-- `SwiftValue`의 필드/프로퍼티 접근을 편하게 하는 계층 (지금은 getter 심볼을 `SwiftFn`으로 직접 호출).
+- mangler: 함수 타입 인자, init, subscript, setter, 연산자, 둘 이상의 제네릭 enclosing type.
+- 작은 struct를 레지스터로 받는 receiver (지금은 주소로 넘기는 값과 클래스만 지원).
+- 정수와 실수가 섞인 직접 반환값.

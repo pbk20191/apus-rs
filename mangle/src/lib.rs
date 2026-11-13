@@ -29,8 +29,9 @@ impl std::error::Error for Error {}
 /// Mangles a function, method or property getter.
 ///
 /// ```text
-/// [static] Module.Type(kind)….name[<T: P, U>]([label|_]: Type, …) [async] [throws] [-> Type] [where …]
-/// [static] Module.Type(kind)….name: Type { get }
+/// [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name[<U: P>]([label|_]: Type, …)
+///     [async] [throws] [-> Type] [where …]
+/// [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name: Type { get }
 /// ```
 ///
 /// - Types: standard library names (`Int`, `String`, `Bool`, `Double`, `UInt8`, …), `[T]`, `[K: V]`, `Set<T>`,
@@ -38,8 +39,15 @@ impl std::error::Error for Error {}
 /// - Other types name their kind: `Cart(struct)`, `Customer(class)`, `Color(enum)`; `(actor)` is accepted too.
 ///   A bare name belongs to the declaration's module; `Other.Name(kind)` names another module; nested types are
 ///   `Outer(kind).Inner(kind)`. Generic arguments follow the kind: `Box(struct)<Int>`.
-/// - Not supported: members of extensions or of generic types, function-typed parameters, operators,
-///   initializers, subscripts, setters, non-ASCII names, isolation and ownership attributes.
+/// - Members of a generic type name its parameters: `Shop.Box(struct)<T>.get() -> T?`,
+///   `Swift.Array<Element>.first: Element? { get }`. Write the type's own constraints with them
+///   (`Keyed(struct)<K: Hashable>`). The declaration's own parameters come after its name.
+/// - Protocol members: `Shop.Shape(protocol).area() -> Double`; the conforming type is `Self`.
+/// - `(extension in Module)` marks a member declared in an extension that is mangled as one: an extension in
+///   another module than the type's, any constrained extension (`(extension in M where Element == Int)`), and
+///   every protocol extension. Inside it, bare names belong to the extension's module.
+/// - Not supported: function-typed parameters, operators, initializers, subscripts, setters, non-ASCII names,
+///   isolation and ownership attributes, more than one generic enclosing type, parameter packs.
 pub fn mangle(declaration: &str) -> Result<String, Error> {
     let decl = parse::parse(declaration).map_err(Error)?;
     mangler::mangle(&decl).map_err(Error)

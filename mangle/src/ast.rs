@@ -5,6 +5,7 @@ pub enum Kind {
     Struct,
     Class,
     Enum,
+    Protocol,
 }
 
 impl Kind {
@@ -13,8 +14,17 @@ impl Kind {
             Kind::Struct => 'V',
             Kind::Class => 'C',
             Kind::Enum => 'O',
+            Kind::Protocol => 'P',
         }
     }
+}
+
+/// A generic parameter: `depth` 0 for the parameters of the enclosing type (or of a free function), 1 for a
+/// method's own parameters inside a generic type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct GenericParam {
+    pub depth: usize,
+    pub index: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -33,10 +43,9 @@ pub enum Ty {
     AnyObject,
     /// `any P`
     Existential(Protocol),
-    /// A generic parameter, by index (depth 0).
-    Param(usize),
+    Param(GenericParam),
     /// `T.Name`: an associated type of a generic parameter.
-    Member(usize, String),
+    Member(GenericParam, String),
 }
 
 pub struct Param {
@@ -48,8 +57,8 @@ pub struct Param {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Subject {
-    Param(usize),
-    Member(usize, String),
+    Param(GenericParam),
+    Member(GenericParam, String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,13 +72,27 @@ pub enum Signature {
     Getter(Ty),
 }
 
+/// `(extension in Module where …)`: the declaration lives in an extension that needs its own mangling
+/// (another module's, a constrained one, or a protocol's).
+pub struct Extension {
+    pub module: String,
+    pub requirements: Vec<Requirement>,
+}
+
 pub struct Decl {
     pub module: String,
     /// The types the declaration is a member of, outermost first.
     pub context: Vec<(String, Kind)>,
+    /// Generic parameters of the enclosing type (1 for a protocol: `Self`).
+    pub context_params: usize,
+    /// Whether the enclosing type's own declaration constrains its parameters (`Set<Element: Hashable>`).
+    pub context_is_constrained: bool,
+    pub extension: Option<Extension>,
     pub name: String,
     pub is_static: bool,
+    /// The declaration's own generic parameters.
     pub generic_params: usize,
+    /// The declaration's own requirements (inline constraints and its `where` clause).
     pub requirements: Vec<Requirement>,
     pub signature: Signature,
 }

@@ -164,6 +164,50 @@ fn unrun_calls_release_their_arguments() -> Result<(), Failed> {
     check(never_run && unavailable && run, format!("released: never run {never_run}, unavailable {unavailable}, run {run}"))
 }
 
+// Declared in Swift syntax; symbols and result types are computed at compile time.
+async_swift_rs::swift! {
+    /// `Task.sleep(nanoseconds:)` lives in a constrained extension of `Task`.
+    #[swift = "static (extension in _Concurrency where Success == Never, Failure == Never) \
+               _Concurrency.Task<Success, Failure>.sleep(nanoseconds: UInt64) async throws"]
+    async fn task_sleep(nanoseconds: u64) throws;
+
+    /// StoreKit 2: `static var updates: Transaction.Transactions { get }`, an AsyncSequence.
+    #[swift = "static StoreKit.Transaction(struct).updates: Transaction(struct).Transactions(struct) { get }"]
+    fn transaction_updates() -> SwiftValue;
+}
+
+fn extension_members_by_declaration() -> Result<(), Failed> {
+    let (r, took) = in_task(async {
+        let start = std::time::Instant::now();
+        (task_sleep(40_000_000).await, start.elapsed())
+    });
+    check(matches!(r, Ok(())) && took >= Duration::from_millis(35), format!("{r:?} after {took:?}"))
+}
+
+/// The real `Transaction.updates`: obtained through a declared static getter, turned into a `SwiftStream`.
+/// Nothing is awaited from it (there are no transactions in a test process).
+fn storekit_transaction_updates_is_a_stream() -> Result<(), Failed> {
+    use async_swift_rs::swift::SwiftStream;
+    extern "C" { fn dlopen(path: *const std::ffi::c_char, mode: i32) -> *mut std::ffi::c_void; }
+    unsafe { dlopen(c"/System/Library/Frameworks/StoreKit.framework/StoreKit".as_ptr(), 1) };
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let outcome = transaction_updates().and_then(|updates| {
+            let sequence = updates.ty().name();
+            SwiftStream::new(updates).map(|stream| (sequence, stream.element_type().name()))
+        });
+        let _ = tx.send(outcome);
+    });
+    let outcome = rx.recv_timeout(Duration::from_secs(15)).map_err(|_| "StoreKit did not answer")?;
+    match outcome {
+        Ok((sequence, element)) => check(
+            sequence == "StoreKit.Transaction.Transactions" && element == "StoreKit.VerificationResult<StoreKit.Transaction>",
+            format!("{sequence} of {element}"),
+        ),
+        Err(error) => Err(format!("failed: {error:?}").into()),
+    }
+}
+
 fn main() {
     common::run(vec![
         Trial::test("types_and_conformances", types_and_conformances),
@@ -174,5 +218,7 @@ fn main() {
         Trial::test("synchronous_calls", synchronous_calls),
         Trial::test("unrun_calls_release_their_arguments", unrun_calls_release_their_arguments),
         Trial::test("storekit_products_reaches_the_framework", storekit_products_reaches_the_framework),
+        Trial::test("extension_members_by_declaration", extension_members_by_declaration),
+        Trial::test("storekit_transaction_updates_is_a_stream", storekit_transaction_updates_is_a_stream),
     ])
 }

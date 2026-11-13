@@ -1,12 +1,13 @@
 //! Parses the declaration syntax: Swift's own, with the kind of each non-standard type spelled out.
 //!
 //! ```text
-//! [static] Module.Type(kind)….name[<T: P, U>]([label|_]: Type, …) [async] [throws] [-> Type] [where …]
-//! [static] Module.Type(kind)….name: Type { get }
+//! [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name[<U: P>]([label|_]: Type, …)
+//!     [async] [throws] [-> Type] [where …]
+//! [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name: Type { get }
 //! ```
 //! Types: `Int`, `String`, … (standard library names), `[T]`, `[K: V]`, `T?`, `(A, b: B)`, `Any`, `AnyObject`,
-//! `any Proto`, `Name(struct|class|enum)` (in the declaration's module), `Module.Name(kind)`, `Outer(kind).Inner(kind)`,
-//! `Name(kind)<Args>`, generic parameters and `T.Associated`.
+//! `any Proto`, `Name(struct|class|enum)` (in the declaration's module), `Module.Name(kind)`,
+//! `Outer(kind).Inner(kind)`, `Name(kind)<Args>`, generic parameters and `T.Associated`.
 
 use crate::ast::*;
 use crate::names;
@@ -15,10 +16,20 @@ pub struct Parser<'a> {
     text: &'a str,
     position: usize,
     module: String,
-    generics: Vec<String>,
+    /// The module a bare name belongs to: the extension's when there is one, else the declaration's.
+    home: String,
+    generics: Vec<(String, GenericParam)>,
 }
 
 type Parsed<T> = Result<T, String>;
+
+/// One dotted segment of the declaration's path, with what was written after its name.
+struct Segment {
+    name: String,
+    kind: Option<Kind>,
+    /// `<T: P, U>`: parameter names with their inline constraints.
+    generics: Option<Vec<(String, Vec<Protocol>)>>,
+}
 
 impl<'a> Parser<'a> {
     fn rest(&self) -> &'a str {
@@ -99,15 +110,26 @@ impl<'a> Parser<'a> {
         Ok(name.to_string())
     }
 
-    /// `(struct)`, `(class)`, `(enum)` or `(actor)` right after a type name.
+    /// `(struct)`, `(class)`, `(enum)`, `(actor)` or `(protocol)` right after a type name.
     fn kind_suffix(&mut self) -> Option<Kind> {
-        for (text, kind) in [("(struct)", Kind::Struct), ("(class)", Kind::Class), ("(actor)", Kind::Class), ("(enum)", Kind::Enum)] {
+        let kinds = [
+            ("(struct)", Kind::Struct),
+            ("(class)", Kind::Class),
+            ("(actor)", Kind::Class),
+            ("(enum)", Kind::Enum),
+            ("(protocol)", Kind::Protocol),
+        ];
+        for (text, kind) in kinds {
             if self.rest().starts_with(text) {
                 self.position += text.len();
                 return Some(kind);
             }
         }
         None
+    }
+
+    fn generic_param(&self, name: &str) -> Option<GenericParam> {
+        self.generics.iter().find(|(known, _)| known == name).map(|(_, param)| *param)
     }
 
     fn protocol(&mut self) -> Parsed<Protocol> {
@@ -120,7 +142,7 @@ impl<'a> Parser<'a> {
         } else if names::concurrency_protocol(&first).is_some() {
             "_Concurrency"
         } else {
-            &self.module
+            &self.home
         };
         Ok(Protocol { module: module.to_string(), name: first })
     }
@@ -187,7 +209,7 @@ impl<'a> Parser<'a> {
 
     fn named_type(&mut self) -> Parsed<Ty> {
         let first = self.identifier()?;
-        if let Some(param) = self.generics.iter().position(|g| *g == first) {
+        if let Some(param) = self.generic_param(&first) {
             if self.eat_path_dot() {
                 return Ok(Ty::Member(param, self.identifier()?));
             }
@@ -213,7 +235,7 @@ impl<'a> Parser<'a> {
         let (module, path) = if segments.len() > 1 && segments[0].1.is_none() {
             (segments[0].0.clone(), &segments[1..])
         } else {
-            (self.module.clone(), &segments[..])
+            (self.home.clone(), &segments[..])
         };
         // A lone name without a kind must be one the standard library defines.
         if let [(name, None)] = path {
@@ -239,7 +261,7 @@ impl<'a> Parser<'a> {
         }
         let mut resolved = Vec::new();
         for (name, kind) in path {
-            let kind = kind.ok_or_else(|| format!("`{name}` needs its kind: `{name}(struct)`, `{name}(class)` or `{name}(enum)`"))?;
+            let kind = kind.ok_or_else(|| needs_kind(name))?;
             resolved.push((name.clone(), kind));
         }
         Ok(Ty::Nominal { module, path: resolved, args })
@@ -247,29 +269,29 @@ impl<'a> Parser<'a> {
 
     fn subject(&mut self) -> Parsed<Subject> {
         let name = self.identifier()?;
-        let param = self.generics.iter().position(|g| *g == name).ok_or_else(|| format!("`{name}` is not a generic parameter"))?;
+        let param = self.generic_param(&name).ok_or_else(|| format!("`{name}` is not a generic parameter"))?;
         if self.eat_path_dot() {
             return Ok(Subject::Member(param, self.identifier()?));
         }
         Ok(Subject::Param(param))
     }
 
-    /// `: P & Q` after a subject.
-    fn conformances(&mut self, subject: &Subject, into: &mut Vec<Requirement>) -> Parsed<()> {
-        loop {
-            into.push(Requirement::Conforms(subject.clone(), self.protocol()?));
-            if !self.eat("&") {
-                return Ok(());
-            }
+    /// `P & Q`
+    fn protocol_list(&mut self) -> Parsed<Vec<Protocol>> {
+        let mut protocols = vec![self.protocol()?];
+        while self.eat("&") {
+            protocols.push(self.protocol()?);
         }
+        Ok(protocols)
     }
 
+    /// The requirements of a `where` clause, up to its end.
     fn where_clause(&mut self, into: &mut Vec<Requirement>) -> Parsed<()> {
         loop {
             let subject = self.subject()?;
             if self.eat("==") {
                 let ty = self.ty()?;
-                // Canonical form anchors a same-type requirement on the generic parameter.
+                // Canonical form anchors a same-type requirement on the earlier, shorter type.
                 into.push(match (subject, ty) {
                     (Subject::Member(param, name), Ty::Param(other)) => Requirement::SameType(Subject::Param(other), Ty::Member(param, name)),
                     (Subject::Member(param, name), Ty::Member(other, other_name)) if other < param => {
@@ -279,7 +301,9 @@ impl<'a> Parser<'a> {
                 });
             } else {
                 self.expect(":")?;
-                self.conformances(&subject, into)?;
+                for protocol in self.protocol_list()? {
+                    into.push(Requirement::Conforms(subject.clone(), protocol));
+                }
             }
             if !self.eat(",") {
                 return Ok(());
@@ -287,52 +311,126 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `<T: P & Q, U>` (the `<` already eaten): names with their inline constraints.
+    fn generic_clause(&mut self) -> Parsed<Vec<(String, Vec<Protocol>)>> {
+        let mut params = Vec::new();
+        loop {
+            let name = self.identifier()?;
+            let constraints = if self.eat(":") { self.protocol_list()? } else { Vec::new() };
+            params.push((name, constraints));
+            if !self.eat(",") {
+                break;
+            }
+        }
+        self.expect(">")?;
+        Ok(params)
+    }
+
+    fn segment(&mut self) -> Parsed<Segment> {
+        let name = self.identifier()?;
+        let kind = self.kind_suffix();
+        let generics = if self.eat_here('<') { Some(self.generic_clause()?) } else { None };
+        Ok(Segment { name, kind, generics })
+    }
+
+    /// Registers generic parameters at `depth` and returns the requirements written inline.
+    fn declare_generics(&mut self, clause: Vec<(String, Vec<Protocol>)>, depth: usize) -> Vec<Requirement> {
+        let mut requirements = Vec::new();
+        for (index, (name, constraints)) in clause.into_iter().enumerate() {
+            let param = GenericParam { depth, index };
+            self.generics.push((name, param));
+            requirements.extend(constraints.into_iter().map(|protocol| Requirement::Conforms(Subject::Param(param), protocol)));
+        }
+        requirements
+    }
+
     fn declaration(&mut self) -> Parsed<Decl> {
         let is_static = self.eat_keyword("static");
+
+        // `(extension in Module [where …])`: its `where` clause is parsed once the generic parameters are known.
+        let mut extension: Option<(String, Option<usize>)> = None;
         self.skip_whitespace();
-        let mut segments = vec![(self.identifier()?, self.kind_suffix())];
+        if self.rest().starts_with('(') {
+            self.position += 1;
+            if !(self.eat_keyword("extension") && self.eat_keyword("in")) {
+                return Err(self.error("expected `(extension in Module)`"));
+            }
+            let module = self.identifier()?;
+            let where_at = if self.eat_keyword("where") { Some(self.position) } else { None };
+            let close = self.rest().find(')').ok_or_else(|| self.error("expected `)`"))?;
+            self.position += close + 1;
+            extension = Some((module, where_at));
+        }
+
+        self.skip_whitespace();
+        let mut segments = vec![self.segment()?];
+        if segments[0].kind.is_some() || segments[0].generics.is_some() {
+            return Err("expected `Module.name…`: a declaration starts with its module".into());
+        }
+        self.module = segments[0].name.clone();
+        self.home = extension.as_ref().map_or_else(|| self.module.clone(), |(module, _)| module.clone());
         while self.eat_path_dot() {
-            let name = self.identifier()?;
-            segments.push((name, self.kind_suffix()));
+            segments.push(self.segment()?);
         }
         if segments.len() < 2 {
             return Err("expected `Module.name…`".into());
         }
-        let (name, name_kind) = segments.pop().unwrap();
-        if name_kind.is_some() || segments[0].1.is_some() {
-            return Err("expected `Module.Type(kind).name…`: the module and the declaration's name take no kind".into());
-        }
-        self.module = segments[0].0.clone();
-        let mut context = Vec::new();
-        for (type_name, kind) in &segments[1..] {
-            let kind = kind.ok_or_else(|| format!("`{type_name}` needs its kind: `{type_name}(struct)`, `{type_name}(class)` or `{type_name}(enum)`"))?;
-            context.push((type_name.clone(), kind));
+        let member = segments.pop().unwrap();
+        if member.kind.is_some() {
+            return Err(format!("`{}` is the declaration's name: it takes no kind", member.name));
         }
 
-        let mut requirements = Vec::new();
-        if self.eat_here('<') {
-            let mut inline: Vec<(usize, usize)> = Vec::new(); // (parameter, where its constraints start)
-            loop {
-                let param = self.identifier()?;
-                self.generics.push(param);
-                if self.eat(":") {
-                    inline.push((self.generics.len() - 1, self.position));
-                    // Skip now, parse once every parameter name is known.
-                    let mut skipped = Vec::new();
-                    self.conformances(&Subject::Param(0), &mut skipped)?;
+        // The enclosing types.
+        let mut context = Vec::new();
+        let mut context_params = 0;
+        let mut context_is_constrained = false;
+        let lone_context = segments.len() == 2;
+        for segment in segments.drain(1..) {
+            let kind = match segment.kind {
+                Some(kind) => kind,
+                None if lone_context => standard_kind(&self.module, &segment.name).ok_or_else(|| needs_kind(&segment.name))?,
+                None => return Err(needs_kind(&segment.name)),
+            };
+            if kind == Kind::Protocol {
+                if segment.generics.is_some() {
+                    return Err(format!("protocol `{}` takes no generic parameters; its conforming type is `Self`", segment.name));
                 }
-                if !self.eat(",") {
-                    break;
+                self.generics.push(("Self".into(), GenericParam { depth: 0, index: 0 }));
+                context_params = 1;
+                context_is_constrained = true; // Self: Protocol
+            } else if let Some(clause) = segment.generics {
+                if context_params > 0 {
+                    return Err("only one enclosing type may be generic".into());
                 }
+                context_params = clause.len();
+                let declared = self.declare_generics(clause, 0);
+                context_is_constrained = !declared.is_empty() || standard_type_is_constrained(&self.module, &segment.name);
             }
-            self.expect(">")?;
-            let after = self.position;
-            for (param, at) in inline {
-                self.position = at;
-                self.conformances(&Subject::Param(param), &mut requirements)?;
-            }
-            self.position = after;
+            context.push((segment.name, kind));
         }
+
+        // The declaration's own generic parameters sit one level below the enclosing type's.
+        let own_depth = usize::from(context_params > 0);
+        let (generic_params, mut requirements) = match member.generics {
+            Some(clause) => (clause.len(), self.declare_generics(clause, own_depth)),
+            None => (0, Vec::new()),
+        };
+
+        let extension = match extension {
+            Some((module, where_at)) => {
+                let mut extension_requirements = Vec::new();
+                if let Some(at) = where_at {
+                    let resume = std::mem::replace(&mut self.position, at);
+                    self.where_clause(&mut extension_requirements)?;
+                    if !self.eat(")") {
+                        return Err(self.error("unexpected text in the extension's `where` clause"));
+                    }
+                    self.position = resume;
+                }
+                Some(Extension { module, requirements: extension_requirements })
+            }
+            None => None,
+        };
 
         let signature = if self.eat("(") {
             let mut params = Vec::new();
@@ -369,8 +467,42 @@ impl<'a> Parser<'a> {
         if !self.rest().is_empty() {
             return Err(self.error("unexpected text"));
         }
-        Ok(Decl { module: self.module.clone(), context, name, is_static, generic_params: self.generics.len(), requirements, signature })
+        Ok(Decl {
+            module: self.module.clone(),
+            context,
+            context_params,
+            context_is_constrained,
+            extension,
+            name: member.name,
+            is_static,
+            generic_params,
+            requirements,
+            signature,
+        })
     }
+}
+
+fn needs_kind(name: &str) -> String {
+    format!("`{name}` needs its kind: `{name}(struct)`, `{name}(class)`, `{name}(enum)` or `{name}(protocol)`")
+}
+
+/// The kind of a standard library type or protocol named without one.
+fn standard_kind(module: &str, name: &str) -> Option<Kind> {
+    match module {
+        "Swift" => names::standard_type(name)
+            .map(|(_, kind)| kind)
+            .or(names::swift_type(name))
+            .or((names::standard_protocol(name).is_some() || names::swift_protocol(name)).then_some(Kind::Protocol)),
+        "_Concurrency" => {
+            names::concurrency_type(name).map(|(_, kind)| kind).or(names::concurrency_protocol(name).map(|_| Kind::Protocol))
+        }
+        _ => None,
+    }
+}
+
+/// Single-parameter standard types whose declaration constrains the parameter (`Set<Element: Hashable>`).
+fn standard_type_is_constrained(module: &str, name: &str) -> bool {
+    module == "Swift" && matches!(name, "Set" | "Range" | "ClosedRange")
 }
 
 fn swift_generic(name: &str, args: Vec<Ty>) -> Ty {
@@ -378,5 +510,5 @@ fn swift_generic(name: &str, args: Vec<Ty>) -> Ty {
 }
 
 pub fn parse(text: &str) -> Parsed<Decl> {
-    Parser { text, position: 0, module: String::new(), generics: Vec::new() }.declaration()
+    Parser { text, position: 0, module: String::new(), home: String::new(), generics: Vec::new() }.declaration()
 }

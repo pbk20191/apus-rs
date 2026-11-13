@@ -133,8 +133,9 @@ static PRODUCTS: SwiftAsyncFn = SwiftAsyncFn::new(async_swift_rs::mangle!(
 the standard library spelled out:
 
 ```text
-[static] Module.Type(kind)….name[<T: P, U>]([label|_]: Type, …) [async] [throws] [-> Type] [where …]
-[static] Module.Type(kind)….name: Type { get }
+[static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name[<U: P>]([label|_]: Type, …)
+    [async] [throws] [-> Type] [where …]
+[static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name: Type { get }
 ```
 
 - Types: `Int`, `String`, `Bool`, `Double`, `UInt8`, … ; `[T]`, `[K: V]`, `Set<T>`, `T?`, tuples, `Any`,
@@ -142,12 +143,25 @@ the standard library spelled out:
 - Other types name their kind: `Cart(struct)`, `Customer(class)`, `Color(enum)` (`(actor)` too). A bare name is in
   the declaration's module, `Other.Name(kind)` in another; nested types are `Outer(kind).Inner(kind)`; generic
   arguments follow the kind: `Box(struct)<Int>`.
-- Not supported yet: members of extensions in other modules or of generic types, function-typed parameters,
-  operators, initializers, subscripts, setters, non-ASCII names, isolation and ownership attributes. A declaration
-  that cannot be mangled is a compile error; for anything unsupported, pass the symbol itself with `#[symbol]`.
+- Members of generic types name the type's parameters, with the type's own constraints:
+  `Shop.Box(struct)<T>.get() -> T?`, `Swift.Array<Element>.first: Element? { get }`, `Keyed(struct)<K: Hashable>`.
+- Protocol members: `Shop.Shape(protocol).area() -> Double`; the conforming type is `Self`.
+- `(extension in Module)` marks a member of an extension that Swift mangles as one: an extension in another
+  module than the type's, any constrained extension, every protocol extension. For example
+  `Task.sleep(nanoseconds:)`:
 
-The mangler (`mangle/`) ports the Swift compiler's identifier and substitution rules and is checked against the
-symbols `swiftc` actually emits for 70 declarations, plus real StoreKit symbols.
+```text
+static (extension in _Concurrency where Success == Never, Failure == Never)
+    _Concurrency.Task<Success, Failure>.sleep(nanoseconds: UInt64) async throws
+```
+
+- Not supported yet: function-typed parameters, operators, initializers, subscripts, setters, non-ASCII names,
+  isolation and ownership attributes, more than one generic enclosing type. A declaration that cannot be mangled
+  is a compile error; for anything unsupported, pass the symbol itself with `#[symbol]`.
+
+The mangler (`mangle/`) ports the Swift compiler's identifier, substitution and generic-signature rules and is
+checked against the symbols `swiftc` actually emits for 110 declarations, plus real StoreKit and concurrency
+symbols.
 
 ### Generic functions, framework structs, synchronous calls
 

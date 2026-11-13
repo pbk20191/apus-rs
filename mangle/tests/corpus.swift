@@ -77,3 +77,30 @@ public enum Outer { public enum Mid { public struct Leaf { public static func de
 public func g8<T: Sequence, U: Sequence>(_ t: T, _ u: U, _ e: U.Element) -> [T.Element] where U.Element == T.Element { [] }
 public func g9<S: Sequence, T>(_ s: S, _ e: S.Element) -> T where S.Element == T { e }
 public func t7(_ b: Box<()>, _ c: ()?) -> ()? { nil }
+// ---- third batch: extensions, members of generic types, protocol extensions ----
+public extension Int { func doubled() -> Int { self * 2 } ; static func make(_ s: String) -> Int { 0 } ; var half: Int { self / 2 } }
+public extension String { func shout(times: Int) -> String { self } }
+public extension Array { func firstTwo() -> [Element] { [] } ; var second: Element? { nil } ; func pair(with other: [Element]) -> [[Element]] { [] } }
+public extension Array where Element == Int { func total() -> Int { 0 } ; func firstOr(_ d: Element) -> Element { d } }
+public extension Array where Element: Hashable { func unique() -> [Element] { self } }
+public extension Optional { func orThrow() throws -> Wrapped { fatalError() } }
+public extension Optional where Wrapped: Shape { func areaOrZero() -> Double { 0 } }
+public extension Dictionary { func keysArray() -> [Key] { [] } ; func value(for k: Key) -> Value? { nil } }
+public extension Dictionary where Value: Equatable { func hasEqual() -> Bool { false } }
+public extension Dictionary where Key == String { func stringKeys() -> [Key] { [] } }
+public extension Set where Element == Int { func sum() -> Int { 0 } }
+public extension Box { func get() -> T? { nil } ; func put(_ t: T, at i: Int) {} ; var count: Int { 0 } ; static func empty() -> Box<T> { Box() }
+  func map<U>(_ u: U) -> Box<U> { Box<U>() } ; func same(_ b: Box<T>) -> Box<T> { b }
+  func contextual() -> Int where T: Hashable { 0 } ; func two<U, V>(_ u: U, _ v: V) where U: Hashable {} }
+public extension Box where T: Shape { func areas() -> Double { 0 } }
+public struct Pair<A, B> { public init() {} ; public func swap() -> Pair<B, A> { Pair<B, A>() } ; public func first(_ a: A) -> B? { nil }
+  public struct Inner { public func f(_ a: A) -> B? { nil } } }
+public extension Pair where A == Int, B: Hashable { func keyed() -> [B: Int] { [:] } }
+public struct Keyed<K: Hashable> { public init() {} ; public func key() -> K? { nil } }
+public extension Keyed where K == String { func name() -> String { "" } }
+public extension Shape { func twice() -> Double { 0 } ; func same(as other: Self) -> Self { other } }
+public extension Collection { func countTwice() -> Int { 0 } ; func firstElement() -> Element? { nil } }
+public extension Sequence where Element == String { func joinedTwice() -> String { "" } }
+public extension Task where Success == Never, Failure == Never { static func nap(_ n: UInt64) async throws {} }
+public extension Task { func poke() {} }
+public extension AsyncStream { func tag() -> Int { 0 } }
