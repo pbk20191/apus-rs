@@ -1,0 +1,27 @@
+[package]
+name = "async-swift-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Run Rust futures as Swift Concurrency Tasks (or on libdispatch) on Apple platforms"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[features]
+default = ["swift"]
+swift = []
+dispatch = []
+test-probe = ["swift"]
+
+[dependencies]
+async-task = "4"
+
+[build-dependencies]
+cc = "1"
+
+[dev-dependencies]
+libtest-mimic = "0.8"
+
+[[test]]
+name = "dispatch"
+harness = false
+required-features = ["dispatch"]
