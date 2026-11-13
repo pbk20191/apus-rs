@@ -60,3 +60,11 @@ required-features = ["test-probe"]
 name = "swift_call"
 harness = false
 required-features = ["test-probe"]
+
+[[example]]
+name = "dispatch_basic"
+required-features = ["dispatch"]
+
+[[example]]
+name = "swift_basic"
+required-features = ["swift"]
