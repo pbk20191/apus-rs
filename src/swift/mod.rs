@@ -56,6 +56,14 @@ where
 
 /// Like [`spawn_on_main`] for `!Send` futures: a MainActor task only ever runs on the main thread.
 /// Panics off the main thread.
+///
+/// The handle is `!Send`, so a `!Send` output can only be awaited on the main thread:
+///
+/// ```compile_fail
+/// fn assert_send<T: Send>(_: &T) {}
+/// let handle = async_swift_rs::swift::spawn_local_on_main(async { std::rc::Rc::new(1) });
+/// assert_send(&handle);
+/// ```
 pub fn spawn_local_on_main<F>(future: F) -> MainOnlyHandle<impl Send + 'static, F::Output>
 where
     F: Future + 'static,

@@ -82,12 +82,14 @@ impl<T> Drop for JoinHandle<T> {
 
 /// Re-types a handle whose output was wrapped to cross the `Send` bound (main-thread-only tasks).
 pub(crate) fn unwrap_main_only<W: 'static, T: 'static>(inner: JoinHandle<W>, unwrap: fn(W) -> T) -> MainOnlyHandle<W, T> {
-    MainOnlyHandle { inner, unwrap }
+    MainOnlyHandle { inner, unwrap, main_thread_only: std::marker::PhantomData }
 }
 
+/// Handle for a `!Send` main-thread task: itself `!Send`/`!Sync`, so the output stays on the main thread.
 pub struct MainOnlyHandle<W, T> {
     inner: JoinHandle<W>,
     unwrap: fn(W) -> T,
+    main_thread_only: std::marker::PhantomData<*const ()>,
 }
 
 impl<W, T> Future for MainOnlyHandle<W, T> {
