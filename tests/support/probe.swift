@@ -58,3 +58,13 @@ enum ProbeError: Error { case io(code: Int32) }
 @_cdecl("probe_closure_block_ms") public func probeClosureBlockMs(_ ms: Int) -> UnsafeMutableRawPointer {
     asyncSwiftClosure { usleep(UInt32(ms) * 1000); return "blocked \(ms)ms" }   // ignores cancellation
 }
+
+// ---- Task 7: Any / Error values handed to Rust ----
+final class DeinitFlag { let flag: UnsafeMutablePointer<Bool>; init(_ f: UnsafeMutablePointer<Bool>) { flag = f }; deinit { flag.pointee = true } }
+@_cdecl("probe_any_int") public func probeAnyInt(_ out: UnsafeMutableRawPointer) { out.initializeMemory(as: Any.self, repeating: 42, count: 1) }
+@_cdecl("probe_any_string") public func probeAnyString(_ out: UnsafeMutableRawPointer) { out.initializeMemory(as: Any.self, repeating: "héllo👋", count: 1) }
+@_cdecl("probe_any_optional_nil") public func probeAnyOptionalNil(_ out: UnsafeMutableRawPointer) { let v: Int? = nil; out.initializeMemory(as: Any.self, repeating: v as Any, count: 1) }
+@_cdecl("probe_any_optional_some") public func probeAnyOptionalSome(_ out: UnsafeMutableRawPointer) { let v: Int? = 7; out.initializeMemory(as: Any.self, repeating: v as Any, count: 1) }
+@_cdecl("probe_any_void") public func probeAnyVoid(_ out: UnsafeMutableRawPointer) { out.initializeMemory(as: Any.self, repeating: (), count: 1) }
+@_cdecl("probe_any_object") public func probeAnyObject(_ out: UnsafeMutableRawPointer, _ flag: UnsafeMutablePointer<Bool>) { out.initializeMemory(as: Any.self, repeating: DeinitFlag(flag), count: 1) }
+@_cdecl("probe_make_error") public func probeMakeError(_ out: UnsafeMutableRawPointer) { out.initializeMemory(as: Error.self, repeating: ProbeError.io(code: EIO), count: 1) }

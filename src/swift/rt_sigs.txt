@@ -10,3 +10,11 @@ swift_task_currentPriority | size_t | void *t | t
 swift_task_escalate | size_t | void *t, size_t p | t, p
 swift_getTupleTypeMetadata | MetadataResponse | size_t r, size_t f, const void *const *e, const char *l, const void *w | r, f, e, l, w
 swift_task_enqueueGlobalWithDelay | void | unsigned long long d, void *j | d, j
+swift_getTypeName | TypeNamePair | const void *m, _Bool q | m, q
+$sSqMa | MetadataResponse | size_t r, const void *t | r, t
+$sSS11utf8CStrings15ContiguousArrayVys4Int8VGvg | void * | uint64_t a, uint64_t b | a, b
+$sSS10describingSSx_tclufC | SwiftString | void *v, const void *t | v, t
+# value witness function shapes (called through the table, not by symbol)
+vwt_destroy | void | void *v, const void *m | v, m
+vwt_initializeWithCopy | void * | void *d, void *s, const void *m | d, s, m
+vwt_getEnumTag | unsigned | const void *v, const void *m | v, m

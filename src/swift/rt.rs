@@ -50,10 +50,83 @@ pub const OPTION_KIND_INITIAL_SERIAL_EXECUTOR: usize = 0;
 // MetadataKind::Tuple = 1 | RuntimePrivate | NonHeap (include/swift/ABI/MetadataKind.def).
 pub const METADATA_KIND_TUPLE: usize = 0x301;
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypeNamePair {
+    pub data: *const u8,
+    pub length: usize,
+}
+
+/// A Swift `String` value (2 words, frozen layout).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SwiftString {
+    pub words: [u64; 2],
+}
+
+/// `ErrorValueResult` (include/swift/Runtime/Error.h).
+#[repr(C)]
+pub struct ErrorValueResult {
+    pub value: *const c_void,
+    pub type_: *const c_void,
+    pub error_conformance: *const c_void,
+}
+
+/// `ValueWitnessTable` (include/swift/ABI/ValueWitness.def), followed for enums by the enum witnesses.
+/// Witnesses are Swift-CC; their shapes are covered by tests/abi_equivalence.rs (`vwt_*`).
+#[repr(C)]
+pub struct ValueWitnessTable {
+    pub initialize_buffer_with_copy_of_buffer: *const c_void,
+    pub destroy: unsafe extern "C" fn(value: *mut c_void, metadata: *const c_void),
+    pub initialize_with_copy: unsafe extern "C" fn(dest: *mut c_void, src: *mut c_void, metadata: *const c_void) -> *mut c_void,
+    pub assign_with_copy: *const c_void,
+    pub initialize_with_take: *const c_void,
+    pub assign_with_take: *const c_void,
+    pub get_enum_tag_single_payload: *const c_void,
+    pub store_enum_tag_single_payload: *const c_void,
+    pub size: usize,
+    pub stride: usize,
+    pub flags: u32, // low 8 bits: alignment mask
+    pub extra_inhabitant_count: u32,
+    // EnumValueWitnessTable only:
+    pub get_enum_tag: unsafe extern "C" fn(value: *const c_void, metadata: *const c_void) -> u32,
+}
+
+/// The value witness table sits one word before a metadata's address point.
+pub unsafe fn value_witnesses<'a>(metadata: *const c_void) -> &'a ValueWitnessTable {
+    &**(metadata as *const *const ValueWitnessTable).sub(1)
+}
+
 #[link(name = "swiftCore")]
 extern "C" {
-    pub fn swift_retain(object: *mut c_void) -> *mut c_void;
-    pub fn swift_release(object: *mut c_void);
+    pub fn swift_retain(object: *mut c_void) -> *mut c_void; // C-CC
+    pub fn swift_release(object: *mut c_void); // C-CC
+    pub fn swift_errorRelease(error: *mut c_void); // C-CC
+    pub fn swift_dynamicCast(dest: *mut c_void, src: *mut c_void, src_type: *const c_void, target_type: *const c_void, flags: usize) -> bool; // C-CC
+    pub fn swift_getErrorValue(error: *const c_void, scratch: *mut *mut c_void, out: *mut ErrorValueResult); // C-CC
+    pub fn swift_getExistentialTypeMetadata(class_constraint_any: bool, superclass: *const c_void, count: usize, protocols: *const c_void) -> *const c_void; // C-CC
+    pub fn swift_getTypeName(metadata: *const c_void, qualified: bool) -> TypeNamePair;
+    /// `Optional<T>` metadata accessor.
+    #[link_name = "$sSqMa"]
+    pub fn optional_metadata(request: usize, wrapped: *const c_void) -> MetadataResponse;
+    /// `String.utf8CString` getter: a +1 `ContiguousArray<Int8>` (NUL-terminated).
+    #[link_name = "$sSS11utf8CStrings15ContiguousArrayVys4Int8VGvg"]
+    pub fn string_utf8_c_string(w0: u64, w1: u64) -> *mut c_void;
+    /// `String.init<T>(describing: T)`: takes the value +1 (indirect), then T's metadata.
+    #[link_name = "$sSS10describingSSx_tclufC"]
+    pub fn string_describing(value: *mut c_void, metadata: *const c_void) -> SwiftString;
+    #[link_name = "$sSiN"]
+    pub static INT_METADATA: u8;
+    #[link_name = "$ss5Int32VN"]
+    pub static INT32_METADATA: u8;
+    #[link_name = "$ss6UInt64VN"]
+    pub static UINT64_METADATA: u8;
+    #[link_name = "$sSdN"]
+    pub static DOUBLE_METADATA: u8;
+    #[link_name = "$sSbN"]
+    pub static BOOL_METADATA: u8;
+    #[link_name = "$sSSN"]
+    pub static STRING_METADATA: u8;
     pub fn swift_getTupleTypeMetadata(
         request: usize,
         flags: usize,
@@ -92,10 +165,54 @@ pub const REQUIRED_SYMBOLS: &[&str] = &[
     "swift_task_dealloc", "swift_task_addCancellationHandler", "swift_task_removeCancellationHandler",
     "swift_taskGroup_initializeWithFlags", "swift_taskGroup_destroy", "swift_taskGroup_waitAll",
     "swift_task_enqueueGlobalWithDelay", "swift_job_run",
+    "swift_errorRelease", "swift_dynamicCast", "swift_getErrorValue", "swift_getExistentialTypeMetadata",
+    "swift_getTypeName", "$sSqMa", "$sSS11utf8CStrings15ContiguousArrayVys4Int8VGvg", "$sSS10describingSSx_tclufC",
+    "$sSiN", "$ss5Int32VN", "$ss6UInt64VN", "$sSdN", "$sSbN", "$sSSN",
 ];
+
+// MetadataKind::Struct = 0 | NonHeap (include/swift/ABI/MetadataKind.def). Nominal `…N` symbols point at the
+// address point (unlike `$sytN`); the self-check verifies that by reading the kind.
+pub const METADATA_KIND_STRUCT: usize = 0x200;
 
 pub fn is_cancelled(task: *mut c_void) -> bool {
     unsafe { swift_task_isCancelled(task) & 1 == 1 }
+}
+
+pub fn metadata_of(symbol: &'static u8) -> *const c_void {
+    symbol as *const u8 as *const c_void
+}
+
+/// Metadata for `Any` (an existential with no protocols and no class constraint).
+pub fn any_metadata() -> *const c_void {
+    struct Ptr(*const c_void);
+    unsafe impl Send for Ptr {}
+    unsafe impl Sync for Ptr {}
+    static METADATA: OnceLock<Ptr> = OnceLock::new();
+    METADATA
+        .get_or_init(|| Ptr(unsafe { swift_getExistentialTypeMetadata(true, std::ptr::null(), 0, std::ptr::null()) }))
+        .0
+}
+
+/// Copies a Swift `String` out as UTF-8. Does not consume `s`.
+pub unsafe fn string_to_rust(s: &SwiftString) -> String {
+    let array = string_utf8_c_string(s.words[0], s.words[1]);
+    // _ContiguousArrayStorage: HeapObject (16) + _ArrayBody { count, capacityAndFlags } (16), elements at 32.
+    let count = *(array.byte_add(16) as *const isize) as usize;
+    let bytes = std::slice::from_raw_parts(array.byte_add(32) as *const u8, count.saturating_sub(1));
+    let out = String::from_utf8_lossy(bytes).into_owned();
+    swift_release(array);
+    out
+}
+
+/// Destroys a Swift `String` value.
+pub unsafe fn destroy_string(s: &mut SwiftString) {
+    let metadata = metadata_of(&STRING_METADATA);
+    (value_witnesses(metadata).destroy)((s as *mut SwiftString).cast(), metadata);
+}
+
+pub unsafe fn type_name(metadata: *const c_void) -> String {
+    let pair = swift_getTypeName(metadata, true);
+    String::from_utf8_lossy(std::slice::from_raw_parts(pair.data, pair.length)).into_owned()
 }
 
 /// Metadata for `()`. Not the `$sytN` symbol: that is the full metadata (prefix included).

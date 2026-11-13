@@ -34,6 +34,9 @@ fn run() -> Result<(), String> {
     if metadata.is_null() || unsafe { *(metadata as *const usize) } != rt::METADATA_KIND_TUPLE {
         return Err("metadata for () is not a tuple metadata".into());
     }
+    if unsafe { *(rt::metadata_of(&rt::INT_METADATA) as *const usize) } != rt::METADATA_KIND_STRUCT {
+        return Err("$sSiN does not point at Int's metadata address point".into());
+    }
     if unsafe { rt::swift_task_getMainExecutor() }.identity.is_null() {
         return Err("main executor has no identity".into());
     }

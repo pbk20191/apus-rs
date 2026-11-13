@@ -7,9 +7,22 @@ const SIGS: &str = include_str!("../src/swift/rt_sigs.txt");
 const PRELUDE: &str = "#include <stddef.h>\n#include <stdint.h>\n\
 typedef struct { void *task; void *initial_context; } AsyncTaskAndContext;\n\
 typedef struct { const void *identity; uintptr_t implementation; } SerialExecutorRef;\n\
-typedef struct { const void *metadata; size_t state; } MetadataResponse;\n";
+typedef struct { const void *metadata; size_t state; } MetadataResponse;\n\
+typedef struct { const char *data; size_t length; } TypeNamePair;\n\
+typedef struct { uint64_t a, b; } SwiftString;\n";
 
 struct Sig { name: String, ret: String, params: String, args: String }
+
+impl Sig {
+    /// A C identifier for the (possibly mangled, `$`-containing) symbol.
+    fn ident(&self) -> String {
+        self.name.replace('$', "_S_")
+    }
+    /// Function-pointer shapes (value witnesses) have no symbol to bind in rt.rs.
+    fn is_symbol(&self) -> bool {
+        !self.name.starts_with("vwt_")
+    }
+}
 
 fn sigs() -> Vec<Sig> {
     SIGS.lines()
@@ -28,10 +41,10 @@ fn source(sigs: &[Sig], swiftcall: bool) -> String {
     s.push_str("void zz_first(void) {}\n");
     for g in sigs {
         let params = if g.params.is_empty() { "void" } else { &g.params };
-        s.push_str(&format!("extern {attr} {} ext_{}({params}) __asm__(\"_{}\");\n", g.ret, g.name, g.name));
-        let call = format!("ext_{}({})", g.name, g.args);
+        s.push_str(&format!("extern {attr} {} ext_{}({params}) __asm__(\"_{}\");\n", g.ret, g.ident(), g.name));
+        let call = format!("ext_{}({})", g.ident(), g.args);
         let body = if g.ret == "void" { format!("{call};") } else { format!("return {call};") };
-        s.push_str(&format!("{} call_{}({params}) {{ {body} }}\n", g.ret, g.name));
+        s.push_str(&format!("{} call_{}({params}) {{ {body} }}\n", g.ret, g.ident()));
     }
     s
 }
@@ -66,24 +79,26 @@ fn main() {
     let sigs = sigs();
     let rt = include_str!("../src/swift/rt.rs");
     let mut failures = Vec::new();
-    for g in &sigs {
-        if !rt.contains(&format!("fn {}(", g.name)) {
+    for g in sigs.iter().filter(|g| g.is_symbol()) {
+        let declared = rt.contains(&format!("fn {}(", g.name)) || rt.contains(&format!("link_name = \"{}\"", g.name));
+        if !declared {
             failures.push(format!("{} is in rt_sigs.txt but not declared in rt.rs", g.name));
         }
     }
-    for line in rt.lines() {
-        if let Some(rest) = line.trim().strip_prefix("pub fn swift_") {
+    // Every Swift-CC function rt.rs declares must be checked; plain-C runtime functions carry a `C-CC` marker.
+    for line in rt.lines().map(str::trim) {
+        if let Some(rest) = line.strip_prefix("pub fn swift_") {
             let name = format!("swift_{}", rest.split('(').next().unwrap());
-            if !sigs.iter().any(|g| g.name == name) && name != "swift_retain" && name != "swift_release" {
-                failures.push(format!("{name} is declared in rt.rs but has no rt_sigs.txt entry"));
+            if !line.contains("C-CC") && !sigs.iter().any(|g| g.name == name) {
+                failures.push(format!("{name} is declared in rt.rs but has no rt_sigs.txt entry (or C-CC marker)"));
             }
         }
     }
     for arch in ["arm64", "x86_64"] {
         let (swift, c) = (disassemble(&source(&sigs, true), arch, "swift"), disassemble(&source(&sigs, false), arch, "c"));
         for g in &sigs {
-            let (a, b) = (body(&swift, &g.name), body(&c, &g.name));
-            let expected_bool_mask = g.ret == "_Bool";
+            let (a, b) = (body(&swift, &g.ident()), body(&c, &g.ident()));
+            let expected_bool_mask = g.ret == "_Bool"; // bit 0 only: rt.rs reads u8 & 1
             if a != b && !expected_bool_mask {
                 failures.push(format!("{arch} {}: swiftcall and C lower differently\n{a}\n---\n{b}", g.name));
             }
