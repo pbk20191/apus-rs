@@ -50,3 +50,19 @@ fn arm_timer(delay: Duration, slot: Arc<TimerSlot>) {
 pub fn sleep(duration: Duration) -> Sleep {
     Sleep::new(duration, arm_timer)
 }
+
+/// Awaits `future` for at most `duration`: `None` if it has not completed by then. The future is dropped on
+/// timeout; whether that cancels the work behind it is up to the future (a [`SwiftStream`](super::SwiftStream)
+/// element stays pending for the next call, a Swift call marked `.child()` is cancelled).
+pub async fn within<F: std::future::Future>(duration: Duration, future: F) -> Option<F::Output> {
+    use std::future::Future as _;
+    let mut future = std::pin::pin!(future);
+    let mut deadline = std::pin::pin!(sleep(duration));
+    std::future::poll_fn(|cx| {
+        if let std::task::Poll::Ready(output) = future.as_mut().poll(cx) {
+            return std::task::Poll::Ready(Some(output));
+        }
+        deadline.as_mut().poll(cx).map(|()| None)
+    })
+    .await
+}

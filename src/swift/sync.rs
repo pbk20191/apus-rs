@@ -55,7 +55,7 @@ impl SwiftFn {
     fn prepare<R>(&self, args: impl SwiftArgs, slot: IndirectSlot, indirect: bool) -> SwiftSyncCall<R> {
         let mut lowering = ArgLowering::new(false);
         args.lower(&mut lowering);
-        SwiftSyncCall { function: self.resolve(), symbol: self.symbol, lowering, slot, indirect, throws: false, result: PhantomData }
+        SwiftSyncCall { function: self.resolve(), symbol: self.symbol, lowering, slot, indirect, throws: false, consumed: None, result: PhantomData }
     }
 
     /// Prepares a call returning `R`; run it with [`SwiftSyncCall::invoke`].
@@ -84,6 +84,8 @@ pub struct SwiftSyncCall<R> {
     slot: IndirectSlot,
     indirect: bool,
     throws: bool,
+    /// A `self` the callee consumes (`__consuming` methods): passed by address, not destroyed afterwards.
+    consumed: Option<SwiftValue>,
     result: PhantomData<fn() -> R>,
 }
 
@@ -110,6 +112,15 @@ impl<R> SwiftSyncCall<R> {
     }
 }
 
+impl<R> SwiftSyncCall<R> {
+    /// Calls a `__consuming` method of a value passed by address: the callee takes ownership of `value`.
+    pub(crate) fn on_consumed(mut self, value: SwiftValue) -> Self {
+        self.lowering.regs.this = value.as_ptr();
+        self.consumed = Some(value);
+        self
+    }
+}
+
 impl<R: SwiftRet> SwiftSyncCall<R> {
     /// Runs the call on the current thread.
     pub fn invoke(mut self) -> Result<R, CallError> {
@@ -121,6 +132,9 @@ impl<R: SwiftRet> SwiftSyncCall<R> {
         let kind = if self.indirect { KIND_INDIRECT } else if R::FLOAT { KIND_FLOATS } else { KIND_INTEGERS };
         unsafe {
             rs_call_sync(function, &self.lowering.regs, self.slot.address(), &mut ret, kind);
+            if let Some(consumed) = self.consumed.take() {
+                drop(consumed.into_uninit()); // the callee destroyed the value; only the storage is ours
+            }
             let result = if self.throws && !ret.error.is_null() {
                 Err(CallError::Swift(SwiftError::from_raw(ret.error)))
             } else {

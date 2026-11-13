@@ -18,6 +18,7 @@ $sSaMa | MetadataResponse | size_t r, const void *t | r, t
 $sSDMa | MetadataResponse | size_t r, const void *k, const void *v, const void *w | r, k, v, w
 swift_getTypeByMangledNameInContext | const void * | const char *n, size_t l, const void *c, const void *const *g | n, l, c, g
 $ss27_allocateUninitializedArrayySayxG_BptBwlF | AsyncTaskAndContext | size_t n, const void *t | n, t
+swift_getAssociatedTypeWitness | MetadataResponse | size_t r, const void *w, const void *t, const void *b, const void *a | r, w, t, b, a
 # value witness function shapes (called through the table, not by symbol)
 vwt_destroy | void | void *v, const void *m | v, m
 vwt_initializeWithCopy | void * | void *d, void *s, const void *m | d, s, m

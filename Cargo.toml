@@ -11,9 +11,12 @@ default = ["swift"]
 swift = []
 dispatch = []
 test-probe = ["swift"]
+# `impl futures_core::Stream for SwiftStream`
+stream = ["swift", "dep:futures-core"]
 
 [dependencies]
 async-task = "4"
+futures-core = { version = "0.3", optional = true, default-features = false }
 async-swift-rs-macros = { path = "macros" }
 dispatch2 = { version = "0.3.1", default-features = false, features = ["std"] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFRunLoop", "CFString", "CFDate"] }
@@ -95,6 +98,11 @@ required-features = ["test-probe"]
 
 [[test]]
 name = "swift_macro"
+harness = false
+required-features = ["test-probe"]
+
+[[test]]
+name = "swift_stream"
 harness = false
 required-features = ["test-probe"]
 

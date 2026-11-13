@@ -93,3 +93,62 @@ public struct Big {
 @inline(never) public func syncThrow(_ fail: Bool) throws -> Int { if fail { throw DemoError.code(9) }; return 1 }
 @inline(never) public func sumAll(_ xs: [Int]) async -> Int { await Task.yield(); return xs.reduce(0, +) }
 @inline(never) public func byteCount(_ s: String) -> Int { s.utf8.count }
+
+// ---- async sequences ----
+@inline(never) public func countdown(from n: Int) -> AsyncStream<Int> {
+    AsyncStream { continuation in
+        Task {
+            for i in stride(from: n, through: 1, by: -1) {
+                continuation.yield(i)
+                try? await Task.sleep(nanoseconds: 2_000_000)
+            }
+            continuation.finish()
+        }
+    }
+}
+@inline(never) public func failingStream(after n: Int) -> AsyncThrowingStream<String, Error> {
+    AsyncThrowingStream { continuation in
+        for i in 0..<n { continuation.yield("item\(i)") }
+        continuation.finish(throwing: DemoError.code(7))
+    }
+}
+/// A hand-written sequence whose iterator has state beyond one word.
+public struct Ticks: AsyncSequence {
+    public typealias Element = String
+    let count: Int
+    public struct Iterator: AsyncIteratorProtocol {
+        var produced = 0
+        let count: Int
+        var log: [String] = []
+        public mutating func next() async -> String? {
+            guard produced < count else { return nil }
+            await Task.yield()
+            produced += 1
+            log.append("t\(produced)")
+            return "tick\(produced) of \(count), after \(log.count - 1) earlier"
+        }
+    }
+    public func makeAsyncIterator() -> Iterator { Iterator(count: count) }
+}
+@inline(never) public func ticks(_ n: Int) -> Ticks { Ticks(count: n) }
+nonisolated(unsafe) var endlessLock = os_unfair_lock()
+nonisolated(unsafe) var endlessTerminated = Set<Int>()
+/// Yields 0, 1, 2, … every millisecond until its consumer goes away; `tag` identifies it to the test.
+@inline(never) public func endless(tag: Int) -> AsyncStream<Int> {
+    AsyncStream { continuation in
+        let producer = Task {
+            var i = 0
+            while !Task.isCancelled {
+                continuation.yield(i)
+                i += 1
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
+        }
+        continuation.onTermination = { _ in
+            producer.cancel()
+            os_unfair_lock_lock(&endlessLock)
+            endlessTerminated.insert(tag)
+            os_unfair_lock_unlock(&endlessLock)
+        }
+    }
+}

@@ -8,6 +8,7 @@ mod join;
 mod macros;
 pub(crate) mod rt;
 mod selfcheck;
+mod stream;
 mod sync;
 mod task;
 mod timer;
@@ -15,12 +16,13 @@ mod value;
 
 pub use any::{FromSwiftAny, SwiftAny, SwiftError, SwiftHashable};
 pub use call::{timeout, AsyncFunctionPointer, CallError, IndirectSlot, RetRegs, SwiftAsync, SwiftCall};
+pub use stream::SwiftStream;
 pub use sync::{SwiftFn, SwiftSyncCall};
 pub use value::{IntoSwift, SwiftProtocol, SwiftType, SwiftValue, WitnessTable};
 pub use func::{ArgLowering, SwiftArg, SwiftArgs, SwiftAsyncFn, SwiftObject, SwiftRet};
 pub use current::{cancelled, current_task, is_cancelled, priority, Cancelled, TaskRef};
 pub use join::{JoinHandle, MainOnlyHandle};
-pub use timer::{sleep, Sleep};
+pub use timer::{sleep, within, Sleep};
 
 use crate::{Priority, SpawnOptions};
 use std::future::Future;

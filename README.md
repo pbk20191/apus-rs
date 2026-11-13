@@ -17,6 +17,7 @@ async-swift-rs = { path = "…", default-features = false, features = ["dispatch
 |---|---|
 | `swift` (default) | `async_swift_rs::swift`: tasks are Swift Tasks on the cooperative pool / MainActor |
 | `dispatch` | `async_swift_rs::dispatch`: `async-task` runnables on GCD queues via [`dispatch2`](https://crates.io/crates/dispatch2) (QoS, main queue, serial queues) |
+| `stream` | `impl futures_core::Stream for SwiftStream` |
 | `test-probe` | test-only Swift probes (needs `swiftc`) |
 
 ## API
@@ -162,6 +163,27 @@ println!("{}", products.description());                                     // S
   dictionaries, structs of up to four integer words).
 - `SwiftFn` calls **synchronous** Swift functions the same way, on the current thread:
   `TOTAL.call::<i64>(()).on_value(&big).invoke()?` (a getter of a struct passed by address).
+
+### Async sequences
+
+Any value whose type is a Swift `AsyncSequence` can be consumed element by element:
+
+```rust
+use async_swift_rs::swift::SwiftStream;
+
+let mut updates = SwiftStream::new(sequence)?;              // e.g. an AsyncStream, or StoreKit's Transaction.updates
+while let Some(update) = updates.next().await {
+    let update = update?;                                    // Err: the sequence threw, and is finished
+    println!("{}", update.description());
+}
+```
+
+- Each element is awaited in the calling Task (cancellation reaches the sequence). `next_value::<T>()` copies
+  the element out as a Rust type.
+- Dropping the stream destroys the Swift iterator, which is how sequences are told to stop.
+- `.child()` awaits elements in child Tasks so that `within(duration, stream.next())` and `select!` work; a
+  pending element is kept for the next `next()`.
+- With the `stream` feature, `SwiftStream` implements `futures_core::Stream`.
 
 ## Awaiting Swift async closures from Rust
 

@@ -86,7 +86,7 @@ pub struct ValueWitnessTable {
     pub destroy: unsafe extern "C" fn(value: *mut c_void, metadata: *const c_void),
     pub initialize_with_copy: unsafe extern "C" fn(dest: *mut c_void, src: *mut c_void, metadata: *const c_void) -> *mut c_void,
     pub assign_with_copy: *const c_void,
-    pub initialize_with_take: *const c_void,
+    pub initialize_with_take: unsafe extern "C" fn(dest: *mut c_void, src: *mut c_void, metadata: *const c_void) -> *mut c_void,
     pub assign_with_take: *const c_void,
     pub get_enum_tag_single_payload: *const c_void,
     pub store_enum_tag_single_payload: *const c_void,
@@ -111,6 +111,15 @@ extern "C" {
     pub fn swift_bridgeObjectRelease(object: *mut c_void); // C-CC
     pub fn swift_conformsToProtocol(metadata: *const c_void, protocol: *const c_void) -> *const c_void; // C-CC
     pub fn swift_getTypeByMangledNameInContext(name: *const u8, length: usize, context: *const c_void, generic_arguments: *const *const c_void) -> *const c_void;
+    /// The metadata of an associated type: `base` is the protocol's requirement base descriptor (`…TL`),
+    /// `associated_type` the associated type's descriptor (`…Tl`).
+    pub fn swift_getAssociatedTypeWitness(
+        request: usize,
+        witness_table: *const c_void,
+        conforming_type: *const c_void,
+        base: *const c_void,
+        associated_type: *const c_void,
+    ) -> MetadataResponse;
     /// `_allocateUninitializedArray<T>(_: Builtin.Word) -> ([T], Builtin.RawPointer)`: what array literals compile to.
     #[link_name = "$ss27_allocateUninitializedArrayySayxG_BptBwlF"]
     pub fn allocate_uninitialized_array(count: usize, element: *const c_void) -> ArrayAndElements;
@@ -195,7 +204,7 @@ pub const REQUIRED_SYMBOLS: &[&str] = &[
     "swift_getTypeName", "$sSqMa", "$sSS11utf8CStrings15ContiguousArrayVys4Int8VGvg", "$sSS10describingSSx_tclufC",
     "$sSiN", "$ss5Int32VN", "$ss6UInt64VN", "$sSdN", "$sSbN", "$sSSN",
     "swift_bridgeObjectRelease", "$sSS18_fromUTF8RepairingySS6result_Sb11repairsMadetSRys5UInt8VGFZ",
-    "swift_conformsToProtocol", "swift_getTypeByMangledNameInContext", "$ss27_allocateUninitializedArrayySayxG_BptBwlF",
+    "swift_conformsToProtocol", "swift_getTypeByMangledNameInContext", "swift_getAssociatedTypeWitness", "$ss27_allocateUninitializedArrayySayxG_BptBwlF",
     "$sSaMa", "$sSDMa", "$sSSSHsWP", "$sSiSHsWP", "$ss5Int32VSHsWP", "$ss6UInt64VSHsWP",
 ];
 

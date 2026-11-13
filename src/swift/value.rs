@@ -71,6 +71,22 @@ impl SwiftType {
         Layout::from_size_align(witnesses.size.max(1), (witnesses.flags as usize & 0xff) + 1).unwrap()
     }
 
+    /// `Optional<Self>`.
+    pub fn optional(self) -> SwiftType {
+        SwiftType(unsafe { rt::optional_metadata(0, self.0) }.metadata)
+    }
+
+    /// The type a conformance binds to an associated type. `base` and `associated_type` are the protocol's
+    /// requirement base descriptor (`…TL`) and the associated type's descriptor (`…Tl`) symbols.
+    pub(crate) fn associated_type(self, conformance: WitnessTable, base: &str, associated_type: &str) -> Option<SwiftType> {
+        let (base, associated_type) = (lookup(base), lookup(associated_type));
+        if base == 0 || associated_type == 0 {
+            return None;
+        }
+        let metadata = unsafe { rt::swift_getAssociatedTypeWitness(0, conformance.0, self.0, base as *const c_void, associated_type as *const c_void) }.metadata;
+        (!metadata.is_null()).then_some(SwiftType(metadata))
+    }
+
     /// The witness table of this type's conformance to `protocol`, if it conforms.
     pub fn conformance(self, protocol: &SwiftProtocol) -> Option<WitnessTable> {
         let descriptor = protocol.descriptor()?;
@@ -166,6 +182,26 @@ impl SwiftValue {
     /// Copies the value out as `T` if it is exactly that Swift type.
     pub fn get<T: FromSwiftAny>(&self) -> Option<T> {
         (self.ty.0 == T::swift_metadata()).then(|| unsafe { T::from_value(self.as_ptr()) })
+    }
+
+    /// Gives up the value: the storage, no longer initialized (after something consumed the value in place).
+    pub(crate) fn into_uninit(self) -> UninitValue {
+        let this = std::mem::ManuallyDrop::new(self);
+        UninitValue { ptr: this.ptr, ty: this.ty }
+    }
+
+    /// For a value of type `Optional<payload>`: the payload, or `None` for nil.
+    pub(crate) fn into_optional_payload(self, payload: SwiftType) -> Option<SwiftValue> {
+        unsafe {
+            // Optional: case some = 0 (payload at offset 0), none = 1.
+            if (rt::value_witnesses(self.ty.0).get_enum_tag)(self.as_ptr(), self.ty.0) == 1 {
+                return None;
+            }
+            let storage = UninitValue::new(payload);
+            (rt::value_witnesses(payload.0).initialize_with_take)(storage.ptr.as_ptr().cast(), self.as_ptr(), payload.0);
+            drop(self.into_uninit()); // the payload was moved out
+            Some(storage.assume_init())
+        }
     }
 
     /// `String(describing:)`.

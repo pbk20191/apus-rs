@@ -106,3 +106,7 @@ final class DeinitFlag { let flag: UnsafeMutablePointer<Bool>; init(_ f: UnsafeM
 @_cdecl("probe_make_flagged_object") public func probeMakeFlaggedObject(_ flag: UnsafeMutablePointer<Bool>) -> UnsafeMutableRawPointer {
     Unmanaged.passRetained(DeinitFlag(flag)).toOpaque()
 }
+@_cdecl("probe_endless_terminated") public func probeEndlessTerminated(_ tag: Int) -> Bool {
+    os_unfair_lock_lock(&endlessLock); defer { os_unfair_lock_unlock(&endlessLock) }
+    return endlessTerminated.contains(tag)
+}

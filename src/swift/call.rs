@@ -90,6 +90,8 @@ pub(crate) enum Owned {
     Bridge(u64),
     /// A value passed by address; dropped with the record.
     Value(#[allow(dead_code)] SwiftValue),
+    /// Shared storage the callee works on in place (an `inout` self).
+    Shared(#[allow(dead_code)] Arc<dyn std::any::Any + Send + Sync>),
 }
 
 impl Drop for Owned {
@@ -98,7 +100,7 @@ impl Drop for Owned {
             match *self {
                 Owned::Object(object) => rt::swift_release(object),
                 Owned::Bridge(word) => rt::swift_bridgeObjectRelease(word as *mut c_void),
-                Owned::Value(_) => {} // releases itself
+                Owned::Value(_) | Owned::Shared(_) => {} // release themselves
             }
         }
     }
@@ -357,6 +359,14 @@ impl<R> SwiftCall<R> {
         let call = self.configure();
         call.regs.get_mut().this = copy.as_ptr();
         call.owned.push(Owned::Value(copy));
+        self
+    }
+
+    /// Calls a `mutating` method: the callee works on the value at `address`, which `keep_alive` owns.
+    pub(crate) fn on_inout(mut self, address: *mut c_void, keep_alive: Arc<dyn std::any::Any + Send + Sync>) -> Self {
+        let call = self.configure();
+        call.regs.get_mut().this = address;
+        call.owned.push(Owned::Shared(keep_alive));
         self
     }
 
