@@ -3,3 +3,4 @@ target/
 *.a
 *.trace
 /docs/superpowers/specs/spikes/**/m0
+/docs/superpowers/specs/spikes/**/m1
