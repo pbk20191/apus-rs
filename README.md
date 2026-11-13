@@ -85,24 +85,51 @@ let total: i64 = BUMP.call((5i64,)).on(&counter).await?;          // a method: `
 
 ### Declaring functions with `swift!`
 
+Write the Swift declaration; the symbol is computed at compile time.
+
 ```rust
 async_swift_rs::swift! {
-    /// `func greet(_ name: String, times: Int, sleepMs: Int) async throws -> String`
-    #[symbol = "$s5Probe5greet_5times7sleepMsS2S_S2itYaKF"]
-    pub async fn greet(name: &str, times: i64, sleep_ms: i64) throws -> String;
+    #[swift = "Greeter.greet(_: String, times: Int) async throws -> String"]
+    pub async fn greet(name: &str, times: i64) throws -> String;
 
-    /// `func byteCount(_ s: String) -> Int`, bound at link time
-    #[linked = "$s5Probe9byteCountySiSSF"]
-    fn byte_count(text: &str) -> i64;
+    #[swift_linked = "Greeter.Counter(class).total: Int { get }"]     // bound at link time
+    fn total() -> i64;
 }
 
-let text = greet("Kim", 2, 10).await?;      // a SwiftCall<String>: `.child()` and `timeout` apply
-let n = byte_count("héllo")?;                // synchronous: Result<i64, CallError>
+let text = greet("Kim", 2).await?;          // a SwiftCall<String>: `.child()` and `timeout` apply
 ```
 
-`async fn` is a Swift `async` function, a plain `fn` a synchronous one; `throws` after the parameters marks a
-throwing function. `#[symbol]` resolves at run time (missing → `CallError::Unavailable`), `#[linked]` at link
-time. Symbols are still written by hand here; computing them from a Swift declaration is planned.
+- `async fn` is a Swift `async` function, a plain `fn` a synchronous one (it returns `Result<_, CallError>`);
+  `throws` after the parameters marks a throwing function.
+- `#[swift = "…"]` resolves the function at run time (missing → `CallError::Unavailable`), `#[swift_linked = "…"]`
+  at link time. `#[symbol = "$s…"]` / `#[linked = "$s…"]` take a mangled symbol as is.
+- `async_swift_rs::mangle!("…")` is the symbol alone, as a string literal:
+
+```rust
+static PRODUCTS: SwiftAsyncFn = SwiftAsyncFn::new(async_swift_rs::mangle!(
+    "static StoreKit.Product(struct).products<I: Collection>(for: I) async throws -> [Product(struct)] where I.Element == String"
+));
+```
+
+**Declaration syntax**: Swift's, fully qualified, without parameter names, and with the kind of every type outside
+the standard library spelled out:
+
+```text
+[static] Module.Type(kind)….name[<T: P, U>]([label|_]: Type, …) [async] [throws] [-> Type] [where …]
+[static] Module.Type(kind)….name: Type { get }
+```
+
+- Types: `Int`, `String`, `Bool`, `Double`, `UInt8`, … ; `[T]`, `[K: V]`, `Set<T>`, `T?`, tuples, `Any`,
+  `AnyObject`, `any Proto`, `Task<…>` and the other concurrency types, generic parameters, `T.Associated`.
+- Other types name their kind: `Cart(struct)`, `Customer(class)`, `Color(enum)` (`(actor)` too). A bare name is in
+  the declaration's module, `Other.Name(kind)` in another; nested types are `Outer(kind).Inner(kind)`; generic
+  arguments follow the kind: `Box(struct)<Int>`.
+- Not supported yet: members of extensions in other modules or of generic types, function-typed parameters,
+  operators, initializers, subscripts, setters, non-ASCII names, isolation and ownership attributes. A declaration
+  that cannot be mangled is a compile error; for anything unsupported, pass the symbol itself with `#[symbol]`.
+
+The mangler (`mangle/`) ports the Swift compiler's identifier and substitution rules and is checked against the
+symbols `swiftc` actually emits for 70 declarations, plus real StoreKit symbols.
 
 ### Generic functions, framework structs, synchronous calls
 

@@ -40,6 +40,54 @@ async_swift_rs::swift! {
     fn missing_sync();
 }
 
+// The same, with the symbol computed from the Swift declaration at compile time.
+mod declared {
+    async_swift_rs::swift! {
+        #[swift_linked = "Probe.addAsync(_: Int, _: Int) async -> Int"]
+        pub async fn add_async(a: i64, b: i64) -> i64;
+
+        #[swift_linked = "Probe.greet(_: String, times: Int, sleepMs: Int) async throws -> String"]
+        pub async fn greet(name: &str, times: i64, sleep_ms: i64) throws -> String;
+
+        #[swift_linked = "Probe.names(count: Int) async -> [String]"]
+        pub async fn names(count: i64) -> Vec<String>;
+
+        #[swift_linked = "Probe.scores() async -> [String: Int]"]
+        pub async fn scores() -> std::collections::HashMap<String, i64>;
+
+        #[swift_linked = "Probe.syncThrow(_: Bool) throws -> Int"]
+        pub fn sync_throw(fail: bool) throws -> i64;
+
+        #[swift_linked = "Probe.byteCount(_: String) -> Int"]
+        pub fn byte_count(text: &str) -> i64;
+
+        /// Looked up at run time: absent from this process.
+        #[swift = "Probe.neverDefined(_: Int) async -> Int"]
+        pub async fn never_defined(x: i64) -> i64;
+    }
+}
+
+fn declarations_compute_the_symbol() -> Result<(), Failed> {
+    check(async_swift_rs::mangle!("Probe.addAsync(_: Int, _: Int) async -> Int") == "$s5Probe8addAsyncyS2i_SitYaF", "mangle! literal")?;
+    let (sum, text, names, scores, absent) = block(spawn(async {
+        (
+            declared::add_async(20, 22).await,
+            declared::greet("Lee", 1, 1).await,
+            declared::names(2).await,
+            declared::scores().await,
+            declared::never_defined(1).await,
+        )
+    }))
+    .unwrap();
+    check(matches!(sum, Ok(42)), format!("sum {sum:?}"))?;
+    check(matches!(&text, Ok(s) if s == "Lee "), format!("text {text:?}"))?;
+    check(matches!(&names, Ok(v) if v == &["name0", "name1"]), format!("names {names:?}"))?;
+    check(matches!(&scores, Ok(m) if m.len() == 2 && m["b"] == 2), format!("scores {scores:?}"))?;
+    check(matches!(absent, Err(CallError::Unavailable(_))), format!("absent {absent:?}"))?;
+    let (ok, err, bytes) = (declared::sync_throw(false), declared::sync_throw(true), declared::byte_count("héllo"));
+    check(matches!(ok, Ok(1)) && matches!(err, Err(CallError::Swift(_))) && matches!(bytes, Ok(6)), format!("sync {ok:?} {err:?} {bytes:?}"))
+}
+
 fn async_functions() -> Result<(), Failed> {
     let (sum, text, error, unit, slept, absent) = block(spawn(async {
         let start = Instant::now();
@@ -85,5 +133,6 @@ fn main() {
         Trial::test("async_functions", async_functions),
         Trial::test("calls_are_builders", calls_are_builders),
         Trial::test("sync_functions", sync_functions),
+        Trial::test("declarations_compute_the_symbol", declarations_compute_the_symbol),
     ])
 }

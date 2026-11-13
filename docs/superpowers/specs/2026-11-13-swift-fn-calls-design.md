@@ -123,7 +123,18 @@ mangling 구현이 큰 작업이라 1단계와 분리한다.
 - 임의 길이 문자열은 `String._fromUTF8Repairing`으로 만든다 (NUL 바이트 포함 가능). 배열은 `_allocateUninitializedArray`로 만든다.
 - 타입은 `swift_getTypeByMangledNameInContext`로 mangled 이름에서 얻는다 (없으면 null).
 
+**2단계 구현 완료 (2026-11-13)**
+- `mangle/` 크레이트: Swift 선언 문자열에서 mangled 심볼을 계산한다. 식별자의 단어 치환, 치환 테이블, 치환 병합은
+  Swift 컴파일러(`lib/Basic/Mangler.cpp`, `ManglingUtils.h` @ swift-6.4.2-RELEASE)에서 옮겼다.
+  `mangle/tests/corpus.rs`가 선언 70개를 swiftc가 실제로 내는 심볼과 대조하고, 실제 StoreKit 심볼 3개도 확인한다.
+- `macros/` 크레이트: `mangle!("선언")` proc macro. `swift!`는 `#[swift = "선언"]`(런타임 조회)과
+  `#[swift_linked = "선언"]`(링크 타임)을 받는다.
+- 구현하면서 확인한 규칙: 식별자(모듈, 이름, 라벨)와 타입이 하나의 치환 번호를 공유한다. 프로토콜, existential, 튜플은
+  치환 항목이 아니다. 빈 튜플은 타입 위치에서 `yt`, 반환 위치에서 `y`다. same-type 요구사항으로 고정된 associated type은
+  시그니처에서 그 타입으로 바뀌어 mangling된다.
+- 지원하지 않는 것: 다른 모듈의 extension 멤버, 제네릭 타입의 멤버, 함수 타입 인자, 연산자, init, subscript, setter,
+  비ASCII 이름, 격리/소유권 속성. 이런 경우 컴파일 에러가 나며, `#[symbol]`로 심볼을 직접 줄 수 있다.
+
 **남은 것**
-- 2단계: 선언에서 심볼을 계산하는 매크로. 사용자가 원하는 모습은 `swift-rs`의 `swift!(fn …)`처럼 한 줄 선언이다.
 - 3단계: `AsyncSequence` → `Stream`.
 - `SwiftValue`의 필드/프로퍼티 접근을 편하게 하는 계층 (지금은 getter 심볼을 `SwiftFn`으로 직접 호출).

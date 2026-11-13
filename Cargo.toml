@@ -14,6 +14,7 @@ test-probe = ["swift"]
 
 [dependencies]
 async-task = "4"
+async-swift-rs-macros = { path = "macros" }
 dispatch2 = { version = "0.3.1", default-features = false, features = ["std"] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFRunLoop", "CFString", "CFDate"] }
 libc = "0.2"
@@ -96,3 +97,6 @@ required-features = ["test-probe"]
 name = "swift_macro"
 harness = false
 required-features = ["test-probe"]
+
+[workspace]
+members = [".", "mangle", "macros"]

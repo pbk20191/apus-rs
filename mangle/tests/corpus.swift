@@ -1,0 +1,79 @@
+// Ground truth for mangle/tests/corpus.rs: compiled with swiftc as module `Probe`; every declaration line in
+// corpus.rs must mangle to a symbol this file exports.
+public struct Big { public var a = 0
+  public func scaled(by k: Int) -> Big { self }
+  public func two(_ x: Big, _ y: Big) -> Big { self }
+  public static func make(n: Int) async -> Big { Big() }
+  public var total: Int { 0 }
+  public static var shared: Big { Big() }
+  public struct Inner { public func f() -> Inner { self } ; public func g(_ b: Big) -> Big { b } }
+}
+public final class Counter { public init() {} ; public func bump(by n: Int) async -> Int { 0 } ; public func me() -> Counter { self }
+  public var name: String { "" } }
+public enum Color { case red ; public func next(_ c: Color) -> Color { c } }
+public protocol Shape { func area() -> Double }
+public struct Box<T> { public init() {} }
+public var globalCount: Int { 0 }
+public func f1(_ a: Big, _ b: Big) -> Big { a }
+public func f2(_ a: [String], _ b: [String]) -> [String] { a }
+public func f3(_ a: Int?, _ b: Int?) -> [Int?] { [] }
+public func f4(_ a: [String: Int], _ b: Set<Int>) -> [String: [Int]] { [:] }
+public func f5(_ c: Counter, _ k: Color) -> Counter? { nil }
+public func f6(_ s: any Shape) -> Any { 0 }
+public func f7(_ t: (Int, String), named: (a: Int, b: Bool)) -> (Int, Int) { (0, 0) }
+public func f8(_ a: UInt8, _ b: Int32, _ c: UInt64, _ d: Float, _ e: Character, _ f: UInt) {}
+public func f9(counterMaker: Counter, makeCounter: Int, counter: Int) {}
+public func fa(_ x: Big.Inner, y: Big.Inner) -> Big { Big() }
+public func fb(_ a: Double, _ b: Double, _ c: Double, _ d: Bool) -> Double { 0 }
+public func fc<T>(_ x: T, _ y: T) -> [T] { [] }
+public func fd<T, U>(_ x: T, _ y: U) -> U { y }
+public func fe<T: Hashable, U: Shape>(_ x: T, _ y: U) -> [T: U] { [:] }
+public func ff<S: Sequence>(_ s: S) -> [S.Element] where S.Element: Equatable { [] }
+public func fg<C: Collection>(_ c: C) async throws -> Int where C.Element == String { 0 }
+public func fh(_ a: Int, b: Int, _ c: inout Int, d: Int...) {}
+public func fj() throws {}
+public func fk() async {}
+public func fl(_ a: Swift.Error, _ b: AnyObject, _ c: UnsafeRawPointer, _ d: UnsafeMutablePointer<Int>) {}
+public func fm(_ a: any Shape, _ b: any Shape, _ c: Box<Int>, _ d: Box<Int>, _ e: Box<String>) {}
+public func fn(_ a: Big, _ b: Counter, _ c: Big, _ d: Counter, _ e: Color) -> Color { e }
+public func fo<T: Comparable & Hashable, U>(_ x: T, _ y: U, _ z: T) -> T where U: Sequence, U.Element == T { x }
+public func fp<T: CustomStringConvertible>(_ x: T, times: Int) async throws -> String { "" }
+public func fq(_ a: (Int, Int), _ b: (Int, Int), _ c: Int?, _ d: Int??) -> Int? { nil }
+public func fr(aLongLabelName: Int, anotherLongLabelName: Int, labelName: Int, name: Int) -> Int { 0 }
+public func addAsync(_ a: Int, _ b: Int) async -> Int { 0 }
+public func greet(_ name: String, times: Int, sleepMs: Int) async throws -> String { "" }
+public func makeCounter() -> Counter { Counter() }
+public func names(count: Int) async -> [String] { [] }
+public func currentTaskBits() async -> Int { 0 }
+public func scores() async -> [String: Int] { [:] }
+public func describe(_ flag: Bool, _ n: Int32, _ big: UInt64) async -> String { "" }
+public func fs(_ a: Any, _ b: Any, _ c: AnyObject, _ d: AnyObject, _ e: any Error, _ f: any Error) {}
+// ---- second batch: word substitutions, many substitutions, concurrency types, more generics ----
+public struct S01 {} ; public struct S02 {} ; public struct S03 {} ; public struct S04 {} ; public struct S05 {}
+public struct S06 {} ; public struct S07 {} ; public struct S08 {} ; public struct S09 {} ; public struct S10 {}
+public struct S11 {} ; public struct S12 {} ; public struct S13 {} ; public struct S14 {} ; public struct S15 {}
+public func many(_ a: S01, _ b: S02, _ c: S03, _ d: S04, _ e: S05, _ f: S06, _ g: S07, _ h: S08, _ i: S09, _ j: S10,
+                 _ k: S11, _ l: S12, _ m: S13, _ n: S14, _ o: S15, _ p: S15, _ q: S14, _ r: S13, _ s: S01, _ t: S13, _ u: S13) -> S14 { n }
+public struct URLSessionTask { public func resumeURLSession(urlSession: Int, sessionTask: Int, task: Int) {} }
+public func my_snake_case(snake_case: Int, my_snake: Int, case_: Int) {}
+public func fooFooFoo(foo: Int, Foo: Int, fooFoo: Int) {}
+public func x2y(a1: Int, a1b2: Int, _a: Int, a_: Int, ab: Int, abAb: Int) {}
+public func HTTPSProxy(httpsProxy: Int, proxyHTTPS: Int, HTTPS: Int, proxy: Int) {}
+public func t1(_ t: Task<Int, Never>, _ s: AsyncStream<Int>, _ p: TaskPriority, _ q: TaskPriority) async {}
+public func t2(_ a: [[Int]], _ b: [[Int]], _ c: [Int: [String: Int?]]?, _ d: Set<String>?) -> [[Int]]? { nil }
+public func t3(_ a: (Int, Int)) {}
+public func t4(pair: (Int, Int)) {}
+public func t5(_ a: ()) {}
+public func t6(_ a: Int32?, _ b: Int32, _ c: UInt8?, _ d: [UInt8]) {}
+public func g1<A, B, C>(_ a: A, _ b: B, _ c: C) -> (A, B, C) { (a, b, c) }
+public func g2<T: Sendable & Shape>(_ t: T) async {}
+public func g3<S: Sequence>(_ s: S, _ e: S.Element) -> Int where S.Element == Int { 0 }
+public func g4<S: Sequence>(_ s: S) -> Int where S.Element: Hashable { 0 }
+public func g5<K: Hashable, V>(_ d: [K: V], _ k: K) -> V? { nil }
+public func g6<T: Collection, U: Collection>(_ t: T, _ u: U) where T.Element == U.Element, T.Element: Equatable {}
+public func g7<T>(_ t: T?, _ u: [T?]) -> T? { nil }
+public extension Counter { func extra(_ x: Int) -> Int { x } }
+public enum Outer { public enum Mid { public struct Leaf { public static func deep(_ o: Outer, _ m: Mid) -> Leaf { Leaf() } } } }
+public func g8<T: Sequence, U: Sequence>(_ t: T, _ u: U, _ e: U.Element) -> [T.Element] where U.Element == T.Element { [] }
+public func g9<S: Sequence, T>(_ s: S, _ e: S.Element) -> T where S.Element == T { e }
+public func t7(_ b: Box<()>, _ c: ()?) -> ()? { nil }
