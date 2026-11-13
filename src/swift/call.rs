@@ -62,7 +62,7 @@ pub(crate) struct CallShared {
     state: Mutex<CallState>,
     waker: Mutex<Option<Waker>>,
     child: AtomicPtr<c_void>, // +1 child AsyncTask when run as a child
-    pub(crate) force_child: bool,
+    force_child: bool,
 }
 
 unsafe impl Send for CallShared {}
@@ -119,9 +119,14 @@ extern "C" fn rs_take_call(rust: *mut c_void, closure: *mut *mut c_void, result:
     1
 }
 
+/// Calls the funclet must run as child Tasks (discarding TaskGroup): everything still registered after
+/// `rs_take_call` declined.
 #[no_mangle]
-extern "C" fn rs_take_child(_rust: *mut c_void, _record: *mut *const c_void) -> i32 {
-    0 // child Tasks: next step
+extern "C" fn rs_take_child(rust: *mut c_void, record: *mut *const c_void) -> i32 {
+    let t = unsafe { &*(rust as *const task::Task) };
+    let Some(call) = take_registered(t, false) else { return 0 };
+    unsafe { *record = Arc::into_raw(call).cast() };
+    1
 }
 
 #[no_mangle]
@@ -168,6 +173,13 @@ impl SwiftAsync {
     /// `closure_box` must be an owned `AsyncSwiftClosure` instance.
     pub unsafe fn from_raw(closure_box: *mut c_void) -> SwiftAsync {
         Self::with_mode(closure_box, false)
+    }
+
+    /// Runs the closure in a child Task (Swift's `async let`) instead of this Task, so other futures polled
+    /// alongside it (`select`, timeouts) keep running. Dropping the future then cancels the child.
+    pub fn child(mut self) -> SwiftAsync {
+        Arc::get_mut(&mut self.shared).expect("child() must be called before the call is awaited").force_child = true;
+        self
     }
 
     fn with_mode(closure_box: *mut c_void, force_child: bool) -> SwiftAsync {
@@ -228,4 +240,18 @@ impl Drop for SwiftAsync {
             CallState::Taken | CallState::Abandoned => {}
         }
     }
+}
+
+/// Awaits `call` for at most `duration`. The call runs as a child Task; on timeout it is cancelled and `None`
+/// is returned.
+pub async fn timeout(duration: std::time::Duration, call: SwiftAsync) -> Option<Result<SwiftAny, CallError>> {
+    let mut call = std::pin::pin!(call.child());
+    let mut deadline = std::pin::pin!(super::sleep(duration));
+    std::future::poll_fn(|cx| {
+        if let Poll::Ready(result) = call.as_mut().poll(cx) {
+            return Poll::Ready(Some(result));
+        }
+        deadline.as_mut().poll(cx).map(|()| None)
+    })
+    .await
 }

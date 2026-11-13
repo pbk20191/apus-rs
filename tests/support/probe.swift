@@ -74,3 +74,12 @@ final class DeinitFlag { let flag: UnsafeMutablePointer<Bool>; init(_ f: UnsafeM
     let captured = DeinitFlag(flag)
     return asyncSwiftClosure { _ = captured; return () }
 }
+
+// ---- Task 9 ----
+@_cdecl("probe_closure_sleep_flag_cancel") public func probeClosureSleepFlagCancel(_ ms: Int, _ cancelled: UnsafeMutablePointer<Bool>) -> UnsafeMutableRawPointer {
+    let bits = UInt(bitPattern: cancelled)
+    return asyncSwiftClosure {
+        do { try await Task.sleep(nanoseconds: UInt64(ms) * 1_000_000); return "slept" }
+        catch { UnsafeMutablePointer<Bool>(bitPattern: bits)!.pointee = true; throw error }
+    }
+}

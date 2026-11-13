@@ -41,3 +41,7 @@ extern "C" {
     pub fn probe_closure_block_ms(ms: isize) -> *mut c_void;
     pub fn probe_closure_deinit_flag(flag: *mut bool) -> *mut c_void;
 }
+
+extern "C" {
+    pub fn probe_closure_sleep_flag_cancel(ms: isize, cancelled: *mut bool) -> *mut c_void;
+}

@@ -10,7 +10,7 @@ mod task;
 mod timer;
 
 pub use any::{FromSwiftAny, SwiftAny, SwiftError};
-pub use call::{CallError, SwiftAsync};
+pub use call::{timeout, CallError, SwiftAsync};
 pub use current::{cancelled, current_task, is_cancelled, priority, Cancelled, TaskRef};
 pub use join::{JoinHandle, MainOnlyHandle};
 pub use timer::{sleep, Sleep};
