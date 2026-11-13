@@ -214,8 +214,13 @@ fn abort_with_panicking_drop() -> Result<(), Failed> {
     check(matches!(r, Some(Err(JoinError::Panicked(_)))), format!("got {r:?}"))
 }
 
+fn sleep_wakes_latest_waker() -> Result<(), Failed> {
+    check(common::latest_waker_woken(sleep(Duration::from_millis(30))), "the waker from the latest poll was never woken")
+}
+
 fn main() {
     common::run(vec![
+        Trial::test("sleep_wakes_latest_waker", sleep_wakes_latest_waker),
         Trial::test("abort_with_panicking_drop", abort_with_panicking_drop),
         Trial::test("task_is_swift_task", task_is_swift_task),
         Trial::test("utility_priority_seen_by_swift", utility_priority_seen_by_swift),

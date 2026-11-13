@@ -10,7 +10,7 @@ mod queue;
 pub use block_on::block_on;
 pub use queue::SerialQueue;
 
-use crate::common::{guard, AbortState};
+use crate::common::{guard, AbortState, TimerSlot};
 use crate::{JoinError, Priority, SpawnOptions};
 use async_task::Runnable;
 use ffi::*;
@@ -18,8 +18,8 @@ use std::ffi::c_void;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
-use std::time::{Duration, Instant};
+use std::task::{Context, Poll};
+use std::time::Duration;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Queue(DispatchQueue);
@@ -172,34 +172,18 @@ where
 
 /// Completes after `duration`, using `dispatch_after_f`.
 pub fn sleep(duration: Duration) -> Sleep {
-    Sleep { deadline: Instant::now() + duration, armed: false }
+    Sleep::new(duration, arm_timer)
 }
 
-pub struct Sleep {
-    deadline: Instant,
-    armed: bool,
+pub use crate::common::Sleep;
+
+extern "C" fn fire_slot(slot: *mut c_void) {
+    unsafe { Arc::from_raw(slot as *const TimerSlot) }.fire();
 }
 
-extern "C" fn wake_boxed(waker: *mut c_void) {
-    unsafe { Box::from_raw(waker.cast::<Waker>()) }.wake();
-}
-
-impl Future for Sleep {
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let left = self.deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return Poll::Ready(());
-        }
-        if !self.armed {
-            self.armed = true;
-            let waker = Box::into_raw(Box::new(cx.waker().clone()));
-            unsafe {
-                let when = dispatch_time(DISPATCH_TIME_NOW, left.as_nanos() as i64);
-                dispatch_after_f(when, global_queue(Priority::Default).raw(), waker.cast(), wake_boxed);
-            }
-        }
-        Poll::Pending
+fn arm_timer(delay: Duration, slot: Arc<TimerSlot>) {
+    unsafe {
+        let when = dispatch_time(DISPATCH_TIME_NOW, delay.as_nanos() as i64);
+        dispatch_after_f(when, global_queue(Priority::Default).raw(), Arc::into_raw(slot) as *mut c_void, fire_slot);
     }
 }

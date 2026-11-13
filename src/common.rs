@@ -144,3 +144,52 @@ pub(crate) fn guard<F>(future: F) -> (Guarded<F>, Arc<AbortState>) {
     let abort = Arc::new(AbortState { requested: AtomicBool::new(false), waker: Mutex::new(None) });
     (Guarded { future: Some(future), abort: abort.clone() }, abort)
 }
+
+/// Wake-up slot shared between a `Sleep` and its pending timer: the timer wakes whichever waker the latest
+/// poll left, and marks itself fired so an early fire (tick rounding) can be re-armed.
+pub(crate) struct TimerSlot {
+    waker: Mutex<Option<Waker>>,
+    fired: AtomicBool,
+}
+
+impl TimerSlot {
+    pub(crate) fn fire(&self) {
+        self.fired.store(true, Ordering::SeqCst);
+        let waker = self.waker.lock().unwrap().take();
+        if let Some(w) = waker {
+            w.wake();
+        }
+    }
+}
+
+/// Completes at a deadline. `arm` schedules `TimerSlot::fire` after a delay (backend-specific).
+pub struct Sleep {
+    deadline: std::time::Instant,
+    slot: Option<Arc<TimerSlot>>,
+    arm: fn(std::time::Duration, Arc<TimerSlot>),
+}
+
+impl Sleep {
+    pub(crate) fn new(duration: std::time::Duration, arm: fn(std::time::Duration, Arc<TimerSlot>)) -> Sleep {
+        Sleep { deadline: std::time::Instant::now() + duration, slot: None, arm }
+    }
+}
+
+impl Future for Sleep {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let left = self.deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Poll::Ready(());
+        }
+        let arm = self.arm;
+        let slot = self.slot.get_or_insert_with(|| Arc::new(TimerSlot { waker: Mutex::new(None), fired: AtomicBool::new(true) }));
+        *slot.waker.lock().unwrap() = Some(cx.waker().clone());
+        // Not armed yet, or the timer fired before the deadline: (re-)arm for the time that is left.
+        if slot.fired.swap(false, Ordering::SeqCst) {
+            arm(left, slot.clone());
+        }
+        Poll::Pending
+    }
+}

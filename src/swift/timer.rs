@@ -2,11 +2,11 @@
 //! `swift_task_enqueueGlobalWithDelay` that wakes the sleeping task when it runs.
 
 use super::rt;
+use crate::common::TimerSlot;
+pub use crate::common::Sleep;
 use std::ffi::c_void;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll, Waker};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
 /// include/swift/ABI/Task.h `class Job` (64 bytes), followed by our payload.
 #[repr(C, align(16))]
@@ -19,7 +19,7 @@ struct WakeJob {
     voucher: *mut c_void,
     reserved: *mut c_void,
     run_job: *const c_void,
-    waker: Waker,
+    slot: Arc<TimerSlot>,
 }
 
 const JOB_KIND_PLAIN: u32 = 1;
@@ -27,10 +27,10 @@ const PRIORITY_DEFAULT: u32 = 0x15;
 
 #[no_mangle]
 extern "C" fn rs_job_run(job: *mut c_void) {
-    unsafe { Box::from_raw(job.cast::<WakeJob>()) }.waker.wake();
+    unsafe { Box::from_raw(job.cast::<WakeJob>()) }.slot.fire();
 }
 
-fn wake_after(delay: Duration, waker: Waker) {
+fn arm_timer(delay: Duration, slot: Arc<TimerSlot>) {
     let job = Box::new(WakeJob {
         metadata: unsafe { rt::rs_job_metadata() },
         refcounts: 0,
@@ -40,7 +40,7 @@ fn wake_after(delay: Duration, waker: Waker) {
         voucher: std::ptr::null_mut(),
         reserved: std::ptr::null_mut(),
         run_job: unsafe { rt::rs_run_job_fn() },
-        waker,
+        slot,
     });
     let nanos = u64::try_from(delay.as_nanos()).unwrap_or(u64::MAX);
     unsafe { rt::swift_task_enqueueGlobalWithDelay(nanos, Box::into_raw(job).cast()) };
@@ -48,26 +48,5 @@ fn wake_after(delay: Duration, waker: Waker) {
 
 /// Completes after `duration`.
 pub fn sleep(duration: Duration) -> Sleep {
-    Sleep { deadline: Instant::now() + duration, armed: false }
-}
-
-pub struct Sleep {
-    deadline: Instant,
-    armed: bool,
-}
-
-impl Future for Sleep {
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let left = self.deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return Poll::Ready(());
-        }
-        if !self.armed {
-            self.armed = true;
-            wake_after(left, cx.waker().clone());
-        }
-        Poll::Pending
-    }
+    Sleep::new(duration, arm_timer)
 }

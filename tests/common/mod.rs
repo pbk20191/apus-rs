@@ -68,3 +68,22 @@ where
     std::thread::spawn(move || { let _ = tx.send(block(f)); });
     rx.recv_timeout(limit).ok()
 }
+
+/// Polls `sleep` with waker A, then with waker B, and reports whether B was woken once it elapsed.
+pub fn latest_waker_woken<S: Future<Output = ()>>(sleep: S) -> bool {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct Flag(AtomicBool);
+    impl Wake for Flag {
+        fn wake(self: Arc<Self>) {
+            self.0.store(true, Ordering::SeqCst)
+        }
+    }
+    let (a, b) = (Arc::new(Flag(AtomicBool::new(false))), Arc::new(Flag(AtomicBool::new(false))));
+    let mut sleep = pin!(sleep);
+    let wa = Waker::from(a.clone());
+    let wb = Waker::from(b.clone());
+    assert!(sleep.as_mut().poll(&mut Context::from_waker(&wa)).is_pending());
+    assert!(sleep.as_mut().poll(&mut Context::from_waker(&wb)).is_pending());
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    b.0.load(Ordering::SeqCst)
+}
