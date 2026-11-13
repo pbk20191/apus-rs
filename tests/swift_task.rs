@@ -140,12 +140,15 @@ fn abort_drops_future() -> Result<(), Failed> {
 
 fn escalation_visible_after_resume() -> Result<(), Failed> {
     let options = SpawnOptions { priority: Priority::Utility, ..SpawnOptions::default() };
-    let h = spawn_with(options, async {
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let h = spawn_with(options, async move {
         let before = unsafe { probe_priority() };
+        started_tx.send(()).unwrap();
         sleep(Duration::from_millis(40)).await;
         (before, unsafe { probe_priority() }, priority())
     });
-    std::thread::sleep(Duration::from_millis(10));
+    // Escalate only once the task has run and read its starting priority (under load it may start late).
+    started_rx.recv_timeout(Duration::from_secs(5)).map_err(|_| "task never started")?;
     h.escalate(Priority::UserInitiated);
     let r = block(h);
     check(matches!(r, Ok((0x11, 0x19, Priority::UserInitiated))), format!("got {r:?}"))
