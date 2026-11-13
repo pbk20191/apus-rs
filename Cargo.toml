@@ -68,3 +68,8 @@ required-features = ["dispatch"]
 [[example]]
 name = "swift_basic"
 required-features = ["swift"]
+
+[[test]]
+name = "swift_main_children"
+harness = false
+required-features = ["test-probe"]

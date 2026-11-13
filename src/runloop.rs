@@ -13,6 +13,18 @@ extern "C" {
 
 extern "C" {
     fn pthread_main_np() -> i32;
+    static _dispatch_main_q: u8;
+    fn dispatch_async_f(queue: *const c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
+}
+
+extern "C" fn nothing(_: *mut c_void) {}
+
+struct MainQueueNudge;
+
+impl std::task::Wake for MainQueueNudge {
+    fn wake(self: std::sync::Arc<Self>) {
+        unsafe { dispatch_async_f(std::ptr::addr_of!(_dispatch_main_q).cast(), std::ptr::null_mut(), nothing) }
+    }
 }
 
 pub fn is_main_thread() -> bool {
@@ -30,9 +42,10 @@ where
 {
     assert!(is_main_thread(), "run_main must be called on the main thread");
     let mut handle = pin!(spawn_main_task(future));
-    // Re-poll after every main-queue item: the task only ever completes on the main queue, so a noop waker
-    // is enough, and nothing can be lost the way an early CFRunLoopStop would be.
-    let mut cx = Context::from_waker(Waker::noop());
+    // Re-poll after every main-queue item. The waker enqueues an empty main-queue item, so a completion that
+    // arrives from any thread still makes CFRunLoopRunInMode return (an early CFRunLoopStop would be lost).
+    let waker = Waker::from(std::sync::Arc::new(MainQueueNudge));
+    let mut cx = Context::from_waker(&waker);
     loop {
         if let Poll::Ready(result) = handle.as_mut().poll(&mut cx) {
             return match result {

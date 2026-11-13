@@ -82,6 +82,9 @@ static SWIFTASYNCCALL void after_wait_all(ACTX AsyncContext *ctx, SCTX void *err
   RsTaskContext *c = (RsTaskContext *)ctx;
   swift_taskGroup_destroy(c->group);
   c->group_initialized = false;
+  // The last child resumes us on the generic executor (TaskGroup.cpp): a MainActor task hops back so that it
+  // completes, and its output is handed over or dropped, on the main thread.
+  if (c->executor.identity) return swift_task_switch(ctx, finish, c->executor);
   return finish(ctx);
 }
 
