@@ -139,3 +139,15 @@ fn errors_are_reported() {
         assert!(mangle(bad).is_err(), "{bad:?} should not mangle");
     }
 }
+
+#[test]
+fn result_types() {
+    use async_swift_rs_mangle::result_type;
+    assert_eq!(result_type("Probe.f() -> [String]").unwrap().as_deref(), Some("SaySSG"));
+    assert_eq!(result_type("Probe.Big(struct).scaled(by: Int) -> Big(struct)").unwrap().as_deref(), Some("5Probe3BigV"));
+    assert_eq!(result_type("StoreKit.f() async throws -> [Product(struct)]").unwrap().as_deref(), Some("Say8StoreKit7ProductVG"));
+    assert_eq!(result_type("Probe.Counter(class).name: String { get }").unwrap().as_deref(), Some("SS"));
+    assert_eq!(result_type("Probe.f()").unwrap().as_deref(), Some("yt"));
+    assert_eq!(result_type("Probe.f<T>(_: T) -> [T]").unwrap(), None);
+    assert_eq!(result_type("Probe.f<S: Sequence>(_: S) -> S.Element where S.Element == Int").unwrap().as_deref(), Some("Si"));
+}

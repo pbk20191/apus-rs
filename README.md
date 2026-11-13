@@ -104,6 +104,23 @@ let text = greet("Kim", 2).await?;          // a SwiftCall<String>: `.child()` a
   `throws` after the parameters marks a throwing function.
 - `#[swift = "…"]` resolves the function at run time (missing → `CallError::Unavailable`), `#[swift_linked = "…"]`
   at link time. `#[symbol = "$s…"]` / `#[linked = "$s…"]` take a mangled symbol as is.
+- **Methods and properties**: a leading `self: &SwiftObject` (a class instance) or `self: &SwiftValue` (a struct
+  passed by address) is the receiver.
+- **Opaque results**: `-> SwiftValue` (returned by address: large and framework structs) and `-> DirectValue`
+  (returned in registers: an array or dictionary whose elements stay opaque) take their Swift type from the
+  declaration.
+
+```rust
+async_swift_rs::swift! {
+    #[swift = "static StoreKit.Product(struct).products<I: Collection>(for: I) async throws -> [Product(struct)] where I.Element == String"]
+    async fn products(ids: &SwiftValue, ids_type: SwiftType, collection: WitnessTable) throws -> DirectValue;
+
+    #[swift = "StoreKit.Product(struct).displayName: String { get }"]
+    fn display_name(self: &SwiftValue) -> String;
+}
+let name = display_name(&product)?;
+```
+
 - `async_swift_rs::mangle!("…")` is the symbol alone, as a string literal:
 
 ```rust

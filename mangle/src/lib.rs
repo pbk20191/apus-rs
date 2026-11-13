@@ -44,3 +44,10 @@ pub fn mangle(declaration: &str) -> Result<String, Error> {
     let decl = parse::parse(declaration).map_err(Error)?;
     mangler::mangle(&decl).map_err(Error)
 }
+
+/// The mangled name of the declaration's result type, in the form the Swift runtime resolves
+/// (`swift_getTypeByMangledNameInContext`): `"SaySSG"` for `[String]`. `None` if it depends on a generic parameter.
+pub fn result_type(declaration: &str) -> Result<Option<String>, Error> {
+    let decl = parse::parse(declaration).map_err(Error)?;
+    mangler::result_type(&decl).map_err(Error)
+}

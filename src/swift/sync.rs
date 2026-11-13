@@ -55,13 +55,26 @@ impl SwiftFn {
     fn prepare<R>(&self, args: impl SwiftArgs, slot: IndirectSlot, indirect: bool) -> SwiftSyncCall<R> {
         let mut lowering = ArgLowering::new(false);
         args.lower(&mut lowering);
-        SwiftSyncCall { function: self.resolve(), symbol: self.symbol, lowering, slot, indirect, throws: false, consumed: None, result: PhantomData }
+        SwiftSyncCall { function: self.resolve(), symbol: self.symbol, lowering, slot, indirect, throws: false, consumed: None, invalid: None, result: PhantomData }
     }
 
     /// Prepares a call returning `R`; run it with [`SwiftSyncCall::invoke`].
     /// The argument and result types must match the Swift signature: the compiler cannot check them.
     pub fn call<R: SwiftRet>(&self, args: impl SwiftArgs) -> SwiftSyncCall<R> {
-        self.prepare(args, IndirectSlot::inline(), R::INDIRECT)
+        self.call_declared(args, None)
+    }
+
+    /// [`call`](Self::call) for a function declared with its Swift result type (what `swift!` generates).
+    #[doc(hidden)]
+    pub fn call_declared<R: SwiftRet>(&self, args: impl SwiftArgs, result_type: Option<&'static str>) -> SwiftSyncCall<R> {
+        match R::result_slot(result_type) {
+            Ok((slot, indirect)) => self.prepare(args, slot, indirect),
+            Err(error) => {
+                let mut call = self.prepare((), IndirectSlot::inline(), false);
+                call.invalid = Some(error);
+                call
+            }
+        }
     }
 
     /// Like [`call`](Self::call) for a result returned by address: a generic, large or resilient value of `ty`.
@@ -86,6 +99,8 @@ pub struct SwiftSyncCall<R> {
     throws: bool,
     /// A `self` the callee consumes (`__consuming` methods): passed by address, not destroyed afterwards.
     consumed: Option<SwiftValue>,
+    /// A problem found while preparing the call; reported by `invoke` instead of running it.
+    invalid: Option<CallError>,
     result: PhantomData<fn() -> R>,
 }
 
@@ -124,6 +139,9 @@ impl<R> SwiftSyncCall<R> {
 impl<R: SwiftRet> SwiftSyncCall<R> {
     /// Runs the call on the current thread.
     pub fn invoke(mut self) -> Result<R, CallError> {
+        if let Some(error) = self.invalid.take() {
+            return Err(error);
+        }
         let function = self.function.ok_or(CallError::Unavailable(self.symbol))?;
         if let Some(why) = self.lowering.error {
             return Err(CallError::InvalidArgument(why));

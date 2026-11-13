@@ -74,7 +74,16 @@ impl SwiftAsyncFn {
     /// Prepares a call with `args` (a tuple, in declaration order) returning `R`. Nothing runs until awaited.
     /// The argument and result types must match the Swift signature: the compiler cannot check them.
     pub fn call<R: SwiftRet>(&self, args: impl SwiftArgs) -> SwiftCall<R> {
-        self.prepare(args, IndirectSlot::inline(), R::INDIRECT)
+        self.call_declared(args, None)
+    }
+
+    /// [`call`](Self::call) for a function declared with its Swift result type (what `swift!` generates).
+    #[doc(hidden)]
+    pub fn call_declared<R: SwiftRet>(&self, args: impl SwiftArgs, result_type: Option<&'static str>) -> SwiftCall<R> {
+        match R::result_slot(result_type) {
+            Ok((slot, indirect)) => self.prepare(args, slot, indirect),
+            Err(error) => SwiftCall::build(std::ptr::null(), ArgLowering::new(false), Some(error), IndirectSlot::inline(), false),
+        }
     }
 
     /// Like [`call`](Self::call) for a result returned by address: a value of generic type, or a large or
@@ -265,6 +274,13 @@ pub trait SwiftRet: Sized {
     /// Takes the owned result out of the result registers (or the indirect slot).
     #[doc(hidden)]
     unsafe fn lift(ret: &RetRegs, indirect: &mut IndirectSlot) -> Self;
+
+    /// Where the result goes and whether the callee writes it through an address. `result_type` is the
+    /// mangled name of the Swift result type when the function was declared with one.
+    #[doc(hidden)]
+    fn result_slot(_result_type: Option<&'static str>) -> Result<(IndirectSlot, bool), CallError> {
+        Ok((IndirectSlot::inline(), Self::INDIRECT))
+    }
 }
 
 macro_rules! direct_ret {
@@ -333,16 +349,74 @@ impl SwiftRet for SwiftAny {
     }
 }
 
-/// A value of the type given to `call_returning` / `call_direct`.
+fn declared_type(result_type: Option<&'static str>) -> Result<SwiftType, CallError> {
+    let name = result_type.ok_or(CallError::InvalidArgument(
+        "an opaque result needs its Swift type: declare the function with #[swift = \"…\"], or use call_returning / call_direct",
+    ))?;
+    SwiftType::from_mangled_name(name).ok_or(CallError::Unavailable(name))
+}
+
+/// A value returned by address: a large or resilient struct (every struct of an Apple framework), or a value
+/// of generic type. Its Swift type comes from the function's declaration, `call_returning` or `call_direct`.
 impl SwiftRet for SwiftValue {
     const INDIRECT: bool = true;
 
     unsafe fn lift(ret: &RetRegs, indirect: &mut IndirectSlot) -> Self {
-        let storage = indirect.boxed.take().expect("use call_returning or call_direct to name the Swift type that comes back");
+        let storage = indirect.boxed.take().expect("a SwiftValue result always has storage");
         if indirect.direct {
             std::ptr::copy_nonoverlapping(ret.gpr.as_ptr().cast::<u8>(), storage.ptr.as_ptr(), storage.ty.size());
         }
         storage.assume_init()
+    }
+
+    fn result_slot(result_type: Option<&'static str>) -> Result<(IndirectSlot, bool), CallError> {
+        Ok((IndirectSlot::boxed(UninitValue::new(declared_type(result_type)?), false), true))
+    }
+}
+
+/// An opaque value that Swift returns in registers rather than by address: at most four words of integers and
+/// references, such as an array or dictionary whose elements Rust does not read (`[Product]`).
+pub struct DirectValue(pub SwiftValue);
+
+impl SwiftRet for DirectValue {
+    unsafe fn lift(ret: &RetRegs, indirect: &mut IndirectSlot) -> Self {
+        DirectValue(SwiftValue::lift(ret, indirect))
+    }
+
+    fn result_slot(result_type: Option<&'static str>) -> Result<(IndirectSlot, bool), CallError> {
+        let ty = declared_type(result_type)?;
+        if ty.size() > 32 {
+            return Err(CallError::InvalidArgument("a type larger than four words is returned by address: use SwiftValue"));
+        }
+        Ok((IndirectSlot::boxed(UninitValue::new(ty), true), false))
+    }
+}
+
+/// What a method can be called on: a class instance, or a value passed by address.
+pub trait SwiftReceiver {
+    #[doc(hidden)]
+    fn bind<R>(&self, call: SwiftCall<R>) -> SwiftCall<R>;
+    #[doc(hidden)]
+    fn bind_sync<R>(&self, call: super::SwiftSyncCall<R>) -> super::SwiftSyncCall<R>;
+}
+
+impl SwiftReceiver for SwiftObject {
+    fn bind<R>(&self, call: SwiftCall<R>) -> SwiftCall<R> {
+        call.on(self)
+    }
+    fn bind_sync<R>(&self, call: super::SwiftSyncCall<R>) -> super::SwiftSyncCall<R> {
+        call.on(self)
+    }
+}
+
+/// `self` by address: a large or resilient struct. (A small struct of the caller's own module is passed in
+/// registers instead; that is not supported as a receiver.)
+impl SwiftReceiver for SwiftValue {
+    fn bind<R>(&self, call: SwiftCall<R>) -> SwiftCall<R> {
+        call.on_value(self)
+    }
+    fn bind_sync<R>(&self, call: super::SwiftSyncCall<R>) -> super::SwiftSyncCall<R> {
+        call.on_value(self)
     }
 }
 

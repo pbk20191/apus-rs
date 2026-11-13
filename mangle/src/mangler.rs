@@ -510,3 +510,29 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
     }
     Ok(m.buffer)
 }
+
+fn is_concrete(ty: &Ty) -> bool {
+    match ty {
+        Ty::Param(_) | Ty::Member(..) => false,
+        Ty::Optional(wrapped) => is_concrete(wrapped),
+        Ty::Tuple(elements) => elements.iter().all(|(_, element)| is_concrete(element)),
+        Ty::Nominal { args, .. } => args.iter().all(is_concrete),
+        Ty::Any | Ty::AnyObject | Ty::Existential(_) => true,
+    }
+}
+
+/// The mangled name of the declaration's result type (a function's result, a getter's type), as the runtime
+/// resolves type names; `None` when it depends on a generic parameter.
+pub fn result_type(decl: &Decl) -> Result<Option<String>, String> {
+    let same_types = same_types(&decl.requirements);
+    let ty = match &decl.signature {
+        Signature::Function { result, .. } => canonical(result, &same_types),
+        Signature::Getter(ty) => canonical(ty, &same_types),
+    };
+    if !is_concrete(&ty) {
+        return Ok(None);
+    }
+    let mut m = Mangler::default();
+    m.ty(&ty)?;
+    Ok(Some(m.buffer))
+}

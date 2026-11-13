@@ -88,6 +88,77 @@ fn declarations_compute_the_symbol() -> Result<(), Failed> {
     check(matches!(ok, Ok(1)) && matches!(err, Err(CallError::Swift(_))) && matches!(bytes, Ok(6)), format!("sync {ok:?} {err:?} {bytes:?}"))
 }
 
+// Methods and properties: `self` is the receiver; `SwiftValue` results take their Swift type from the declaration.
+mod members {
+    use async_swift_rs::swift::{DirectValue, SwiftObject, SwiftValue};
+    async_swift_rs::swift! {
+        #[swift_linked = "static Probe.Big(struct).make(n: Int) async -> Big(struct)"]
+        pub async fn big_make(n: i64) -> SwiftValue;
+
+        #[swift_linked = "Probe.Big(struct).total: Int { get }"]
+        pub fn total(self: &SwiftValue) -> i64;
+
+        #[swift_linked = "Probe.Big(struct).name: String { get }"]
+        pub fn name(self: &SwiftValue) -> String;
+
+        #[swift_linked = "Probe.Big(struct).scaled(by: Int) -> Big(struct)"]
+        pub fn scaled(self: &SwiftValue, by: i64) -> SwiftValue;
+
+        #[swift_linked = "Probe.bigSum(_: Big(struct), plus: Int) async -> Int"]
+        pub async fn big_sum(big: &SwiftValue, plus: i64) -> i64;
+
+        #[swift_linked = "Probe.makeCounter() -> Counter(class)"]
+        pub fn make_counter() -> SwiftObject;
+
+        #[swift_linked = "Probe.Counter(class).bump(by: Int) async -> Int"]
+        pub async fn bump(self: &SwiftObject, by: i64) -> i64;
+
+        /// `[String]` kept as an opaque Swift value (it is returned in a register).
+        #[swift_linked = "Probe.names(count: Int) async -> [String]"]
+        pub async fn names_opaque(count: i64) -> DirectValue;
+
+        /// Compiles against the real framework declaration; there is no Product to call it on here.
+        #[swift = "StoreKit.Product(struct).displayName: String { get }"]
+        pub fn display_name(self: &SwiftValue) -> String;
+
+        /// A symbol alone does not say which Swift type comes back.
+        #[linked = "$s5Probe3BigV4make1nACSi_tYaFZ"]
+        pub async fn big_make_by_symbol(n: i64) -> SwiftValue;
+    }
+}
+
+fn members_and_opaque_results() -> Result<(), Failed> {
+    use members::*;
+    let (text, total, name, scaled_total, scaled_name, sum, bumps, names, by_symbol) = block(spawn(async {
+        let big = big_make(1).await.unwrap();
+        let scaled = scaled(&big, 3).unwrap();
+        let counter = make_counter().unwrap();
+        let bumps = (bump(&counter, 5).await.unwrap(), bump(&counter, 5).await.unwrap());
+        let names = names_opaque(2).await.unwrap();
+        (
+            big.description(),
+            total(&big),
+            name(&big),
+            total(&scaled),
+            members::name(&scaled),
+            big_sum(&big, 100).await,
+            bumps,
+            (names.0.ty().name(), names.0.get::<Vec<String>>()),
+            big_make_by_symbol(1).await.map(|v| v.description()),
+        )
+    }))
+    .unwrap();
+    check(text.contains("big1"), text)?;
+    check(matches!(total, Ok(10)) && matches!(&name, Ok(n) if n == "big1"), format!("{total:?} {name:?}"))?;
+    check(matches!(scaled_total, Ok(30)) && matches!(&scaled_name, Ok(n) if n == "big1x3"), format!("{scaled_total:?} {scaled_name:?}"))?;
+    check(matches!(sum, Ok(110)) && bumps == (5, 10), format!("{sum:?} {bumps:?}"))?;
+    check(names.0 == "Swift.Array<Swift.String>" && names.1.as_deref() == Some(&["name0".to_string(), "name1".into()][..]), format!("{names:?}"))?;
+    check(matches!(by_symbol, Err(CallError::InvalidArgument(_))), format!("{by_symbol:?}"))?;
+    let _ = display_name; // compiles; needs a real Product to call
+    check(async_swift_rs::result_type!("Probe.f() -> [Big(struct)?]") == Some("Say5Probe3BigVSgG"), "result_type!")?;
+    check(async_swift_rs::result_type!("Probe.f<T>(_: T) -> T").is_none(), "a generic result has no fixed type")
+}
+
 fn async_functions() -> Result<(), Failed> {
     let (sum, text, error, unit, slept, absent) = block(spawn(async {
         let start = Instant::now();
@@ -134,5 +205,6 @@ fn main() {
         Trial::test("calls_are_builders", calls_are_builders),
         Trial::test("sync_functions", sync_functions),
         Trial::test("declarations_compute_the_symbol", declarations_compute_the_symbol),
+        Trial::test("members_and_opaque_results", members_and_opaque_results),
     ])
 }

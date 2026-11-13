@@ -19,7 +19,7 @@ pub use call::{timeout, AsyncFunctionPointer, CallError, IndirectSlot, RetRegs, 
 pub use stream::SwiftStream;
 pub use sync::{SwiftFn, SwiftSyncCall};
 pub use value::{IntoSwift, SwiftProtocol, SwiftType, SwiftValue, WitnessTable};
-pub use func::{ArgLowering, SwiftArg, SwiftArgs, SwiftAsyncFn, SwiftObject, SwiftRet};
+pub use func::{ArgLowering, DirectValue, SwiftArg, SwiftArgs, SwiftAsyncFn, SwiftObject, SwiftReceiver, SwiftRet};
 pub use current::{cancelled, current_task, is_cancelled, priority, Cancelled, TaskRef};
 pub use join::{JoinHandle, MainOnlyHandle};
 pub use timer::{sleep, within, Sleep};

@@ -65,3 +65,21 @@ pub fn mangle(input: TokenStream) -> TokenStream {
         Err(error) => compile_error(&format!("cannot mangle `{declaration}`: {error}")),
     }
 }
+
+/// Expands to the mangled name of a declaration's result type as an `Option<&'static str>`:
+/// `Some("SaySSG")` for `-> [String]`, `None` when the result depends on a generic parameter.
+#[proc_macro]
+pub fn result_type(input: TokenStream) -> TokenStream {
+    let tokens = flatten(input);
+    let [declaration] = tokens.as_slice() else {
+        return compile_error("expected a Swift declaration as a string literal");
+    };
+    let Some(declaration) = string_literal(declaration) else {
+        return compile_error("expected a Swift declaration as a string literal");
+    };
+    match async_swift_rs_mangle::result_type(&declaration) {
+        Ok(Some(name)) => format!("::core::option::Option::Some({name:?})").parse().expect("an Option expression"),
+        Ok(None) => "::core::option::Option::<&'static str>::None".parse().expect("an Option expression"),
+        Err(error) => compile_error(&format!("cannot mangle `{declaration}`: {error}")),
+    }
+}
