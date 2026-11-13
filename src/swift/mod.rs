@@ -5,6 +5,7 @@ pub(crate) mod call;
 mod current;
 mod func;
 mod join;
+mod macros;
 pub(crate) mod rt;
 mod selfcheck;
 mod sync;

@@ -82,6 +82,27 @@ let total: i64 = BUMP.call((5i64,)).on(&counter).await?;          // a method: `
 - **The Rust types must match the Swift signature; nothing can check them.** A mismatch is undefined behavior.
   Arguments must fit the argument registers (8 integer words on arm64, 6 on x86_64; a `String` takes two).
 
+### Declaring functions with `swift!`
+
+```rust
+async_swift_rs::swift! {
+    /// `func greet(_ name: String, times: Int, sleepMs: Int) async throws -> String`
+    #[symbol = "$s5Probe5greet_5times7sleepMsS2S_S2itYaKF"]
+    pub async fn greet(name: &str, times: i64, sleep_ms: i64) throws -> String;
+
+    /// `func byteCount(_ s: String) -> Int`, bound at link time
+    #[linked = "$s5Probe9byteCountySiSSF"]
+    fn byte_count(text: &str) -> i64;
+}
+
+let text = greet("Kim", 2, 10).await?;      // a SwiftCall<String>: `.child()` and `timeout` apply
+let n = byte_count("héllo")?;                // synchronous: Result<i64, CallError>
+```
+
+`async fn` is a Swift `async` function, a plain `fn` a synchronous one; `throws` after the parameters marks a
+throwing function. `#[symbol]` resolves at run time (missing → `CallError::Unavailable`), `#[linked]` at link
+time. Symbols are still written by hand here; computing them from a Swift declaration is planned.
+
 ### Generic functions, framework structs, synchronous calls
 
 Generic Swift functions take their type arguments as trailing parameters: the metadata of each generic
