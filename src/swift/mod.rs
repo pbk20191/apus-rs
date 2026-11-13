@@ -9,7 +9,7 @@ mod selfcheck;
 mod task;
 mod timer;
 
-pub use any::{FromSwiftAny, SwiftAny, SwiftError};
+pub use any::{FromSwiftAny, SwiftAny, SwiftError, SwiftHashable};
 pub use call::{timeout, CallError, SwiftAsync};
 pub use current::{cancelled, current_task, is_cancelled, priority, Cancelled, TaskRef};
 pub use join::{JoinHandle, MainOnlyHandle};

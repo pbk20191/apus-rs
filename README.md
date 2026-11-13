@@ -89,6 +89,13 @@ extern "C" { fn fetch_products(ids: *const std::ffi::c_char) -> *mut std::ffi::c
 let products = unsafe { SwiftAsync::from_raw(fetch_products(c"pro,lite".as_ptr())) }.await?;
 ```
 
+The result is a `SwiftAny`. `downcast::<T>()` copies it out as `()`, `bool`, `i64`, `i32`, `u64`, `f64`, `String`,
+or `Option`, `Vec` and `HashMap` of those (Swift `Optional`, `Array`, `Dictionary`; keys: `String` and integers):
+
+```rust
+let names: Vec<String> = products.downcast().expect("a [String]");
+```
+
 The closure runs **in the calling Swift Task**: it sees the task's cancellation, priority and task-locals, and a
 MainActor task is back on the main actor when the await returns. Awaiting outside a Swift task yields
 `CallError::NoCurrentTask`.

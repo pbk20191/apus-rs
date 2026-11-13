@@ -14,6 +14,8 @@ swift_getTypeName | TypeNamePair | const void *m, _Bool q | m, q
 $sSqMa | MetadataResponse | size_t r, const void *t | r, t
 $sSS11utf8CStrings15ContiguousArrayVys4Int8VGvg | void * | uint64_t a, uint64_t b | a, b
 $sSS10describingSSx_tclufC | SwiftString | void *v, const void *t | v, t
+$sSaMa | MetadataResponse | size_t r, const void *t | r, t
+$sSDMa | MetadataResponse | size_t r, const void *k, const void *v, const void *w | r, k, v, w
 # value witness function shapes (called through the table, not by symbol)
 vwt_destroy | void | void *v, const void *m | v, m
 vwt_initializeWithCopy | void * | void *d, void *s, const void *m | d, s, m

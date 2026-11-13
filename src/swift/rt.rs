@@ -109,6 +109,20 @@ extern "C" {
     /// `Optional<T>` metadata accessor.
     #[link_name = "$sSqMa"]
     pub fn optional_metadata(request: usize, wrapped: *const c_void) -> MetadataResponse;
+    /// `Array<T>` metadata accessor.
+    #[link_name = "$sSaMa"]
+    pub fn array_metadata(request: usize, element: *const c_void) -> MetadataResponse;
+    /// `Dictionary<K, V>` metadata accessor; the last argument is K's `Hashable` witness table.
+    #[link_name = "$sSDMa"]
+    pub fn dictionary_metadata(request: usize, key: *const c_void, value: *const c_void, key_hashable: *const c_void) -> MetadataResponse;
+    #[link_name = "$sSSSHsWP"]
+    pub static STRING_HASHABLE: u8;
+    #[link_name = "$sSiSHsWP"]
+    pub static INT_HASHABLE: u8;
+    #[link_name = "$ss5Int32VSHsWP"]
+    pub static INT32_HASHABLE: u8;
+    #[link_name = "$ss6UInt64VSHsWP"]
+    pub static UINT64_HASHABLE: u8;
     /// `String.utf8CString` getter: a +1 `ContiguousArray<Int8>` (NUL-terminated).
     #[link_name = "$sSS11utf8CStrings15ContiguousArrayVys4Int8VGvg"]
     pub fn string_utf8_c_string(w0: u64, w1: u64) -> *mut c_void;
@@ -168,6 +182,7 @@ pub const REQUIRED_SYMBOLS: &[&str] = &[
     "swift_errorRelease", "swift_dynamicCast", "swift_getErrorValue", "swift_getExistentialTypeMetadata",
     "swift_getTypeName", "$sSqMa", "$sSS11utf8CStrings15ContiguousArrayVys4Int8VGvg", "$sSS10describingSSx_tclufC",
     "$sSiN", "$ss5Int32VN", "$ss6UInt64VN", "$sSdN", "$sSbN", "$sSSN",
+    "$sSaMa", "$sSDMa", "$sSSSHsWP", "$sSiSHsWP", "$ss5Int32VSHsWP", "$ss6UInt64VSHsWP",
 ];
 
 // MetadataKind::Struct = 0 | NonHeap (include/swift/ABI/MetadataKind.def). Nominal `…N` symbols point at the

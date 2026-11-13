@@ -83,3 +83,21 @@ final class DeinitFlag { let flag: UnsafeMutablePointer<Bool>; init(_ f: UnsafeM
         catch { UnsafeMutablePointer<Bool>(bitPattern: bits)!.pointee = true; throw error }
     }
 }
+
+// ---- collections handed to Rust as Any ----
+@_cdecl("probe_any_int_array") public func probeAnyIntArray(_ out: UnsafeMutableRawPointer) { out.initializeMemory(as: Any.self, repeating: [1, 2, 3], count: 1) }
+@_cdecl("probe_any_string_array") public func probeAnyStringArray(_ out: UnsafeMutableRawPointer) { out.initializeMemory(as: Any.self, repeating: ["a", "héllo👋", "", String(repeating: "long", count: 20)], count: 1) }
+@_cdecl("probe_any_empty_array") public func probeAnyEmptyArray(_ out: UnsafeMutableRawPointer) { out.initializeMemory(as: Any.self, repeating: [Int](), count: 1) }
+@_cdecl("probe_any_nested_array") public func probeAnyNestedArray(_ out: UnsafeMutableRawPointer) { out.initializeMemory(as: Any.self, repeating: [[1], [], [2, 3]], count: 1) }
+@_cdecl("probe_any_optional_array") public func probeAnyOptionalArray(_ out: UnsafeMutableRawPointer) { let v: [Int?] = [1, nil, 3]; out.initializeMemory(as: Any.self, repeating: v, count: 1) }
+@_cdecl("probe_any_bool_double_array") public func probeAnyBoolDoubleArray(_ out: UnsafeMutableRawPointer, _ bools: Bool) {
+    if bools { out.initializeMemory(as: Any.self, repeating: [true, false, true], count: 1) }
+    else { out.initializeMemory(as: Any.self, repeating: [1.5, -2.0], count: 1) }
+}
+@_cdecl("probe_any_dict") public func probeAnyDict(_ out: UnsafeMutableRawPointer) { out.initializeMemory(as: Any.self, repeating: ["one": 1, "two": 2, "three": 3], count: 1) }
+@_cdecl("probe_any_big_dict") public func probeAnyBigDict(_ out: UnsafeMutableRawPointer) {
+    var d = [Int: String](); for i in 0..<200 { d[i] = "v\(i)" }
+    out.initializeMemory(as: Any.self, repeating: d, count: 1)
+}
+@_cdecl("probe_any_empty_dict") public func probeAnyEmptyDict(_ out: UnsafeMutableRawPointer) { out.initializeMemory(as: Any.self, repeating: [String: Int](), count: 1) }
+@_cdecl("probe_any_dict_of_arrays") public func probeAnyDictOfArrays(_ out: UnsafeMutableRawPointer) { out.initializeMemory(as: Any.self, repeating: ["a": [1, 2], "b": []], count: 1) }
