@@ -206,8 +206,17 @@ fn stress_spawn_wake_cancel() -> Result<(), Failed> {
     check(start.elapsed() < Duration::from_secs(5), format!("took {:?}", start.elapsed()))
 }
 
+fn abort_with_panicking_drop() -> Result<(), Failed> {
+    let h = spawn(async { let _guard = common::PanicOnDrop; sleep(Duration::from_secs(10)).await; 1 });
+    std::thread::sleep(Duration::from_millis(20));
+    h.abort();
+    let r = common::block_with_timeout(h, Duration::from_secs(2));
+    check(matches!(r, Some(Err(JoinError::Panicked(_)))), format!("got {r:?}"))
+}
+
 fn main() {
     common::run(vec![
+        Trial::test("abort_with_panicking_drop", abort_with_panicking_drop),
         Trial::test("task_is_swift_task", task_is_swift_task),
         Trial::test("utility_priority_seen_by_swift", utility_priority_seen_by_swift),
         Trial::test("spawn_returns_value", spawn_returns_value),

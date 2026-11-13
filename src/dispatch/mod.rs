@@ -54,7 +54,11 @@ thread_local! {
 }
 
 extern "C" fn run_runnable(runnable: *mut c_void) {
-    unsafe { Runnable::<()>::from_raw(std::ptr::NonNull::new_unchecked(runnable.cast())) }.run();
+    let runnable = unsafe { Runnable::<()>::from_raw(std::ptr::NonNull::new_unchecked(runnable.cast())) };
+    // `Guarded` turns task panics into JoinError; this only keeps anything else from unwinding into libdispatch.
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runnable.run())).is_err() {
+        eprintln!("async-swift-rs: a dispatch task panicked outside its future");
+    }
 }
 
 extern "C" fn run_main_runnable(runnable: *mut c_void) {

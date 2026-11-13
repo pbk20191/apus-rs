@@ -14,7 +14,7 @@ extern "C" {
 extern "C" {
     fn pthread_main_np() -> i32;
     static _dispatch_main_q: u8;
-    fn dispatch_async_f(queue: *const c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
+    fn dispatch_async_f(queue: *mut c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
 }
 
 extern "C" fn nothing(_: *mut c_void) {}
@@ -23,7 +23,7 @@ struct MainQueueNudge;
 
 impl std::task::Wake for MainQueueNudge {
     fn wake(self: std::sync::Arc<Self>) {
-        unsafe { dispatch_async_f(std::ptr::addr_of!(_dispatch_main_q).cast(), std::ptr::null_mut(), nothing) }
+        unsafe { dispatch_async_f(std::ptr::addr_of!(_dispatch_main_q) as *mut c_void, std::ptr::null_mut(), nothing) }
     }
 }
 

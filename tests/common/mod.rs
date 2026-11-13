@@ -50,3 +50,21 @@ extern "C" {
 pub fn current_qos() -> u32 {
     unsafe { qos_class_self() }
 }
+
+/// A value whose `Drop` panics.
+pub struct PanicOnDrop;
+impl Drop for PanicOnDrop {
+    fn drop(&mut self) {
+        panic!("drop panicked");
+    }
+}
+
+/// Awaits `f` on a helper thread; `None` if it does not complete within `limit`.
+pub fn block_with_timeout<F: Future + Send + 'static>(f: F, limit: std::time::Duration) -> Option<F::Output>
+where
+    F::Output: Send,
+{
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || { let _ = tx.send(block(f)); });
+    rx.recv_timeout(limit).ok()
+}

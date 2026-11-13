@@ -98,26 +98,32 @@ pub(crate) struct Guarded<F> {
     abort: Arc<AbortState>,
 }
 
+impl<F> Guarded<F> {
+    /// Drops the user future; a panicking `Drop` becomes `JoinError::Panicked` instead of unwinding further.
+    fn drop_future(&mut self) -> Result<(), JoinError> {
+        catch_unwind(AssertUnwindSafe(|| self.future = None)).map_err(|payload| {
+            std::mem::forget(self.future.take()); // already partly dropped by the panic; never touch it again
+            JoinError::Panicked(payload)
+        })
+    }
+}
+
 impl<F: Future> Future for Guarded<F> {
     type Output = Result<F::Output, JoinError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = unsafe { self.get_unchecked_mut() };
         if this.abort.requested.load(Ordering::SeqCst) {
-            this.future = None;
-            return Poll::Ready(Err(JoinError::Aborted));
+            return Poll::Ready(this.drop_future().and(Err(JoinError::Aborted)));
         }
         *this.abort.waker.lock().unwrap() = Some(cx.waker().clone());
         let Some(future) = this.future.as_mut() else { return Poll::Ready(Err(JoinError::Aborted)) };
         let future = unsafe { Pin::new_unchecked(future) };
         match catch_unwind(AssertUnwindSafe(|| future.poll(cx))) {
             Ok(Poll::Pending) => Poll::Pending,
-            Ok(Poll::Ready(v)) => {
-                this.future = None;
-                Poll::Ready(Ok(v))
-            }
+            Ok(Poll::Ready(v)) => Poll::Ready(this.drop_future().map(|()| v)),
             Err(payload) => {
-                this.future = None;
+                let _ = this.drop_future();
                 Poll::Ready(Err(JoinError::Panicked(payload)))
             }
         }

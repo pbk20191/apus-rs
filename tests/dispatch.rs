@@ -112,8 +112,17 @@ fn run_main_off_main_panics() -> Result<(), Failed> {
     check(msg.contains("run_main must be called on the main thread"), format!("message: {msg}"))
 }
 
+fn abort_with_panicking_drop() -> Result<(), Failed> {
+    let h = spawn(async { let _guard = common::PanicOnDrop; sleep(Duration::from_secs(10)).await; 1 });
+    std::thread::sleep(Duration::from_millis(20));
+    h.abort();
+    let r = common::block_with_timeout(h, Duration::from_secs(2));
+    check(matches!(r, Some(Err(JoinError::Panicked(_)))), format!("got {r:?}"))
+}
+
 fn main() {
     common::run(vec![
+        Trial::test("abort_with_panicking_drop", abort_with_panicking_drop),
         Trial::test("spawn_returns_value", spawn_returns_value),
         Trial::test("ten_thousand_sleeps_overlap", ten_thousand_sleeps_overlap),
         Trial::test("priority_maps_to_qos", priority_maps_to_qos),

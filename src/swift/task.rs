@@ -8,7 +8,7 @@
 use super::join::{JoinHandle, JoinState};
 use super::{rt, selfcheck};
 use crate::common::guard;
-use crate::SpawnOptions;
+use crate::{JoinError, SpawnOptions};
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::future::Future;
@@ -199,9 +199,9 @@ where
     });
     let finished = state.clone();
     let on_finish = Box::new(move || {
-        if let Some(result) = staged.lock().unwrap().take() {
-            finished.complete(result);
-        }
+        // `Guarded` always stages a result; if the poll machinery itself failed, still release the waiter.
+        let result = staged.lock().unwrap().take();
+        finished.complete(result.unwrap_or_else(|| Err(JoinError::Panicked(Box::new("task ended without a result")))));
     });
     let task = create(options, future, on_finish);
     JoinHandle { state, task, abort }
