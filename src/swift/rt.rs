@@ -102,6 +102,10 @@ extern "C" {
     pub fn swift_retain(object: *mut c_void) -> *mut c_void; // C-CC
     pub fn swift_release(object: *mut c_void); // C-CC
     pub fn swift_errorRelease(error: *mut c_void); // C-CC
+    pub fn swift_bridgeObjectRelease(object: *mut c_void); // C-CC
+    /// `String.init(cString: UnsafePointer<CChar>)`.
+    #[link_name = "$sSS7cStringSSSPys4Int8VG_tcfC"]
+    pub fn string_from_c_string(c_string: *const c_char) -> SwiftString;
     pub fn swift_dynamicCast(dest: *mut c_void, src: *mut c_void, src_type: *const c_void, target_type: *const c_void, flags: usize) -> bool; // C-CC
     pub fn swift_getErrorValue(error: *const c_void, scratch: *mut *mut c_void, out: *mut ErrorValueResult); // C-CC
     pub fn swift_getExistentialTypeMetadata(class_constraint_any: bool, superclass: *const c_void, count: usize, protocols: *const c_void) -> *const c_void; // C-CC
@@ -182,6 +186,7 @@ pub const REQUIRED_SYMBOLS: &[&str] = &[
     "swift_errorRelease", "swift_dynamicCast", "swift_getErrorValue", "swift_getExistentialTypeMetadata",
     "swift_getTypeName", "$sSqMa", "$sSS11utf8CStrings15ContiguousArrayVys4Int8VGvg", "$sSS10describingSSx_tclufC",
     "$sSiN", "$ss5Int32VN", "$ss6UInt64VN", "$sSdN", "$sSbN", "$sSSN",
+    "swift_bridgeObjectRelease", "$sSS7cStringSSSPys4Int8VG_tcfC",
     "$sSaMa", "$sSDMa", "$sSSSHsWP", "$sSiSHsWP", "$ss5Int32VSHsWP", "$ss6UInt64VSHsWP",
 ];
 

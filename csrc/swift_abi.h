@@ -49,6 +49,7 @@ typedef struct __attribute__((aligned(16))) {
   SerialExecutorRef executor;         // generic, or the main executor for MainActor tasks
   uint64_t unused_result;
   void *current_call;                 // call record of the in-flight same-Task Swift call
+  void *call_ret;                     // RetRegs of that call
   bool group_initialized;
   TaskFutureWaitAsyncContext wait;
   void *group[32] __attribute__((aligned(16)));   // TaskGroup storage: NumWords_TaskGroup = 32 (ABI/MetadataValues.h)
@@ -57,16 +58,31 @@ typedef struct __attribute__((aligned(16))) {
 typedef struct __attribute__((aligned(16))) {
   AsyncContext base;
   void *record;
+  void *ret;                          // RetRegs of the child's call
 } ChildContext;
 
 // lib/IRGen: AsyncFunctionPointer = { relative offset to the code, callee context size }.
 typedef struct { int32_t function; uint32_t expected_context_size; } AsyncFunctionPointer;
 
-// The user-side box `final class AsyncSwiftClosure { let body: () async throws -> Any }` (see README):
-// HeapObject header, then the thick function (function word → AsyncFunctionPointer, context word).
-typedef struct { void *metadata; uint64_t refcounts; const AsyncFunctionPointer *fn; void *context; } ClosureBox;
-
-// Thick `() async throws -> Any`: (indirect Any result, callee context, closure context +0).
-typedef SWIFTASYNCCALL void AnyClosureFn(void *indirect_any, ACTX AsyncContext *callee, SCTX void *closure_context);
+// One call shape for every Swift async function: Rust fills the argument registers (src/swift/call.rs),
+// the callee reads the ones its signature uses. Integer argument registers: 8 on arm64, 6 on x86_64.
+typedef struct { uint64_t gpr[8]; double fpr[8]; void *self; } CallRegs;
+// Direct results arrive as arguments of the return continuation; the error (if the callee throws) in swift_context.
+typedef struct { uint64_t gpr[4]; double fpr[4]; void *error; } RetRegs;
+#if defined(__aarch64__)
+typedef SWIFTASYNCCALL void GenericAsyncFn(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,
+                                           double, double, double, double, double, double, double, double,
+                                           ACTX AsyncContext *, SCTX void *);
+#define CALL_GENERIC(fn, r, callee) \
+  fn((r)->gpr[0], (r)->gpr[1], (r)->gpr[2], (r)->gpr[3], (r)->gpr[4], (r)->gpr[5], (r)->gpr[6], (r)->gpr[7], \
+     (r)->fpr[0], (r)->fpr[1], (r)->fpr[2], (r)->fpr[3], (r)->fpr[4], (r)->fpr[5], (r)->fpr[6], (r)->fpr[7], callee, (r)->self)
+#else
+typedef SWIFTASYNCCALL void GenericAsyncFn(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,
+                                           double, double, double, double, double, double, double, double,
+                                           ACTX AsyncContext *, SCTX void *);
+#define CALL_GENERIC(fn, r, callee) \
+  fn((r)->gpr[0], (r)->gpr[1], (r)->gpr[2], (r)->gpr[3], (r)->gpr[4], (r)->gpr[5], \
+     (r)->fpr[0], (r)->fpr[1], (r)->fpr[2], (r)->fpr[3], (r)->fpr[4], (r)->fpr[5], (r)->fpr[6], (r)->fpr[7], callee, (r)->self)
+#endif
 // Return continuation of a throwing async function / task completion: (context, error).
 typedef SWIFTASYNCCALL void ThrowingContinuation(ACTX AsyncContext *, SCTX void *error);

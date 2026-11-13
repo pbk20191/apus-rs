@@ -3,6 +3,7 @@
 mod any;
 pub(crate) mod call;
 mod current;
+mod func;
 mod join;
 pub(crate) mod rt;
 mod selfcheck;
@@ -10,7 +11,8 @@ mod task;
 mod timer;
 
 pub use any::{FromSwiftAny, SwiftAny, SwiftError, SwiftHashable};
-pub use call::{timeout, CallError, SwiftAsync};
+pub use call::{timeout, AsyncFunctionPointer, CallError, RetRegs, SwiftAsync, SwiftCall};
+pub use func::{ArgLowering, SwiftArg, SwiftArgs, SwiftAsyncFn, SwiftObject, SwiftRet};
 pub use current::{cancelled, current_task, is_cancelled, priority, Cancelled, TaskRef};
 pub use join::{JoinHandle, MainOnlyHandle};
 pub use timer::{sleep, Sleep};

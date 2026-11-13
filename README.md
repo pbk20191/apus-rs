@@ -36,7 +36,8 @@ let v = run_main(async { … });                           // on the main thread
 ```
 
 Swift backend only: `h.cancel()` (cooperative, = Swift `task.cancel()`), `h.escalate(p)`, `cancelled().await`,
-`is_cancelled()`, `priority()`, `current_task()`, `SwiftAsync`, `timeout()`, `SwiftAny`, `SwiftError`.
+`is_cancelled()`, `priority()`, `current_task()`, `SwiftAsyncFn`, `SwiftCall`, `SwiftAsync`, `timeout()`, `SwiftAny`,
+`SwiftObject`, `SwiftError`.
 Dispatch backend only: `SerialQueue`, `block_on` (not on the main thread).
 
 ### Inheritance
@@ -55,7 +56,32 @@ the main run loop through `objc2-core-foundation`).
 **Do not use `dispatch_main()`**: it drains the main queue on a worker thread, so MainActor code runs off the
 main thread.
 
-## Awaiting Swift async code from Rust
+## Calling Swift async functions directly
+
+No Swift code is needed for an existing Swift async function: name its symbol, pass Rust values, await.
+
+```rust
+use async_swift_rs::swift::SwiftAsyncFn;
+
+// `func greet(_ name: String, times: Int, sleepMs: Int) async throws -> String` in module Probe.
+// The mangled name comes from `nm -gU <binary> | grep greet` (drop the leading underscore).
+static GREET: SwiftAsyncFn = SwiftAsyncFn::new("$s5Probe5greet_5times7sleepMsS2S_S2itYaKF");
+
+let text: String = GREET.call(("Kim", 2i64, 10i64)).throws().await?;
+let total: i64 = BUMP.call((5i64,)).on(&counter).await?;          // a method: `counter` is `self`
+```
+
+- The call runs **in the calling Swift Task** (same cancellation, priority, task-locals); see the concurrency
+  rule below for `.child()` and `timeout`.
+- The symbol is resolved with `dlsym` on first use. A function missing on the running OS gives
+  `CallError::Unavailable` (check with `is_available()`), not a launch failure.
+- Arguments: integers, `bool`, `f64`, `&str`/`String`, `&SwiftObject`. Results: `()`, integers, `bool`, `f64`,
+  `String`, `Option<i64>`, `Option<String>`, `Vec<T>`, `HashMap<K, V>`, `SwiftObject`, `SwiftAny`.
+- `.throws()` must be added exactly when the Swift function is `throws`.
+- **The Rust types must match the Swift signature; nothing can check them.** A mismatch is undefined behavior.
+  Arguments must fit the argument registers (8 integer words on arm64, 6 on x86_64; a `String` takes two).
+
+## Awaiting Swift async closures from Rust
 
 Hand Rust a Swift `async` closure with this helper in your Swift module (9 lines, public Swift only):
 

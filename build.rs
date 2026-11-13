@@ -4,7 +4,7 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=csrc");
-    println!("cargo:rerun-if-changed=tests/support/probe.swift");
+    println!("cargo:rerun-if-changed=tests/support");
     if env::var_os("CARGO_FEATURE_SWIFT").is_none() {
         return;
     }
@@ -30,11 +30,11 @@ fn main() {
         let target = format!("{arch}-apple-macos14.0");
         let status = Command::new("xcrun")
             .args(["swiftc", "-O", "-parse-as-library", "-static", "-emit-library", "-swift-version", "5"])
-            .args(["-target", &target, "-module-name", "AsyncSwiftProbe", "tests/support/probe.swift", "-o"])
+            .args(["-target", &target, "-module-name", "Probe", "tests/support/probe.swift", "tests/support/fns.swift", "-o"])
             .arg(out.join("libasync_swift_probe.a"))
             .status()
             .expect("failed to run swiftc for the test probe");
-        assert!(status.success(), "swiftc failed for tests/support/probe.swift");
+        assert!(status.success(), "swiftc failed for the test probes");
         println!("cargo:rustc-link-search=native={}", out.display());
         println!("cargo:rustc-link-lib=static=async_swift_probe");
         let toolchain = Command::new("xcrun").args(["--find", "swiftc"]).output().unwrap();

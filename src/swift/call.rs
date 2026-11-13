@@ -1,29 +1,61 @@
-//! Awaiting a Swift `() async throws -> Any` closure inside the current Swift Task.
+//! Running a Swift async call inside the current Swift Task.
 //!
-//! A `SwiftAsync` registers itself on the task while being polled. When the poll ends Pending with exactly one
-//! registered call and no other wake, the funclet calls the closure in this same Task (Swift's `await f()`);
-//! the closure returns to `after_call`, which reports through `rs_call_done` and polls again. Concurrent calls
-//! become child Tasks (rs_take_child).
+//! A [`SwiftCall`] registers itself on the task while being polled. When the poll ends Pending with exactly one
+//! registered call and no other wake, the funclet calls the callee in this same Task (Swift's `await f()`): it
+//! loads the argument registers from the call record and tail-calls; the callee returns to `after_call`, which
+//! stores the result registers, reports through `rs_call_done`, and polls again. Concurrent calls become child
+//! Tasks (`rs_take_child`).
 //!
-//! The closure arrives as an `AsyncSwiftClosure` box (+1) built by the user's Swift code (see README):
-//! `final class AsyncSwiftClosure { let body: () async throws -> Any }`.
+//! Every Swift async function has the same shape at this level (csrc/swift_abi.h `GenericAsyncFn`), so one
+//! path serves direct function calls ([`super::SwiftAsyncFn`]) and closures ([`SwiftAsync`]).
 
 use super::any::{SwiftAny, SwiftError};
+use super::func::{ArgLowering, SwiftRet};
 use super::{rt, task};
 use std::cell::UnsafeCell;
 use std::ffi::c_void;
 use std::fmt;
 use std::future::Future;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicPtr, Ordering::SeqCst};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
+/// What a Swift async function symbol with the `Tu` suffix points at (lib/IRGen `AsyncFunctionPointer`):
+/// the code's offset relative to this record, and the size of the context the caller must allocate.
+#[repr(C)]
+pub struct AsyncFunctionPointer {
+    function: i32,
+    context_size: u32,
+}
+
+/// Argument registers of a call (csrc/swift_abi.h `CallRegs`).
+#[repr(C)]
+pub(crate) struct CallRegs {
+    pub(crate) gpr: [u64; 8],
+    pub(crate) fpr: [f64; 8],
+    pub(crate) this: *mut c_void,
+}
+
+/// Result registers of a finished call (csrc/swift_abi.h `RetRegs`).
+#[doc(hidden)]
+#[repr(C)]
+pub struct RetRegs {
+    pub gpr: [u64; 4],
+    pub fpr: [f64; 4],
+    pub error: *mut c_void,
+}
+
 pub enum CallError {
-    /// The closure threw.
+    /// The callee threw.
     Swift(SwiftError),
-    /// Awaited outside a Swift task: there is no Task to run the closure in.
+    /// Awaited outside a Swift task: there is no Task to run the call in.
     NoCurrentTask,
+    /// The function's symbol is not present in this process (e.g. an API newer than the running OS).
+    Unavailable(&'static str),
+    /// The arguments cannot be passed (too many for the argument registers, or a string with a NUL byte).
+    InvalidArgument(&'static str),
 }
 
 impl fmt::Debug for CallError {
@@ -31,6 +63,8 @@ impl fmt::Debug for CallError {
         match self {
             CallError::Swift(e) => write!(f, "Swift({e:?})"),
             CallError::NoCurrentTask => f.write_str("NoCurrentTask"),
+            CallError::Unavailable(symbol) => write!(f, "Unavailable({symbol})"),
+            CallError::InvalidArgument(why) => write!(f, "InvalidArgument({why})"),
         }
     }
 }
@@ -40,25 +74,42 @@ impl fmt::Display for CallError {
         match self {
             CallError::Swift(e) => write!(f, "Swift error: {e}"),
             CallError::NoCurrentTask => f.write_str("a Swift async call was awaited outside a Swift task"),
+            CallError::Unavailable(symbol) => write!(f, "Swift function {symbol} is not available"),
+            CallError::InvalidArgument(why) => write!(f, "invalid argument: {why}"),
         }
     }
 }
 
 impl std::error::Error for CallError {}
 
+/// A Swift reference the call record keeps alive until the call is over.
+pub(crate) enum Owned {
+    Object(*mut c_void),
+    /// A `String`'s owner word.
+    Bridge(u64),
+}
+
 enum CallState {
     Registered,
     Running,
-    /// Finished; error box (+1) or null for a result in `result`.
-    Done(*mut c_void),
+    /// Finished; the results are in `ret` / `indirect`.
+    Done,
     Taken,
-    /// The awaiting future was dropped; whoever finishes the call cleans up.
+    /// The awaiting future was dropped; whoever finishes the call discards the result.
     Abandoned,
 }
 
 pub(crate) struct CallShared {
-    closure: *mut c_void, // AsyncSwiftClosure box, +1
-    result: UnsafeCell<[usize; 4]>,
+    function: *const AsyncFunctionPointer,
+    regs: UnsafeCell<CallRegs>,
+    ret: UnsafeCell<RetRegs>,
+    /// Storage for an indirect result (`Any`).
+    indirect: UnsafeCell<[usize; 4]>,
+    /// Whether the callee is `throws`: only then is the error register meaningful.
+    throws: bool,
+    owned: Vec<Owned>,
+    /// Drops a finished result nobody will read (monomorphized for the call's result type).
+    discard: unsafe fn(&CallShared),
     state: Mutex<CallState>,
     waker: Mutex<Option<Waker>>,
     child: AtomicPtr<c_void>, // +1 child AsyncTask when run as a child
@@ -69,34 +120,50 @@ unsafe impl Send for CallShared {}
 unsafe impl Sync for CallShared {}
 
 impl CallShared {
-    fn new(closure: *mut c_void, force_child: bool) -> CallShared {
-        CallShared {
-            closure,
-            result: UnsafeCell::new([0; 4]),
+    fn new<R: SwiftRet>(function: *const AsyncFunctionPointer, lowering: ArgLowering) -> Arc<CallShared> {
+        let shared = Arc::new(CallShared {
+            function,
+            regs: UnsafeCell::new(lowering.regs),
+            ret: UnsafeCell::new(RetRegs { gpr: [0; 4], fpr: [0.0; 4], error: std::ptr::null_mut() }),
+            indirect: UnsafeCell::new([0; 4]),
+            throws: false,
+            owned: lowering.owned,
+            discard: discard_as::<R>,
             state: Mutex::new(CallState::Registered),
             waker: Mutex::new(None),
             child: AtomicPtr::default(),
-            force_child,
+            force_child: false,
+        });
+        if R::INDIRECT {
+            // The callee writes an indirect result through its first integer argument.
+            unsafe { (*shared.regs.get()).gpr[0] = shared.indirect.get() as u64 };
         }
+        shared
     }
 
-    fn result_ptr(&self) -> *mut c_void {
-        self.result.get().cast()
-    }
-
-    fn take_value(&self, error: *mut c_void) -> Result<SwiftAny, CallError> {
-        if error.is_null() {
-            Ok(unsafe { SwiftAny::from_raw_initialized(*self.result.get()) })
-        } else {
-            Err(CallError::Swift(unsafe { SwiftError::from_raw(error) }))
+    /// Takes the finished call's result. Call exactly once, after `Done`.
+    unsafe fn take_result<R: SwiftRet>(&self) -> Result<R, CallError> {
+        let ret = &*self.ret.get();
+        if self.throws && !ret.error.is_null() {
+            return Err(CallError::Swift(SwiftError::from_raw(ret.error)));
         }
+        Ok(R::lift(ret, self.indirect.get().cast()))
     }
+}
+
+unsafe fn discard_as<R: SwiftRet>(call: &CallShared) {
+    drop(call.take_result::<R>());
 }
 
 impl Drop for CallShared {
     fn drop(&mut self) {
         unsafe {
-            rt::swift_release(self.closure);
+            for owned in &self.owned {
+                match *owned {
+                    Owned::Object(object) => rt::swift_release(object),
+                    Owned::Bridge(word) => rt::swift_bridgeObjectRelease(word as *mut c_void),
+                }
+            }
             let child = *self.child.get_mut();
             if !child.is_null() {
                 rt::swift_release(child);
@@ -138,13 +205,24 @@ fn hand_to_child(call: Arc<CallShared>) -> *const c_void {
     record.cast()
 }
 
+unsafe fn describe_target(call: &CallShared, function: *mut *const AsyncFunctionPointer, regs: *mut *mut CallRegs, ret: *mut *mut RetRegs) {
+    *function = call.function;
+    *regs = call.regs.get();
+    *ret = call.ret.get();
+}
+
 #[no_mangle]
-extern "C" fn rs_take_call(rust: *mut c_void, closure: *mut *mut c_void, result: *mut *mut c_void, record: *mut *const c_void) -> i32 {
+extern "C" fn rs_take_call(
+    rust: *mut c_void,
+    function: *mut *const AsyncFunctionPointer,
+    regs: *mut *mut CallRegs,
+    ret: *mut *mut RetRegs,
+    record: *mut *const c_void,
+) -> i32 {
     let t = unsafe { &*(rust as *const task::Task) };
     let Some(call) = take_registered(t, true) else { return 0 };
     unsafe {
-        *closure = call.closure;
-        *result = call.result_ptr();
+        describe_target(&call, function, regs, ret);
         *record = Arc::into_raw(call).cast();
     }
     1
@@ -161,12 +239,8 @@ extern "C" fn rs_take_child(rust: *mut c_void, record: *mut *const c_void) -> i3
 }
 
 #[no_mangle]
-extern "C" fn rs_call_closure(record: *const c_void, closure: *mut *mut c_void, result: *mut *mut c_void) {
-    let call = unsafe { &*(record as *const CallShared) };
-    unsafe {
-        *closure = call.closure;
-        *result = call.result_ptr();
-    }
+extern "C" fn rs_call_target(record: *const c_void, function: *mut *const AsyncFunctionPointer, regs: *mut *mut CallRegs, ret: *mut *mut RetRegs) {
+    unsafe { describe_target(&*(record as *const CallShared), function, regs, ret) }
 }
 
 /// Stores the child Task (+1) and releases the reference hand_to_child added for this call.
@@ -177,15 +251,15 @@ extern "C" fn rs_set_child(record: *const c_void, child: *mut c_void) {
 }
 
 #[no_mangle]
-extern "C" fn rs_call_done(record: *const c_void, error: *mut c_void) {
+extern "C" fn rs_call_done(record: *const c_void) {
     let call = unsafe { Arc::from_raw(record as *const CallShared) };
     let mut state = call.state.lock().unwrap();
     if matches!(*state, CallState::Abandoned) {
         drop(state);
-        drop(call.take_value(error)); // nobody will read it
+        unsafe { (call.discard)(&call) }; // nobody will read it
         return;
     }
-    *state = CallState::Done(error);
+    *state = CallState::Done;
     drop(state);
     let waker = call.waker.lock().unwrap().take();
     if let Some(w) = waker {
@@ -193,43 +267,85 @@ extern "C" fn rs_call_done(record: *const c_void, error: *mut c_void) {
     }
 }
 
-/// An owned Swift async closure; awaiting it runs the closure in the current Swift Task.
-pub struct SwiftAsync {
+/// A Swift async call about to run, or running, in the current Swift Task. Awaiting yields its result.
+///
+/// Awaited on its own it runs in this Task, like Swift's `await f()`. Polled together with other calls
+/// (`join!`) or marked [`child`](Self::child) it runs as a child Task.
+pub struct SwiftCall<R> {
     shared: Arc<CallShared>,
+    /// A problem found while building the call; reported instead of running it.
+    invalid: Option<CallError>,
     registered: bool,
+    result: PhantomData<fn() -> R>,
 }
 
-impl SwiftAsync {
+/// A Swift `() async throws -> Any` closure handed over by the README's `asyncSwiftClosure` helper.
+pub type SwiftAsync = SwiftCall<SwiftAny>;
+
+impl<R: SwiftRet> SwiftCall<R> {
+    pub(crate) fn build(function: *const AsyncFunctionPointer, mut lowering: ArgLowering, unavailable: Option<CallError>) -> SwiftCall<R> {
+        let invalid = unavailable.or(lowering.error.take().map(CallError::InvalidArgument));
+        SwiftCall { shared: CallShared::new::<R>(function, lowering), invalid, registered: false, result: PhantomData }
+    }
+}
+
+impl<R> SwiftCall<R> {
+    fn configure(&mut self) -> &mut CallShared {
+        Arc::get_mut(&mut self.shared).expect("a Swift call is configured before it is first awaited")
+    }
+
+    /// Declares the callee `throws`: its error becomes `Err(CallError::Swift(_))`.
+    /// Leave it off for a non-throwing function, whose error register holds no meaningful value.
+    pub fn throws(mut self) -> Self {
+        self.configure().throws = true;
+        self
+    }
+
+    /// Calls a method: `object` is the callee's `self`.
+    pub fn on(mut self, object: &super::SwiftObject) -> Self {
+        let call = self.configure();
+        call.regs.get_mut().this = object.as_ptr();
+        call.owned.push(Owned::Object(unsafe { rt::swift_retain(object.as_ptr()) }));
+        self
+    }
+
+    /// Runs the call in a child Task (Swift's `async let`) instead of this Task, so other futures polled
+    /// alongside it (`select`, timeouts) keep running. Dropping the future then cancels the child.
+    pub fn child(mut self) -> Self {
+        self.configure().force_child = true;
+        self
+    }
+}
+
+impl SwiftCall<SwiftAny> {
     /// Takes ownership of an `AsyncSwiftClosure` box (+1), as returned by the README recipe.
     ///
     /// # Safety
     /// `closure_box` must be an owned `AsyncSwiftClosure` instance.
     pub unsafe fn from_raw(closure_box: *mut c_void) -> SwiftAsync {
-        Self::with_mode(closure_box, false)
-    }
-
-    /// Runs the closure in a child Task (Swift's `async let`) instead of this Task, so other futures polled
-    /// alongside it (`select`, timeouts) keep running. Dropping the future then cancels the child.
-    pub fn child(mut self) -> SwiftAsync {
-        Arc::get_mut(&mut self.shared).expect("child() must be called before the call is awaited").force_child = true;
-        self
-    }
-
-    fn with_mode(closure_box: *mut c_void, force_child: bool) -> SwiftAsync {
-        SwiftAsync { registered: false, shared: Arc::new(CallShared::new(closure_box, force_child)) }
+        // `final class AsyncSwiftClosure { let body: () async throws -> Any }`: HeapObject (16 bytes), then the
+        // thick function: function word → AsyncFunctionPointer, context word (passed as the callee's self).
+        let function = *(closure_box.byte_add(16) as *const *const AsyncFunctionPointer);
+        let mut lowering = ArgLowering::new(true);
+        lowering.regs.this = *(closure_box.byte_add(24) as *const *mut c_void);
+        lowering.owned.push(Owned::Object(closure_box));
+        SwiftCall::build(function, lowering, None).throws()
     }
 }
 
-impl Future for SwiftAsync {
-    type Output = Result<SwiftAny, CallError>;
+impl<R: SwiftRet> Future for SwiftCall<R> {
+    type Output = Result<R, CallError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if let Some(error) = self.invalid.take() {
+            return Poll::Ready(Err(error));
+        }
         {
             let mut state = self.shared.state.lock().unwrap();
-            if let CallState::Done(error) = *state {
+            if matches!(*state, CallState::Done) {
                 *state = CallState::Taken;
                 drop(state);
-                return Poll::Ready(self.shared.take_value(error));
+                return Poll::Ready(unsafe { self.shared.take_result::<R>() });
             }
         }
         *self.shared.waker.lock().unwrap() = Some(cx.waker().clone());
@@ -243,7 +359,7 @@ impl Future for SwiftAsync {
     }
 }
 
-impl Drop for SwiftAsync {
+impl<R> Drop for SwiftCall<R> {
     fn drop(&mut self) {
         let mut state = self.shared.state.lock().unwrap();
         match *state {
@@ -255,10 +371,10 @@ impl Drop for SwiftAsync {
                 }
             }
             CallState::Registered => *state = CallState::Abandoned,
-            CallState::Done(error) => {
+            CallState::Done => {
                 *state = CallState::Taken;
                 drop(state);
-                drop(self.shared.take_value(error));
+                unsafe { (self.shared.discard)(&self.shared) };
             }
             CallState::Taken | CallState::Abandoned => {}
         }
@@ -267,7 +383,7 @@ impl Drop for SwiftAsync {
 
 /// Awaits `call` for at most `duration`. The call runs as a child Task; on timeout it is cancelled and `None`
 /// is returned.
-pub async fn timeout(duration: std::time::Duration, call: SwiftAsync) -> Option<Result<SwiftAny, CallError>> {
+pub async fn timeout<R: SwiftRet>(duration: std::time::Duration, call: SwiftCall<R>) -> Option<Result<R, CallError>> {
     let mut call = std::pin::pin!(call.child());
     let mut deadline = std::pin::pin!(super::sleep(duration));
     std::future::poll_fn(|cx| {
@@ -284,8 +400,13 @@ mod tests {
     use super::*;
 
     fn registered(force_child: bool) -> Arc<CallShared> {
-        // A null closure: CallShared::drop's swift_release(NULL) is a no-op.
-        Arc::new(CallShared::new(std::ptr::null_mut(), force_child))
+        let mut call = SwiftCall::<()>::build(std::ptr::null(), ArgLowering::new(false), None);
+        call.configure().force_child = force_child;
+        call.shared.clone() // the SwiftCall is dropped: the record is Abandoned…
+    }
+
+    fn revive(call: &CallShared) {
+        *call.state.lock().unwrap() = CallState::Registered; // …so tests put it back
     }
 
     /// spawn_child calls rs_set_child after creating the child, and the child may already have finished
@@ -293,10 +414,11 @@ mod tests {
     #[test]
     fn child_record_outlives_early_completion() {
         let call = registered(true);
+        revive(&call);
         let calls = Mutex::new(vec![call.clone()]);
         let taken = take_registered_from(&calls, false, false).expect("a registered call");
         let record = hand_to_child(taken);
-        rs_call_done(record, std::ptr::null_mut()); // the child finished first
+        rs_call_done(record); // the child finished first
         assert!(Arc::strong_count(&call) >= 2, "only the test's reference is left: rs_set_child would read freed memory");
         drop(call); // the awaiting future is gone too
         rs_set_child(record, std::ptr::null_mut()); // must be the last user of the record
@@ -307,7 +429,6 @@ mod tests {
     fn abandoned_call_is_not_taken() {
         let call = registered(false);
         let calls = Mutex::new(vec![call.clone()]);
-        *call.state.lock().unwrap() = CallState::Abandoned;
         assert!(take_registered_from(&calls, false, false).is_none());
     }
 }

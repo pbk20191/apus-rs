@@ -3,7 +3,7 @@
 // only what needs swiftasynccall / swift_context lives here.
 //
 // Tail calls (checked with objdump -d on arm64): the task completion call, swift_continuation_await,
-// swift_task_switch, swift_taskGroup_waitAll and the closure call are emitted as `b`/`br`, never `bl`.
+// swift_task_switch, swift_taskGroup_waitAll and the generic Swift call are emitted as `b`/`br`, never `bl`.
 #include "swift_abi.h"
 
 // Continuation functions are cast between their (context) and (context, error) shapes, as the runtime itself
@@ -39,11 +39,11 @@ int  rs_park(void *rust, void *continuation);                                   
 void rs_finish(void *rust);
 void rs_cancelled(void *rust);
 bool rs_is_main(void *rust);
-int  rs_take_call(void *rust, ClosureBox **box, void **result, void **record);  // 1 = run it in this Task
+int  rs_take_call(void *rust, const AsyncFunctionPointer **fn, CallRegs **regs, RetRegs **ret, void **record);  // 1 = run it in this Task
 int  rs_take_child(void *rust, void **record);                                  // 1 = run it as a child Task
-void rs_call_closure(void *record, ClosureBox **box, void **result);
+void rs_call_target(void *record, const AsyncFunctionPointer **fn, CallRegs **regs, RetRegs **ret);
 void rs_set_child(void *record, void *child_task);                              // +1 child task
-void rs_call_done(void *record, void *error);                                   // error: owned `any Error` or NULL
+void rs_call_done(void *record);                                                // results are in the call's RetRegs
 
 // Flags (include/swift/ABI/MetadataValues.h).
 enum {
@@ -88,29 +88,41 @@ static SWIFTASYNCCALL void after_wait_all(ACTX AsyncContext *ctx, SCTX void *err
   return finish(ctx);
 }
 
-static AnyClosureFn *closure_code(const ClosureBox *box) {
-  const AsyncFunctionPointer *afp = box->fn;
-  return (AnyClosureFn *)((const char *)&afp->function + afp->function);
+static GenericAsyncFn *code_of(const AsyncFunctionPointer *fn) {
+  return (GenericAsyncFn *)((const char *)&fn->function + fn->function);
 }
 
-// A same-Task call returns here: ResumeParent(callee context, error).
-static SWIFTASYNCCALL void after_call(ACTX AsyncContext *callee, SCTX void *error) {
+static void store_results(RetRegs *ret, uint64_t r0, uint64_t r1, uint64_t r2, uint64_t r3,
+                          double f0, double f1, double f2, double f3, void *error) {
+  ret->gpr[0] = r0; ret->gpr[1] = r1; ret->gpr[2] = r2; ret->gpr[3] = r3;
+  ret->fpr[0] = f0; ret->fpr[1] = f1; ret->fpr[2] = f2; ret->fpr[3] = f3;
+  ret->error = error;
+}
+
+// A same-Task call returns here: ResumeParent(direct results..., callee context, error).
+static SWIFTASYNCCALL void after_call(uint64_t r0, uint64_t r1, uint64_t r2, uint64_t r3,
+                                      double f0, double f1, double f2, double f3,
+                                      ACTX AsyncContext *callee, SCTX void *error) {
   AsyncContext *ctx = callee->parent;
   swift_task_dealloc(callee);
   RsTaskContext *c = (RsTaskContext *)ctx;
+  store_results(c->call_ret, r0, r1, r2, r3, f0, f1, f2, f3, error);
   void *record = c->current_call;
   c->current_call = NULL;
-  rs_call_done(record, error);
+  rs_call_done(record);
   // The callee is nonisolated and may have resumed anywhere: hop back, as compiled Swift does.
   if (c->executor.identity) return swift_task_switch(ctx, step, c->executor);
   return step(ctx);
 }
 
 // ---- child Tasks: a discarding TaskGroup, like `async let` / `withDiscardingTaskGroup` ----
-static SWIFTASYNCCALL void child_after(ACTX AsyncContext *callee, SCTX void *error) {
+static SWIFTASYNCCALL void child_after(uint64_t r0, uint64_t r1, uint64_t r2, uint64_t r3,
+                                       double f0, double f1, double f2, double f3,
+                                       ACTX AsyncContext *callee, SCTX void *error) {
   ChildContext *k = (ChildContext *)callee->parent;
   swift_task_dealloc(callee);
-  rs_call_done(k->record, error);
+  store_results(k->ret, r0, r1, r2, r3, f0, f1, f2, f3, error);
+  rs_call_done(k->record);
   return ((CompleteFn *)k->base.resume_parent)(&k->base, NULL);
 }
 
@@ -118,13 +130,15 @@ static SWIFTASYNCCALL void child_after(ACTX AsyncContext *callee, SCTX void *err
 static SWIFTASYNCCALL void child_entry(ACTX AsyncContext *ctx, SCTX void *record) {
   ChildContext *k = (ChildContext *)ctx;
   k->record = record;
-  ClosureBox *box;
-  void *result;
-  rs_call_closure(record, &box, &result);
-  AsyncContext *callee = swift_task_alloc(box->fn->expected_context_size);
+  const AsyncFunctionPointer *fn;
+  CallRegs *regs;
+  RetRegs *ret;
+  rs_call_target(record, &fn, &regs, &ret);
+  k->ret = ret;
+  AsyncContext *callee = swift_task_alloc(fn->expected_context_size);
   callee->parent = ctx;
   callee->resume_parent = (TaskContinuationFunction *)child_after;
-  return closure_code(box)(result, callee, box->context);
+  return CALL_GENERIC(code_of(fn), regs, callee);
 }
 
 static void spawn_child(RsTaskContext *c, void *record) {
@@ -147,15 +161,17 @@ static SWIFTASYNCCALL void step(ACTX AsyncContext *ctx) {
       return swift_taskGroup_waitAll(&c->unused_result, ctx, c->group, NULL, after_wait_all, &c->wait.base);
     return finish(ctx);
   }
-  ClosureBox *box;
-  void *result;
+  const AsyncFunctionPointer *fn;
+  CallRegs *regs;
+  RetRegs *ret;
   void *record;
-  if (rs_take_call(c->rust, &box, &result, &record)) {
-    AsyncContext *callee = swift_task_alloc(box->fn->expected_context_size);
+  if (rs_take_call(c->rust, &fn, &regs, &ret, &record)) {
+    AsyncContext *callee = swift_task_alloc(fn->expected_context_size);
     callee->parent = ctx;
     callee->resume_parent = (TaskContinuationFunction *)after_call;
     c->current_call = record;
-    return closure_code(box)(result, callee, box->context);
+    c->call_ret = ret;
+    return CALL_GENERIC(code_of(fn), regs, callee);
   }
   while (rs_take_child(c->rust, &record)) spawn_child(c, record);
   ContinuationAsyncContext *k = &c->cont;
