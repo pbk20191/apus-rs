@@ -31,3 +31,13 @@ pub fn swift_child_priority() -> u8 {
     unsafe { probe_spawn_swift_task(Box::into_raw(Box::new(tx)).cast(), done) };
     rx.recv_timeout(std::time::Duration::from_secs(2)).expect("Swift Task {} never ran")
 }
+
+extern "C" {
+    pub fn probe_closure_identity() -> *mut c_void;
+    pub fn probe_closure_sleep(ms: isize) -> *mut c_void;
+    pub fn probe_closure_throw_eio() -> *mut c_void;
+    pub fn probe_closure_void() -> *mut c_void;
+    pub fn probe_closure_read_local() -> *mut c_void;
+    pub fn probe_closure_block_ms(ms: isize) -> *mut c_void;
+    pub fn probe_closure_deinit_flag(flag: *mut bool) -> *mut c_void;
+}

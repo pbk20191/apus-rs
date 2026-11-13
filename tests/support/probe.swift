@@ -68,3 +68,9 @@ final class DeinitFlag { let flag: UnsafeMutablePointer<Bool>; init(_ f: UnsafeM
 @_cdecl("probe_any_void") public func probeAnyVoid(_ out: UnsafeMutableRawPointer) { out.initializeMemory(as: Any.self, repeating: (), count: 1) }
 @_cdecl("probe_any_object") public func probeAnyObject(_ out: UnsafeMutableRawPointer, _ flag: UnsafeMutablePointer<Bool>) { out.initializeMemory(as: Any.self, repeating: DeinitFlag(flag), count: 1) }
 @_cdecl("probe_make_error") public func probeMakeError(_ out: UnsafeMutableRawPointer) { out.initializeMemory(as: Error.self, repeating: ProbeError.io(code: EIO), count: 1) }
+
+// ---- Task 8 ----
+@_cdecl("probe_closure_deinit_flag") public func probeClosureDeinitFlag(_ flag: UnsafeMutablePointer<Bool>) -> UnsafeMutableRawPointer {
+    let captured = DeinitFlag(flag)
+    return asyncSwiftClosure { _ = captured; return () }
+}

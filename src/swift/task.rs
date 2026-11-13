@@ -34,11 +34,18 @@ pub(crate) struct Task {
     pub(crate) cancelled: AtomicBool,
     pub(crate) cancel_wakers: Mutex<Vec<Waker>>,
     on_finish: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Swift calls registered by the current poll, not started yet (call.rs).
+    pub(crate) calls: Mutex<Vec<Arc<super::call::CallShared>>>,
 }
 
 thread_local! {
     /// The task being polled on this thread (for current-task APIs that need our state, not just the runtime's).
     static CURRENT: Cell<*const Task> = const { Cell::new(std::ptr::null()) };
+}
+
+/// Whether a wake arrived while the current poll was running.
+pub(crate) fn notified(t: &Task) -> bool {
+    t.state.load(SeqCst) == NOTIFIED
 }
 
 /// The task being polled on this thread, if any.
@@ -146,6 +153,7 @@ pub(crate) fn create(options: SpawnOptions, future: BoxFuture, on_finish: Box<dy
         cancelled: AtomicBool::new(false),
         cancel_wakers: Mutex::new(Vec::new()),
         on_finish: Mutex::new(Some(on_finish)),
+        calls: Mutex::new(Vec::new()),
     });
     let mut flags = options.priority.raw() as usize | rt::CREATE_ENQUEUE_JOB | rt::CREATE_IS_TASK_FUNCTION_CONSUMED;
     if options.copy_task_locals {
@@ -197,26 +205,4 @@ where
     });
     let task = create(options, future, on_finish);
     JoinHandle { state, task, abort }
-}
-
-// Swift async calls arrive in Task 8; until then a task never has one.
-#[no_mangle]
-extern "C" fn rs_take_call(_rust: *mut c_void, _box: *mut *mut c_void, _result: *mut *mut c_void, _rec: *mut *mut c_void) -> i32 {
-    0
-}
-#[no_mangle]
-extern "C" fn rs_take_child(_rust: *mut c_void, _rec: *mut *mut c_void) -> i32 {
-    0
-}
-#[no_mangle]
-extern "C" fn rs_call_closure(_rec: *mut c_void, _box: *mut *mut c_void, _result: *mut *mut c_void) {
-    unreachable!("no Swift calls before Task 8")
-}
-#[no_mangle]
-extern "C" fn rs_set_child(_rec: *mut c_void, _child: *mut c_void) {
-    unreachable!("no Swift calls before Task 8")
-}
-#[no_mangle]
-extern "C" fn rs_call_done(_rec: *mut c_void, _error: *mut c_void) {
-    unreachable!("no Swift calls before Task 8")
 }

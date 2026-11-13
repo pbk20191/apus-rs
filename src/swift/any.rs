@@ -41,6 +41,12 @@ impl SwiftAny {
     }
 }
 
+impl std::fmt::Debug for SwiftAny {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SwiftAny({})", self.type_name())
+    }
+}
+
 impl Drop for SwiftAny {
     fn drop(&mut self) {
         let any = rt::any_metadata();

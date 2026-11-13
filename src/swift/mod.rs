@@ -1,6 +1,7 @@
 //! Swift Concurrency backend: every spawned future is a genuine Swift Task.
 
 mod any;
+pub(crate) mod call;
 mod current;
 mod join;
 pub(crate) mod rt;
@@ -9,6 +10,7 @@ mod task;
 mod timer;
 
 pub use any::{FromSwiftAny, SwiftAny, SwiftError};
+pub use call::{CallError, SwiftAsync};
 pub use current::{cancelled, current_task, is_cancelled, priority, Cancelled, TaskRef};
 pub use join::{JoinHandle, MainOnlyHandle};
 pub use timer::{sleep, Sleep};
