@@ -9,15 +9,10 @@ use std::task::{Context, Poll, Wake, Waker};
 
 pub use libtest_mimic::{Failed, Trial};
 
-#[link(name = "CoreFoundation", kind = "framework")]
-extern "C" {
-    fn CFRunLoopRun();
-}
-
 pub fn run(tests: Vec<Trial>) -> ! {
     let args = libtest_mimic::Arguments::from_args();
     std::thread::spawn(move || std::process::exit(if libtest_mimic::run(&args, tests).has_failed() { 101 } else { 0 }));
-    unsafe { CFRunLoopRun() };
+    objc2_core_foundation::CFRunLoop::run();
     unreachable!("main run loop returned")
 }
 

@@ -16,7 +16,7 @@ async-swift-rs = { path = "…", default-features = false, features = ["dispatch
 | Feature | Backend |
 |---|---|
 | `swift` (default) | `async_swift_rs::swift`: tasks are Swift Tasks on the cooperative pool / MainActor |
-| `dispatch` | `async_swift_rs::dispatch`: `async-task` runnables on GCD queues (QoS, main queue, serial queues) |
+| `dispatch` | `async_swift_rs::dispatch`: `async-task` runnables on GCD queues via [`dispatch2`](https://crates.io/crates/dispatch2) (QoS, main queue, serial queues) |
 | `test-probe` | test-only Swift probes (needs `swiftc`) |
 
 ## API
@@ -50,7 +50,8 @@ Dispatch backend only: `SerialQueue`, `block_on` (not on the main thread).
 
 ## The main run loop
 
-Main tasks run when the main queue is drained by `CFRunLoopRun`/`NSApplication.run` (or `run_main`).
+Main tasks run when the main queue is drained by `CFRunLoopRun`/`NSApplication.run` (or `run_main`, which drives
+the main run loop through `objc2-core-foundation`).
 **Do not use `dispatch_main()`**: it drains the main queue on a worker thread, so MainActor code runs off the
 main thread.
 

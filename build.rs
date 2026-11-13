@@ -18,7 +18,6 @@ fn main() {
         .compile("async_swift_funclets");
     println!("cargo:rustc-link-search=native=/usr/lib/swift");
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
-    println!("cargo:rustc-link-lib=framework=CoreFoundation");
 
     if env::var_os("CARGO_FEATURE_TEST_PROBE").is_some() {
         let out = PathBuf::from(env::var("OUT_DIR").unwrap());

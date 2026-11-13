@@ -1,10 +1,9 @@
-//! libdispatch backend: futures run as `async-task` runnables scheduled with `dispatch_async_f`.
+//! libdispatch backend: futures run as `async-task` runnables scheduled on GCD queues (via `dispatch2`).
 //!
 //! The runnable/trampoline structure follows `dgrijalva/async-dispatch` (Apache-2.0), which in turn follows
 //! the dispatcher in Zed's gpui crate.
 
 mod block_on;
-mod ffi;
 mod queue;
 
 pub use block_on::block_on;
@@ -13,7 +12,7 @@ pub use queue::SerialQueue;
 use crate::common::{guard, AbortState, TimerSlot};
 use crate::{JoinError, Priority, SpawnOptions};
 use async_task::Runnable;
-use ffi::*;
+use dispatch2::{DispatchQoS, DispatchQueue, DispatchRetained, DispatchTime, GlobalQueueIdentifier};
 use std::ffi::c_void;
 use std::future::Future;
 use std::pin::Pin;
@@ -21,19 +20,15 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-#[derive(Clone, Copy)]
-pub(crate) struct Queue(DispatchQueue);
-unsafe impl Send for Queue {}
-unsafe impl Sync for Queue {}
+pub use crate::common::Sleep;
 
-impl Queue {
-    fn raw(self) -> DispatchQueue {
-        self.0
-    }
+extern "C" {
+    /// <pthread/qos.h>; bound by neither dispatch2 nor libc.
+    fn qos_class_self() -> u32;
 }
 
 /// `Unspecified` inherits the calling thread's QoS, like an unprioritized Swift `Task {}`.
-fn global_queue(priority: Priority) -> Queue {
+fn global_queue(priority: Priority) -> DispatchRetained<DispatchQueue> {
     let qos = match priority {
         Priority::Unspecified => match Priority::from_raw(unsafe { qos_class_self() } as u8) {
             Priority::Unspecified => Priority::Default,
@@ -41,11 +36,7 @@ fn global_queue(priority: Priority) -> Queue {
         },
         p => p,
     };
-    Queue(unsafe { dispatch_get_global_queue(qos.raw() as isize, 0) })
-}
-
-fn main_queue() -> Queue {
-    Queue(std::ptr::addr_of!(_dispatch_main_q) as DispatchQueue)
+    DispatchQueue::global_queue(GlobalQueueIdentifier::QualityOfService(DispatchQoS(qos.raw().into())))
 }
 
 thread_local! {
@@ -65,6 +56,26 @@ extern "C" fn run_main_runnable(runnable: *mut c_void) {
     let previous = IN_MAIN_TASK.replace(true);
     run_runnable(runnable);
     IN_MAIN_TASK.set(previous);
+}
+
+/// Where a task runs. Holding the queue keeps a serial queue alive while it has tasks.
+#[derive(Clone)]
+pub(crate) enum Target {
+    Main,
+    Queue(DispatchRetained<DispatchQueue>),
+}
+
+/// Schedules runnables with `dispatch_async_f` (no allocation per wake, unlike the closure API).
+fn scheduler(target: Target) -> impl Fn(Runnable) + Send + Sync + 'static {
+    move |runnable: Runnable| {
+        let work = runnable.into_raw().as_ptr().cast();
+        unsafe {
+            match &target {
+                Target::Main => DispatchQueue::main().exec_async_f(work, run_main_runnable),
+                Target::Queue(queue) => queue.exec_async_f(work, run_runnable),
+            }
+        }
+    }
 }
 
 /// Handle to a spawned task. Awaiting yields its output; dropping it detaches the task.
@@ -96,23 +107,13 @@ impl<T> Drop for JoinHandle<T> {
     }
 }
 
-/// Schedules a runnable on `queue`; `keep_alive` is held by the schedule closure (serial queues).
-fn scheduler<K: Send + Sync + 'static>(queue: Queue, keep_alive: K) -> impl Fn(Runnable) + Send + Sync + 'static {
-    let trampoline: DispatchFunction = if queue.raw() == main_queue().raw() { run_main_runnable } else { run_runnable };
-    move |runnable: Runnable| {
-        let _ = &keep_alive;
-        unsafe { dispatch_async_f(queue.raw(), runnable.into_raw().as_ptr().cast(), trampoline) }
-    }
-}
-
-pub(crate) fn spawn_on<F, K>(queue: Queue, keep_alive: K, future: F) -> JoinHandle<F::Output>
+pub(crate) fn spawn_on<F>(target: Target, future: F) -> JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
-    K: Send + Sync + 'static,
 {
     let (guarded, abort) = guard(future);
-    let (runnable, task) = async_task::spawn(guarded, scheduler(queue, keep_alive));
+    let (runnable, task) = async_task::spawn(guarded, scheduler(target));
     runnable.schedule();
     JoinHandle { task: Some(task), abort }
 }
@@ -123,7 +124,7 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    spawn_on(main_queue(), (), future)
+    spawn_on(Target::Main, future)
 }
 
 /// Like [`spawn_on_main`] for `!Send` futures. Panics off the main thread.
@@ -134,7 +135,7 @@ where
 {
     assert!(crate::is_main_thread(), "spawn_local_on_main must be called on the main thread");
     let (guarded, abort) = guard(future);
-    let (runnable, task) = async_task::spawn_local(guarded, scheduler(main_queue(), ()));
+    let (runnable, task) = async_task::spawn_local(guarded, scheduler(Target::Main));
     runnable.schedule();
     JoinHandle { task: Some(task), abort }
 }
@@ -145,7 +146,7 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    spawn_on(global_queue(Priority::Default), (), future)
+    spawn_on(Target::Queue(global_queue(Priority::Default)), future)
 }
 
 /// Spawns `future` with default options.
@@ -167,23 +168,15 @@ where
     if options.main || IN_MAIN_TASK.get() {
         return spawn_on_main(future);
     }
-    spawn_on(global_queue(options.priority), (), future)
+    spawn_on(Target::Queue(global_queue(options.priority)), future)
 }
 
-/// Completes after `duration`, using `dispatch_after_f`.
+/// Completes after `duration`, using `dispatch_after`.
 pub fn sleep(duration: Duration) -> Sleep {
     Sleep::new(duration, arm_timer)
 }
 
-pub use crate::common::Sleep;
-
-extern "C" fn fire_slot(slot: *mut c_void) {
-    unsafe { Arc::from_raw(slot as *const TimerSlot) }.fire();
-}
-
 fn arm_timer(delay: Duration, slot: Arc<TimerSlot>) {
-    unsafe {
-        let when = dispatch_time(DISPATCH_TIME_NOW, delay.as_nanos() as i64);
-        dispatch_after_f(when, global_queue(Priority::Default).raw(), Arc::into_raw(slot) as *mut c_void, fire_slot);
-    }
+    let when = DispatchTime::try_from(delay).unwrap_or(DispatchTime::FOREVER);
+    global_queue(Priority::Default).after(when, move || slot.fire()).expect("dispatch_after time overflow");
 }

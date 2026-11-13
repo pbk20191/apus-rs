@@ -1,34 +1,21 @@
 //! Main-thread helpers. The main queue is drained by the main run loop (`CFRunLoopRun*`), never `dispatch_main`.
 
-use std::ffi::c_void;
+use dispatch2::DispatchQueue;
+use objc2_core_foundation::{kCFRunLoopDefaultMode, CFRunLoop};
 use std::future::Future;
 use std::pin::pin;
 use std::task::{Context, Poll, Waker};
-
-#[link(name = "CoreFoundation", kind = "framework")]
-extern "C" {
-    static kCFRunLoopDefaultMode: *const c_void;
-    fn CFRunLoopRunInMode(mode: *const c_void, seconds: f64, return_after_source_handled: u8) -> i32;
-}
-
-extern "C" {
-    fn pthread_main_np() -> i32;
-    static _dispatch_main_q: u8;
-    fn dispatch_async_f(queue: *mut c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
-}
-
-extern "C" fn nothing(_: *mut c_void) {}
 
 struct MainQueueNudge;
 
 impl std::task::Wake for MainQueueNudge {
     fn wake(self: std::sync::Arc<Self>) {
-        unsafe { dispatch_async_f(std::ptr::addr_of!(_dispatch_main_q) as *mut c_void, std::ptr::null_mut(), nothing) }
+        DispatchQueue::main().exec_async(|| {});
     }
 }
 
 pub fn is_main_thread() -> bool {
-    unsafe { pthread_main_np() == 1 }
+    unsafe { libc::pthread_main_np() == 1 }
 }
 
 /// Runs `future` as a main-thread task (a MainActor Swift Task when the `swift` feature is on), driving the
@@ -54,7 +41,7 @@ where
                 Err(crate::JoinError::Aborted) => unreachable!("run_main task cannot be aborted"),
             };
         }
-        unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1e10, 1) };
+        CFRunLoop::run_in_mode(unsafe { kCFRunLoopDefaultMode }, 1e10, true);
     }
 }
 
