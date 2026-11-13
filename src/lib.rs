@@ -7,6 +7,10 @@ mod common;
 #[cfg(feature = "dispatch")]
 pub mod dispatch;
 mod runloop;
+#[cfg(feature = "swift")]
+pub mod swift;
 
 pub use common::{JoinError, Priority, SpawnOptions};
-pub use runloop::{is_main_thread, run_main};
+pub use runloop::is_main_thread;
+#[cfg(feature = "dispatch")]
+pub use runloop::run_main;

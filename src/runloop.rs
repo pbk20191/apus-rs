@@ -1,5 +1,7 @@
 //! Main-thread helpers. The main queue is drained by the main run loop (`CFRunLoopRun*`), never `dispatch_main`.
 
+#![cfg_attr(not(feature = "dispatch"), allow(unused_imports, dead_code))]
+
 use std::ffi::c_void;
 use std::future::Future;
 use std::pin::pin;
@@ -20,6 +22,7 @@ pub fn is_main_thread() -> bool {
 }
 
 /// Runs `future` as a main-thread task, driving the main run loop until it completes.
+#[cfg(feature = "dispatch")]
 ///
 /// Panics when called off the main thread. A panic inside `future` is resumed here.
 pub fn run_main<F>(future: F) -> F::Output

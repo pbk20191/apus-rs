@@ -2,6 +2,12 @@
 
 use std::any::Any;
 use std::fmt;
+use std::future::Future;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
 
 /// Task priority. Raw values are QoS classes, which Swift's `JobPriority` also uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -78,4 +84,58 @@ impl Default for SpawnOptions {
     fn default() -> Self {
         SpawnOptions { priority: Priority::Unspecified, main: false, copy_task_locals: true }
     }
+}
+
+/// Shared between a `JoinHandle` and its task: the abort request and the waker that notices it.
+pub(crate) struct AbortState {
+    requested: AtomicBool,
+    waker: Mutex<Option<Waker>>,
+}
+
+/// Wraps the user future: catches panics and stops at the next poll after `abort`.
+pub(crate) struct Guarded<F> {
+    future: Option<F>,
+    abort: Arc<AbortState>,
+}
+
+impl<F: Future> Future for Guarded<F> {
+    type Output = Result<F::Output, JoinError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = unsafe { self.get_unchecked_mut() };
+        if this.abort.requested.load(Ordering::SeqCst) {
+            this.future = None;
+            return Poll::Ready(Err(JoinError::Aborted));
+        }
+        *this.abort.waker.lock().unwrap() = Some(cx.waker().clone());
+        let Some(future) = this.future.as_mut() else { return Poll::Ready(Err(JoinError::Aborted)) };
+        let future = unsafe { Pin::new_unchecked(future) };
+        match catch_unwind(AssertUnwindSafe(|| future.poll(cx))) {
+            Ok(Poll::Pending) => Poll::Pending,
+            Ok(Poll::Ready(v)) => {
+                this.future = None;
+                Poll::Ready(Ok(v))
+            }
+            Err(payload) => {
+                this.future = None;
+                Poll::Ready(Err(JoinError::Panicked(payload)))
+            }
+        }
+    }
+}
+
+impl AbortState {
+    /// Asks the task to stop at its next poll and wakes it so that poll happens.
+    #[cfg_attr(not(feature = "dispatch"), allow(dead_code))]
+    pub(crate) fn request(&self) {
+        self.requested.store(true, Ordering::SeqCst);
+        if let Some(w) = self.waker.lock().unwrap().take() {
+            w.wake();
+        }
+    }
+}
+
+pub(crate) fn guard<F>(future: F) -> (Guarded<F>, Arc<AbortState>) {
+    let abort = Arc::new(AbortState { requested: AtomicBool::new(false), waker: Mutex::new(None) });
+    (Guarded { future: Some(future), abort: abort.clone() }, abort)
 }

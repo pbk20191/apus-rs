@@ -10,15 +10,14 @@ mod queue;
 pub use block_on::block_on;
 pub use queue::SerialQueue;
 
+use crate::common::{guard, AbortState};
 use crate::{JoinError, Priority, SpawnOptions};
 use async_task::Runnable;
 use ffi::*;
 use std::ffi::c_void;
 use std::future::Future;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
@@ -64,44 +63,6 @@ extern "C" fn run_main_runnable(runnable: *mut c_void) {
     IN_MAIN_TASK.set(previous);
 }
 
-/// Shared between a `JoinHandle` and its task: the abort request and the waker that notices it.
-struct AbortState {
-    requested: AtomicBool,
-    waker: Mutex<Option<Waker>>,
-}
-
-/// Wraps the user future: catches panics and stops at the next poll after `abort`.
-struct Guarded<F> {
-    future: Option<F>,
-    abort: Arc<AbortState>,
-}
-
-impl<F: Future> Future for Guarded<F> {
-    type Output = Result<F::Output, JoinError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = unsafe { self.get_unchecked_mut() };
-        if this.abort.requested.load(Ordering::SeqCst) {
-            this.future = None;
-            return Poll::Ready(Err(JoinError::Aborted));
-        }
-        *this.abort.waker.lock().unwrap() = Some(cx.waker().clone());
-        let Some(future) = this.future.as_mut() else { return Poll::Ready(Err(JoinError::Aborted)) };
-        let future = unsafe { Pin::new_unchecked(future) };
-        match catch_unwind(AssertUnwindSafe(|| future.poll(cx))) {
-            Ok(Poll::Pending) => Poll::Pending,
-            Ok(Poll::Ready(v)) => {
-                this.future = None;
-                Poll::Ready(Ok(v))
-            }
-            Err(payload) => {
-                this.future = None;
-                Poll::Ready(Err(JoinError::Panicked(payload)))
-            }
-        }
-    }
-}
-
 /// Handle to a spawned task. Awaiting yields its output; dropping it detaches the task.
 pub struct JoinHandle<T> {
     task: Option<async_task::Task<Result<T, JoinError>>>,
@@ -111,10 +72,7 @@ pub struct JoinHandle<T> {
 impl<T> JoinHandle<T> {
     /// Stops the task at its next poll; awaiting the handle then yields `Err(JoinError::Aborted)`.
     pub fn abort(&self) {
-        self.abort.requested.store(true, Ordering::SeqCst);
-        if let Some(w) = self.abort.waker.lock().unwrap().take() {
-            w.wake();
-        }
+        self.abort.request();
     }
 }
 
@@ -132,11 +90,6 @@ impl<T> Drop for JoinHandle<T> {
             task.detach();
         }
     }
-}
-
-fn guard<F>(future: F) -> (Guarded<F>, Arc<AbortState>) {
-    let abort = Arc::new(AbortState { requested: AtomicBool::new(false), waker: Mutex::new(None) });
-    (Guarded { future: Some(future), abort: abort.clone() }, abort)
 }
 
 /// Schedules a runnable on `queue`; `keep_alive` is held by the schedule closure (serial queues).

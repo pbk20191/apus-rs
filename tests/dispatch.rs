@@ -1,3 +1,4 @@
+#[path = "common/mod.rs"]
 mod common;
 
 use async_swift_rs::dispatch::{block_on, sleep, spawn, spawn_detached, spawn_on_main, spawn_with, SerialQueue};

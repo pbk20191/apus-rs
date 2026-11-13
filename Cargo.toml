@@ -35,3 +35,13 @@ required-features = ["dispatch"]
 name = "dispatch_run_main"
 harness = false
 required-features = ["dispatch"]
+
+[[test]]
+name = "swift_task"
+harness = false
+required-features = ["test-probe"]
+
+[[test]]
+name = "abi_equivalence"
+harness = false
+required-features = ["swift"]

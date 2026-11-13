@@ -1,0 +1,11 @@
+# Swift-CC runtime functions that src/swift/rt.rs calls as extern "C".
+# name | C return type | C parameters | call arguments   (checked by tests/abi_equivalence.rs)
+swift_task_create_common | AsyncTaskAndContext | size_t a, void *b, const void *c, const void *d, void *e, size_t f | a, b, c, d, e, f
+swift_task_getMainExecutor | SerialExecutorRef | | 
+swift_continuation_resume | void | void *t | t
+swift_task_cancel | void | void *t | t
+swift_task_getCurrent | void * | | 
+swift_task_isCancelled | _Bool | void *t | t
+swift_task_currentPriority | size_t | void *t | t
+swift_task_escalate | size_t | void *t, size_t p | t, p
+swift_getTupleTypeMetadata | MetadataResponse | size_t r, size_t f, const void *const *e, const char *l, const void *w | r, f, e, l, w
