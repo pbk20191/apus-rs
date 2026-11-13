@@ -73,3 +73,8 @@ required-features = ["swift"]
 name = "swift_main_children"
 harness = false
 required-features = ["test-probe"]
+
+[[test]]
+name = "swift_selfcheck_in_task"
+harness = false
+required-features = ["test-probe"]

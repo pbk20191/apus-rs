@@ -1,5 +1,9 @@
 //! One-time check, before the first spawn, that the Swift runtime matches the ABI this crate was written
 //! against. A mismatch must fail loudly, never corrupt memory quietly.
+//!
+//! The structural checks run inline. The probe Task is verified by a watchdog thread instead of the caller:
+//! the first spawn may run on a cooperative-pool thread (inside a Swift Task), and blocking it while the probe
+//! needs a pool thread could starve the pool.
 
 use super::{rt, task};
 use crate::SpawnOptions;
@@ -13,16 +17,19 @@ extern "C" {
 }
 const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
 
+const FAILED: &str = "async-swift-rs: Swift runtime ABI self-check failed";
+
 pub(crate) fn ensure() {
     static CHECK: Once = Once::new();
     CHECK.call_once(|| {
-        if let Err(detail) = run() {
-            panic!("async-swift-rs: Swift runtime ABI self-check failed: {detail}");
+        if let Err(detail) = structural() {
+            panic!("{FAILED}: {detail}");
         }
+        start_probe();
     });
 }
 
-fn run() -> Result<(), String> {
+fn structural() -> Result<(), String> {
     let missing: Vec<_> = rt::REQUIRED_SYMBOLS
         .iter()
         .filter(|name| unsafe { dlsym(RTLD_DEFAULT, CString::new(**name).unwrap().as_ptr()) }.is_null())
@@ -40,7 +47,13 @@ fn run() -> Result<(), String> {
     if unsafe { rt::swift_task_getMainExecutor() }.identity.is_null() {
         return Err("main executor has no identity".into());
     }
-    // A probe task: it must see itself as the current task, suspend once and resume, then complete.
+    Ok(())
+}
+
+/// A probe Task: it must see itself as the current task, suspend once and resume, then complete. If it does
+/// not within 5 s, the runtime does not behave as this crate assumes: abort with a message rather than let
+/// tasks misbehave.
+fn start_probe() {
     let (tx, rx) = mpsc::channel::<Result<(), String>>();
     let probe_tx = tx.clone();
     let mut suspended = false;
@@ -58,7 +71,12 @@ fn run() -> Result<(), String> {
         std::task::Poll::Ready(())
     }));
     let probe = task::create(SpawnOptions::default(), future, Box::new(move || { let _ = tx.send(Ok(())); }));
-    let result = rx.recv_timeout(Duration::from_secs(5)).unwrap_or_else(|_| Err("probe task did not complete".into()));
     unsafe { rt::swift_release(probe) };
-    result
+    std::thread::spawn(move || {
+        let result = rx.recv_timeout(Duration::from_secs(5)).unwrap_or_else(|_| Err("probe task did not complete".into()));
+        if let Err(detail) = result {
+            eprintln!("{FAILED}: {detail}");
+            std::process::abort();
+        }
+    });
 }
