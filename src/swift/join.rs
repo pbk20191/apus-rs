@@ -61,3 +61,22 @@ impl<T> Drop for JoinHandle<T> {
         unsafe { rt::swift_release(self.task) }
     }
 }
+
+/// Re-types a handle whose output was wrapped to cross the `Send` bound (main-thread-only tasks).
+pub(crate) fn unwrap_main_only<W: 'static, T: 'static>(inner: JoinHandle<W>, unwrap: fn(W) -> T) -> MainOnlyHandle<W, T> {
+    MainOnlyHandle { inner, unwrap }
+}
+
+pub struct MainOnlyHandle<W, T> {
+    inner: JoinHandle<W>,
+    unwrap: fn(W) -> T,
+}
+
+impl<W, T> Future for MainOnlyHandle<W, T> {
+    type Output = Result<T, JoinError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let unwrap = self.unwrap;
+        Pin::new(&mut self.inner).poll(cx).map(|r| r.map(unwrap))
+    }
+}

@@ -41,6 +41,12 @@ thread_local! {
     static CURRENT: Cell<*const Task> = const { Cell::new(std::ptr::null()) };
 }
 
+/// The task being polled on this thread, if any.
+pub(crate) fn current() -> Option<&'static Task> {
+    let p = CURRENT.get();
+    (!p.is_null()).then(|| unsafe { &*p })
+}
+
 impl Wake for Task {
     fn wake(self: Arc<Self>) {
         self.wake_by_ref()
@@ -166,12 +172,17 @@ pub(crate) fn create(options: SpawnOptions, future: BoxFuture, on_finish: Box<dy
     }
 }
 
-pub(crate) fn spawn_with<F>(options: SpawnOptions, future: F) -> JoinHandle<F::Output>
+/// `inherit`: like Swift's `Task {}`, a task spawned from a MainActor task stays on the MainActor
+/// (priority and task-locals are inherited by the runtime itself). `Task.detached` passes false.
+pub(crate) fn spawn_with<F>(mut options: SpawnOptions, inherit: bool, future: F) -> JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
     selfcheck::ensure();
+    if inherit && current().is_some_and(|t| t.main) {
+        options.main = true;
+    }
     let (guarded, abort) = guard(future);
     let state = JoinState::new();
     let staged = Arc::new(Mutex::new(None));

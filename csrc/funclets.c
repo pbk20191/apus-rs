@@ -179,3 +179,24 @@ static SWIFTASYNCCALL void entry(void *indirect_result, ACTX AsyncContext *ctx, 
 
 const void *rs_entry_fn(void) { return (const void *)entry; }
 size_t rs_context_size(void) { return sizeof(RsTaskContext); }
+
+// ---- plain Jobs (timers): the runtime hands them to dispatch, which calls the metadata's VTableInvoke ----
+// Job header: include/swift/ABI/Task.h (class Job). Metadata shape: FullMetadata<DispatchClassMetadata> as in
+// stdlib/public/Concurrency/Task.cpp (jobHeapMetadata, which is not exported): kind Job = 3 | NonType |
+// RuntimePrivate (ABI/MetadataKind.def), dispatchSwiftObjectType = 1, OpaqueObjC[3] on ObjC platforms.
+extern SWIFTCALL void swift_job_run(void *job, SerialExecutorRef executor);
+void rs_job_run(void *job);
+
+static SWIFTASYNCCALL void run_job(void *job) { rs_job_run(job); }
+static void invoke_job(void *job, void *unused, uint32_t flags) {
+  swift_job_run(job, (SerialExecutorRef){0, 0});   // SerialExecutorRef::generic()
+}
+static void destroy_job(void *job) {}
+static const struct {
+  void *type_layout; void (*destroy)(void *); void *value_witnesses;            // FullMetadata prefix
+  uintptr_t kind; void *opaque; void *opaque_objc[3];                           // HeapMetadata + DispatchClassMetadata
+  unsigned long vtable_type; void (*vtable_invoke)(void *, void *, uint32_t);
+} job_metadata = { 0, destroy_job, 0, 3 | 0x400 | 0x100, 0, {0, 0, 0}, 1, invoke_job };
+
+const void *rs_job_metadata(void) { return &job_metadata.kind; }
+const void *rs_run_job_fn(void) { return (const void *)run_job; }

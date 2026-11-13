@@ -9,3 +9,4 @@ swift_task_isCancelled | _Bool | void *t | t
 swift_task_currentPriority | size_t | void *t | t
 swift_task_escalate | size_t | void *t, size_t p | t, p
 swift_getTupleTypeMetadata | MetadataResponse | size_t r, size_t f, const void *const *e, const char *l, const void *w | r, f, e, l, w
+swift_task_enqueueGlobalWithDelay | void | unsigned long long d, void *j | d, j

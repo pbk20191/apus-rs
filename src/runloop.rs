@@ -1,7 +1,5 @@
 //! Main-thread helpers. The main queue is drained by the main run loop (`CFRunLoopRun*`), never `dispatch_main`.
 
-#![cfg_attr(not(feature = "dispatch"), allow(unused_imports, dead_code))]
-
 use std::ffi::c_void;
 use std::future::Future;
 use std::pin::pin;
@@ -21,8 +19,8 @@ pub fn is_main_thread() -> bool {
     unsafe { pthread_main_np() == 1 }
 }
 
-/// Runs `future` as a main-thread task, driving the main run loop until it completes.
-#[cfg(feature = "dispatch")]
+/// Runs `future` as a main-thread task (a MainActor Swift Task when the `swift` feature is on), driving the
+/// main run loop until it completes.
 ///
 /// Panics when called off the main thread. A panic inside `future` is resumed here.
 pub fn run_main<F>(future: F) -> F::Output
@@ -47,8 +45,17 @@ where
     }
 }
 
-#[cfg(feature = "dispatch")]
-fn spawn_main_task<F>(future: F) -> crate::dispatch::JoinHandle<F::Output>
+#[cfg(feature = "swift")]
+fn spawn_main_task<F>(future: F) -> impl Future<Output = Result<F::Output, crate::JoinError>>
+where
+    F: Future + 'static,
+    F::Output: 'static,
+{
+    crate::swift::spawn_local_on_main(future)
+}
+
+#[cfg(all(feature = "dispatch", not(feature = "swift")))]
+fn spawn_main_task<F>(future: F) -> impl Future<Output = Result<F::Output, crate::JoinError>>
 where
     F: Future + 'static,
     F::Output: 'static,

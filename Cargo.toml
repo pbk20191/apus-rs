@@ -45,3 +45,8 @@ required-features = ["test-probe"]
 name = "abi_equivalence"
 harness = false
 required-features = ["swift"]
+
+[[test]]
+name = "swift_run_main"
+harness = false
+required-features = ["test-probe"]

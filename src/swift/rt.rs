@@ -80,6 +80,7 @@ extern "C" {
     pub fn swift_task_isCancelled(task: *mut c_void) -> u8;
     pub fn swift_task_currentPriority(task: *mut c_void) -> usize;
     pub fn swift_task_escalate(task: *mut c_void, priority: usize) -> usize;
+    pub fn swift_task_enqueueGlobalWithDelay(delay_ns: u64, job: *mut c_void);
 }
 
 /// Every runtime symbol this crate binds, Rust side and funclets. The self-check resolves each one.
@@ -90,6 +91,7 @@ pub const REQUIRED_SYMBOLS: &[&str] = &[
     "swift_continuation_init", "swift_continuation_await", "swift_task_switch", "swift_task_alloc",
     "swift_task_dealloc", "swift_task_addCancellationHandler", "swift_task_removeCancellationHandler",
     "swift_taskGroup_initializeWithFlags", "swift_taskGroup_destroy", "swift_taskGroup_waitAll",
+    "swift_task_enqueueGlobalWithDelay", "swift_job_run",
 ];
 
 pub fn is_cancelled(task: *mut c_void) -> bool {
@@ -111,4 +113,6 @@ pub fn empty_tuple_metadata() -> *const c_void {
 extern "C" {
     pub fn rs_entry_fn() -> *const c_void;
     pub fn rs_context_size() -> usize;
+    pub fn rs_job_metadata() -> *const c_void;
+    pub fn rs_run_job_fn() -> *const c_void;
 }

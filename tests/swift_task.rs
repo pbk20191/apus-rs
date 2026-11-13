@@ -3,7 +3,9 @@ mod common;
 #[path = "common/probe.rs"]
 mod probe;
 
-use async_swift_rs::swift::{current_task, spawn, spawn_with};
+use async_swift_rs::is_main_thread;
+use async_swift_rs::swift::{current_task, sleep, spawn, spawn_detached, spawn_on_main, spawn_with};
+use std::time::Instant;
 use async_swift_rs::{JoinError, Priority, SpawnOptions};
 use common::{block, check, Failed, Trial};
 use probe::*;
@@ -60,6 +62,43 @@ fn wake_during_poll_repolls() -> Result<(), Failed> {
     check(matches!(r, Ok(2)), format!("got {r:?}"))
 }
 
+/// MainActor isolation, checked without trapping: assumeIsolated only runs once we know we are on main.
+fn on_main_actor() -> bool {
+    is_main_thread() && unsafe { probe_assume_main() }
+}
+
+fn main_task_is_main_actor() -> Result<(), Failed> {
+    let r = block(spawn_on_main(async {
+        let before = unsafe { probe_has_task() } && on_main_actor();
+        sleep(Duration::from_millis(10)).await;
+        (before, unsafe { probe_has_task() } && on_main_actor())
+    }));
+    check(matches!(r, Ok((true, true))), format!("got {r:?}"))
+}
+
+fn spawn_in_main_inherits_main() -> Result<(), Failed> {
+    let r = block(spawn_on_main(async { spawn(async { on_main_actor() }).await }));
+    check(matches!(r, Ok(Ok(true))), format!("got {r:?}"))
+}
+
+fn detached_inherits_nothing() -> Result<(), Failed> {
+    let options = SpawnOptions { priority: Priority::Utility, ..SpawnOptions::default() };
+    let r = block(spawn_with(options, async {
+        spawn_detached(async { (unsafe { probe_priority() }, is_main_thread()) }).await
+    }));
+    check(matches!(r, Ok(Ok((0x15, false)))), format!("got {r:?}"))
+}
+
+fn sleeps_overlap() -> Result<(), Failed> {
+    let start = Instant::now();
+    let handles: Vec<_> = (0..10_000u64)
+        .map(|i| spawn(async move { sleep(Duration::from_millis(50)).await; i }))
+        .collect();
+    let sum: u64 = handles.into_iter().map(|h| block(h).unwrap()).sum();
+    check(sum == 49_995_000, format!("sum {sum}"))?;
+    check(start.elapsed() < Duration::from_millis(500), format!("took {:?}", start.elapsed()))
+}
+
 fn main() {
     common::run(vec![
         Trial::test("task_is_swift_task", task_is_swift_task),
@@ -68,5 +107,9 @@ fn main() {
         Trial::test("panic_becomes_join_error", panic_becomes_join_error),
         Trial::test("dropped_handle_detaches", dropped_handle_detaches),
         Trial::test("wake_during_poll_repolls", wake_during_poll_repolls),
+        Trial::test("main_task_is_main_actor", main_task_is_main_actor),
+        Trial::test("spawn_in_main_inherits_main", spawn_in_main_inherits_main),
+        Trial::test("detached_inherits_nothing", detached_inherits_nothing),
+        Trial::test("sleeps_overlap", sleeps_overlap),
     ])
 }
