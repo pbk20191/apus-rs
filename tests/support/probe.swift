@@ -101,3 +101,8 @@ final class DeinitFlag { let flag: UnsafeMutablePointer<Bool>; init(_ f: UnsafeM
 }
 @_cdecl("probe_any_empty_dict") public func probeAnyEmptyDict(_ out: UnsafeMutableRawPointer) { out.initializeMemory(as: Any.self, repeating: [String: Int](), count: 1) }
 @_cdecl("probe_any_dict_of_arrays") public func probeAnyDictOfArrays(_ out: UnsafeMutableRawPointer) { out.initializeMemory(as: Any.self, repeating: ["a": [1, 2], "b": []], count: 1) }
+
+// ---- owned arguments ----
+@_cdecl("probe_make_flagged_object") public func probeMakeFlaggedObject(_ flag: UnsafeMutablePointer<Bool>) -> UnsafeMutableRawPointer {
+    Unmanaged.passRetained(DeinitFlag(flag)).toOpaque()
+}

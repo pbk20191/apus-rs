@@ -36,8 +36,8 @@ let v = run_main(async { … });                           // on the main thread
 ```
 
 Swift backend only: `h.cancel()` (cooperative, = Swift `task.cancel()`), `h.escalate(p)`, `cancelled().await`,
-`is_cancelled()`, `priority()`, `current_task()`, `SwiftAsyncFn`, `SwiftCall`, `SwiftAsync`, `timeout()`, `SwiftAny`,
-`SwiftObject`, `SwiftError`.
+`is_cancelled()`, `priority()`, `current_task()`, `SwiftAsyncFn`, `SwiftFn`, `SwiftCall`, `SwiftAsync`, `timeout()`,
+`SwiftType`, `SwiftProtocol`, `SwiftValue`, `SwiftAny`, `SwiftObject`, `SwiftError`.
 Dispatch backend only: `SerialQueue`, `block_on` (not on the main thread).
 
 ### Inheritance
@@ -75,11 +75,44 @@ let total: i64 = BUMP.call((5i64,)).on(&counter).await?;          // a method: `
   rule below for `.child()` and `timeout`.
 - The symbol is resolved with `dlsym` on first use. A function missing on the running OS gives
   `CallError::Unavailable` (check with `is_available()`), not a launch failure.
-- Arguments: integers, `bool`, `f64`, `&str`/`String`, `&SwiftObject`. Results: `()`, integers, `bool`, `f64`,
+- Arguments: integers, `bool`, `f64`, `&str`/`String`, `Vec<T>`, `&SwiftObject`, `&SwiftValue`, `SwiftType`,
+  `WitnessTable`. Results: `()`, integers, `bool`, `f64`,
   `String`, `Option<i64>`, `Option<String>`, `Vec<T>`, `HashMap<K, V>`, `SwiftObject`, `SwiftAny`.
 - `.throws()` must be added exactly when the Swift function is `throws`.
 - **The Rust types must match the Swift signature; nothing can check them.** A mismatch is undefined behavior.
   Arguments must fit the argument registers (8 integer words on arm64, 6 on x86_64; a `String` takes two).
+
+### Generic functions, framework structs, synchronous calls
+
+Generic Swift functions take their type arguments as trailing parameters: the metadata of each generic
+parameter, then a witness table per conformance requirement. Values of generic type, and large or resilient
+structs (every struct of an Apple framework), are passed and returned by address, as a `SwiftValue`.
+
+```rust
+use async_swift_rs::swift::{SwiftAsyncFn, SwiftFn, SwiftProtocol, SwiftType, SwiftValue};
+
+// StoreKit 2: static func Product.products<I: Collection>(for: I) async throws -> [Product] where I.Element == String
+static PRODUCTS: SwiftAsyncFn = SwiftAsyncFn::new("$s8StoreKit7ProductV8products3forSayACGx_tYaKSlRzSS7ElementRtzlFZ");
+static COLLECTION: SwiftProtocol = SwiftProtocol::new("$sSlMp");
+
+let ids = SwiftValue::new(vec!["com.example.pro".to_string()]);            // a Swift [String]
+let collection = ids.ty().conformance(&COLLECTION).expect("[String]: Collection");
+let products_type = SwiftType::from_mangled_name("Say8StoreKit7ProductVG").expect("[Product]");
+let products: SwiftValue = PRODUCTS
+    .call_direct(products_type, (&ids, ids.ty(), collection))               // value, I.self, I: Collection
+    .throws()
+    .await?;
+println!("{}", products.description());                                     // String(describing:)
+```
+
+- `SwiftType`: `of::<T>()` for the built-in mappings, `from_mangled_name("8StoreKit7ProductV")` for any type in
+  the process (`None` if absent), `.conformance(&protocol)` for witness tables.
+- `SwiftValue`: `new(rust_value)` (integers, `bool`, `f64`, strings, `Vec`s), `get::<T>()`, `description()`, `clone()`.
+- Results: `call::<R>` for the types listed above; `call_returning(ty, args)` for a value returned by address
+  (generic, large or resilient); `call_direct(ty, args)` for an opaque value returned in registers (arrays,
+  dictionaries, structs of up to four integer words).
+- `SwiftFn` calls **synchronous** Swift functions the same way, on the current thread:
+  `TOTAL.call::<i64>(()).on_value(&big).invoke()?` (a getter of a struct passed by address).
 
 ## Awaiting Swift async closures from Rust
 

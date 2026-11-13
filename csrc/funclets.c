@@ -219,3 +219,51 @@ static const struct {
 
 const void *rs_job_metadata(void) { return &job_metadata.kind; }
 const void *rs_run_job_fn(void) { return (const void *)run_job; }
+
+// ---- synchronous Swift calls through one generic trampoline (src/swift/sync.rs) ----
+// Sync functions take an indirect result address in the swift_indirect_result register (x8 / rax), unlike
+// async ones (first integer argument). Direct results: up to four integer or four floating-point registers.
+// The error register is always passed: a non-throwing callee leaves it alone.
+typedef struct { uint64_t r[4]; } Ints4;
+typedef struct { double f[4]; } Floats4;
+#if defined(__aarch64__)
+#define SYNC_PARAMS uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, \
+                    double, double, double, double, double, double, double, double
+#define SYNC_ARGS(r) (r)->gpr[0], (r)->gpr[1], (r)->gpr[2], (r)->gpr[3], (r)->gpr[4], (r)->gpr[5], (r)->gpr[6], (r)->gpr[7], \
+                     (r)->fpr[0], (r)->fpr[1], (r)->fpr[2], (r)->fpr[3], (r)->fpr[4], (r)->fpr[5], (r)->fpr[6], (r)->fpr[7]
+#else
+#define SYNC_PARAMS uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, \
+                    double, double, double, double, double, double, double, double
+#define SYNC_ARGS(r) (r)->gpr[0], (r)->gpr[1], (r)->gpr[2], (r)->gpr[3], (r)->gpr[4], (r)->gpr[5], \
+                     (r)->fpr[0], (r)->fpr[1], (r)->fpr[2], (r)->fpr[3], (r)->fpr[4], (r)->fpr[5], (r)->fpr[6], (r)->fpr[7]
+#endif
+#define SERR __attribute__((swift_error_result))
+typedef SWIFTCALL Ints4 SyncFnInts(SYNC_PARAMS, SCTX void *, SERR void **);
+typedef SWIFTCALL Floats4 SyncFnFloats(SYNC_PARAMS, SCTX void *, SERR void **);
+typedef SWIFTCALL void SyncFnIndirect(__attribute__((swift_indirect_result)) void *, SYNC_PARAMS, SCTX void *, SERR void **);
+
+// kind: 0 = integer results, 1 = floating-point results, 2 = indirect result at `indirect`
+void rs_call_sync(const void *fn, const CallRegs *r, void *indirect, RetRegs *ret, int kind) {
+  void *error = NULL;
+  if (kind == 2) {
+    ((SyncFnIndirect *)fn)(indirect, SYNC_ARGS(r), r->self, &error);
+  } else if (kind == 1) {
+    Floats4 f = ((SyncFnFloats *)fn)(SYNC_ARGS(r), r->self, &error);
+    for (int i = 0; i < 4; i++) ret->fpr[i] = f.f[i];
+  } else {
+    Ints4 v = ((SyncFnInts *)fn)(SYNC_ARGS(r), r->self, &error);
+    for (int i = 0; i < 4; i++) ret->gpr[i] = v.r[i];
+  }
+  ret->error = error;
+}
+
+// `String._fromUTF8Repairing(_: UnsafeBufferPointer<UInt8>) -> (result: String, repairsMade: Bool)`: copies the
+// bytes (any length, NUL bytes included). Three result registers, which only a swiftcall declaration can receive.
+typedef struct { uint64_t words[2]; uint8_t repairs_made; } StringAndFlag;
+extern SWIFTCALL StringAndFlag swift_string_from_utf8_repairing(const uint8_t *start, intptr_t count)
+    __asm__("_$sSS18_fromUTF8RepairingySS6result_Sb11repairsMadetSRys5UInt8VGFZ");
+void rs_string_from_utf8(const uint8_t *start, intptr_t count, uint64_t out[2]) {
+  StringAndFlag s = swift_string_from_utf8_repairing(start, count);
+  out[0] = s.words[0];
+  out[1] = s.words[1];
+}

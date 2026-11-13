@@ -11,6 +11,7 @@
 
 use super::any::{SwiftAny, SwiftError};
 use super::func::{ArgLowering, SwiftRet};
+use super::value::{SwiftValue, UninitValue};
 use super::{rt, task};
 use std::cell::UnsafeCell;
 use std::ffi::c_void;
@@ -82,11 +83,52 @@ impl fmt::Display for CallError {
 
 impl std::error::Error for CallError {}
 
-/// A Swift reference the call record keeps alive until the call is over.
+/// Something the call keeps alive until it is over; released when dropped.
 pub(crate) enum Owned {
     Object(*mut c_void),
     /// A `String`'s owner word.
     Bridge(u64),
+    /// A value passed by address; dropped with the record.
+    Value(#[allow(dead_code)] SwiftValue),
+}
+
+impl Drop for Owned {
+    fn drop(&mut self) {
+        unsafe {
+            match *self {
+                Owned::Object(object) => rt::swift_release(object),
+                Owned::Bridge(word) => rt::swift_bridgeObjectRelease(word as *mut c_void),
+                Owned::Value(_) => {} // releases itself
+            }
+        }
+    }
+}
+
+/// Where an indirect result is written: four inline words (`Any`) or storage sized for a given Swift type.
+#[doc(hidden)]
+pub struct IndirectSlot {
+    pub(crate) inline: [usize; 4],
+    pub(crate) boxed: Option<UninitValue>,
+    /// The boxed type is returned in registers, not through an address: copy the result words into the box.
+    pub(crate) direct: bool,
+}
+
+impl IndirectSlot {
+    pub(crate) fn inline() -> IndirectSlot {
+        IndirectSlot { inline: [0; 4], boxed: None, direct: false }
+    }
+
+    pub(crate) fn boxed(storage: UninitValue, direct: bool) -> IndirectSlot {
+        assert!(!direct || storage.ty.size() <= 32, "a type larger than four words is not returned in registers");
+        IndirectSlot { inline: [0; 4], boxed: Some(storage), direct }
+    }
+
+    pub(crate) fn address(&mut self) -> *mut c_void {
+        match &self.boxed {
+            Some(storage) => storage.ptr.as_ptr().cast(),
+            None => self.inline.as_mut_ptr().cast(),
+        }
+    }
 }
 
 enum CallState {
@@ -103,8 +145,7 @@ pub(crate) struct CallShared {
     function: *const AsyncFunctionPointer,
     regs: UnsafeCell<CallRegs>,
     ret: UnsafeCell<RetRegs>,
-    /// Storage for an indirect result (`Any`).
-    indirect: UnsafeCell<[usize; 4]>,
+    indirect: UnsafeCell<IndirectSlot>,
     /// Whether the callee is `throws`: only then is the error register meaningful.
     throws: bool,
     owned: Vec<Owned>,
@@ -120,12 +161,14 @@ unsafe impl Send for CallShared {}
 unsafe impl Sync for CallShared {}
 
 impl CallShared {
-    fn new<R: SwiftRet>(function: *const AsyncFunctionPointer, lowering: ArgLowering) -> Arc<CallShared> {
+    /// `indirect`: the callee writes its result through the slot's address, passed as first integer argument
+    /// (`lowering` reserved that register).
+    fn new<R: SwiftRet>(function: *const AsyncFunctionPointer, lowering: ArgLowering, slot: IndirectSlot, indirect: bool) -> Arc<CallShared> {
         let shared = Arc::new(CallShared {
             function,
             regs: UnsafeCell::new(lowering.regs),
             ret: UnsafeCell::new(RetRegs { gpr: [0; 4], fpr: [0.0; 4], error: std::ptr::null_mut() }),
-            indirect: UnsafeCell::new([0; 4]),
+            indirect: UnsafeCell::new(slot),
             throws: false,
             owned: lowering.owned,
             discard: discard_as::<R>,
@@ -134,9 +177,8 @@ impl CallShared {
             child: AtomicPtr::default(),
             force_child: false,
         });
-        if R::INDIRECT {
-            // The callee writes an indirect result through its first integer argument.
-            unsafe { (*shared.regs.get()).gpr[0] = shared.indirect.get() as u64 };
+        if indirect {
+            unsafe { (*shared.regs.get()).gpr[0] = (*shared.indirect.get()).address() as u64 };
         }
         shared
     }
@@ -147,7 +189,7 @@ impl CallShared {
         if self.throws && !ret.error.is_null() {
             return Err(CallError::Swift(SwiftError::from_raw(ret.error)));
         }
-        Ok(R::lift(ret, self.indirect.get().cast()))
+        Ok(R::lift(ret, &mut *self.indirect.get()))
     }
 }
 
@@ -158,12 +200,6 @@ unsafe fn discard_as<R: SwiftRet>(call: &CallShared) {
 impl Drop for CallShared {
     fn drop(&mut self) {
         unsafe {
-            for owned in &self.owned {
-                match *owned {
-                    Owned::Object(object) => rt::swift_release(object),
-                    Owned::Bridge(word) => rt::swift_bridgeObjectRelease(word as *mut c_void),
-                }
-            }
             let child = *self.child.get_mut();
             if !child.is_null() {
                 rt::swift_release(child);
@@ -283,9 +319,15 @@ pub struct SwiftCall<R> {
 pub type SwiftAsync = SwiftCall<SwiftAny>;
 
 impl<R: SwiftRet> SwiftCall<R> {
-    pub(crate) fn build(function: *const AsyncFunctionPointer, mut lowering: ArgLowering, unavailable: Option<CallError>) -> SwiftCall<R> {
+    pub(crate) fn build(
+        function: *const AsyncFunctionPointer,
+        mut lowering: ArgLowering,
+        unavailable: Option<CallError>,
+        slot: IndirectSlot,
+        indirect: bool,
+    ) -> SwiftCall<R> {
         let invalid = unavailable.or(lowering.error.take().map(CallError::InvalidArgument));
-        SwiftCall { shared: CallShared::new::<R>(function, lowering), invalid, registered: false, result: PhantomData }
+        SwiftCall { shared: CallShared::new::<R>(function, lowering, slot, indirect), invalid, registered: false, result: PhantomData }
     }
 }
 
@@ -309,6 +351,15 @@ impl<R> SwiftCall<R> {
         self
     }
 
+    /// Calls a method of a value passed by address (a large or resilient struct): `value` is `self`.
+    pub fn on_value(mut self, value: &SwiftValue) -> Self {
+        let copy = value.clone();
+        let call = self.configure();
+        call.regs.get_mut().this = copy.as_ptr();
+        call.owned.push(Owned::Value(copy));
+        self
+    }
+
     /// Runs the call in a child Task (Swift's `async let`) instead of this Task, so other futures polled
     /// alongside it (`select`, timeouts) keep running. Dropping the future then cancels the child.
     pub fn child(mut self) -> Self {
@@ -329,7 +380,7 @@ impl SwiftCall<SwiftAny> {
         let mut lowering = ArgLowering::new(true);
         lowering.regs.this = *(closure_box.byte_add(24) as *const *mut c_void);
         lowering.owned.push(Owned::Object(closure_box));
-        SwiftCall::build(function, lowering, None).throws()
+        SwiftCall::build(function, lowering, None, IndirectSlot::inline(), true).throws()
     }
 }
 
@@ -400,7 +451,7 @@ mod tests {
     use super::*;
 
     fn registered(force_child: bool) -> Arc<CallShared> {
-        let mut call = SwiftCall::<()>::build(std::ptr::null(), ArgLowering::new(false), None);
+        let mut call = SwiftCall::<()>::build(std::ptr::null(), ArgLowering::new(false), None, IndirectSlot::inline(), false);
         call.configure().force_child = force_child;
         call.shared.clone() // the SwiftCall is dropped: the record is Abandoned…
     }

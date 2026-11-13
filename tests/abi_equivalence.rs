@@ -20,7 +20,7 @@ impl Sig {
     }
     /// Function-pointer shapes (value witnesses) have no symbol to bind in rt.rs.
     fn is_symbol(&self) -> bool {
-        !self.name.starts_with("vwt_")
+        !self.name.starts_with("vwt_") && !self.name.starts_with("shape_")
     }
 }
 

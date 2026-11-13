@@ -16,7 +16,8 @@ $sSS11utf8CStrings15ContiguousArrayVys4Int8VGvg | void * | uint64_t a, uint64_t 
 $sSS10describingSSx_tclufC | SwiftString | void *v, const void *t | v, t
 $sSaMa | MetadataResponse | size_t r, const void *t | r, t
 $sSDMa | MetadataResponse | size_t r, const void *k, const void *v, const void *w | r, k, v, w
-$sSS7cStringSSSPys4Int8VG_tcfC | SwiftString | const char *p | p
+swift_getTypeByMangledNameInContext | const void * | const char *n, size_t l, const void *c, const void *const *g | n, l, c, g
+$ss27_allocateUninitializedArrayySayxG_BptBwlF | AsyncTaskAndContext | size_t n, const void *t | n, t
 # value witness function shapes (called through the table, not by symbol)
 vwt_destroy | void | void *v, const void *m | v, m
 vwt_initializeWithCopy | void * | void *d, void *s, const void *m | d, s, m

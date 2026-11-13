@@ -1,0 +1,275 @@
+//! Swift types (metadata), protocol conformances (witness tables) and owned Swift values of any type.
+//!
+//! Generic Swift functions take their type arguments as trailing parameters: the metadata of each generic
+//! parameter, then one witness table per conformance requirement, and they take and return values of generic
+//! type by address. Large or resilient structs (every struct of an Apple framework) also travel by address.
+//! [`SwiftValue`] is such a value: a box sized and destroyed through the type's value witness table.
+
+use super::any::FromSwiftAny;
+use super::rt;
+use std::alloc::Layout;
+use std::ffi::{c_void, CString};
+use std::ptr::NonNull;
+use std::sync::OnceLock;
+
+extern "C" {
+    fn dlsym(handle: *mut c_void, symbol: *const std::ffi::c_char) -> *mut c_void;
+}
+const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
+
+pub(crate) fn lookup(symbol: &str) -> usize {
+    let name = CString::new(symbol).expect("symbol contains a NUL byte");
+    unsafe { dlsym(RTLD_DEFAULT, name.as_ptr()) as usize }
+}
+
+/// A Swift type: its metadata.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct SwiftType(*const c_void);
+
+unsafe impl Send for SwiftType {}
+unsafe impl Sync for SwiftType {}
+
+impl SwiftType {
+    /// The Swift type a Rust type reads from: `i64` → `Int`, `Vec<String>` → `[String]`, …
+    pub fn of<T: FromSwiftAny>() -> SwiftType {
+        SwiftType(T::swift_metadata())
+    }
+
+    /// Resolves a type from its mangled name (no `$s` prefix), e.g. `"8StoreKit7ProductV"` or `"SaySSG"`.
+    /// `None` if the type does not exist in this process.
+    pub fn from_mangled_name(name: &str) -> Option<SwiftType> {
+        let metadata = unsafe { rt::swift_getTypeByMangledNameInContext(name.as_ptr(), name.len(), std::ptr::null(), std::ptr::null()) };
+        (!metadata.is_null()).then_some(SwiftType(metadata))
+    }
+
+    /// # Safety
+    /// `metadata` must be Swift type metadata.
+    pub unsafe fn from_metadata(metadata: *const c_void) -> SwiftType {
+        SwiftType(metadata)
+    }
+
+    pub fn as_ptr(self) -> *const c_void {
+        self.0
+    }
+
+    /// The qualified name, e.g. `Swift.Array<Swift.String>`.
+    pub fn name(self) -> String {
+        unsafe { rt::type_name(self.0) }
+    }
+
+    /// The size of a value in bytes.
+    pub fn size(self) -> usize {
+        unsafe { rt::value_witnesses(self.0) }.size
+    }
+
+    pub(crate) fn stride(self) -> usize {
+        unsafe { rt::value_witnesses(self.0) }.stride
+    }
+
+    fn layout(self) -> Layout {
+        let witnesses = unsafe { rt::value_witnesses(self.0) };
+        Layout::from_size_align(witnesses.size.max(1), (witnesses.flags as usize & 0xff) + 1).unwrap()
+    }
+
+    /// The witness table of this type's conformance to `protocol`, if it conforms.
+    pub fn conformance(self, protocol: &SwiftProtocol) -> Option<WitnessTable> {
+        let descriptor = protocol.descriptor()?;
+        let table = unsafe { rt::swift_conformsToProtocol(self.0, descriptor) };
+        (!table.is_null()).then_some(WitnessTable(table))
+    }
+}
+
+impl std::fmt::Debug for SwiftType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SwiftType({})", self.name())
+    }
+}
+
+/// A Swift protocol, named by its protocol descriptor symbol (`$sSlMp` is `Collection`).
+pub struct SwiftProtocol {
+    symbol: &'static str,
+    descriptor: OnceLock<usize>,
+}
+
+impl SwiftProtocol {
+    pub const fn new(descriptor_symbol: &'static str) -> SwiftProtocol {
+        SwiftProtocol { symbol: descriptor_symbol, descriptor: OnceLock::new() }
+    }
+
+    fn descriptor(&self) -> Option<*const c_void> {
+        let address = *self.descriptor.get_or_init(|| lookup(self.symbol));
+        (address != 0).then_some(address as *const c_void)
+    }
+}
+
+/// A protocol witness table: the trailing argument a constrained generic function takes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct WitnessTable(pub(crate) *const c_void);
+
+unsafe impl Send for WitnessTable {}
+unsafe impl Sync for WitnessTable {}
+
+/// Storage for a value of a Swift type that has not been initialized yet (an indirect result).
+#[doc(hidden)]
+pub struct UninitValue {
+    pub(crate) ptr: NonNull<u8>,
+    pub(crate) ty: SwiftType,
+}
+
+impl UninitValue {
+    pub(crate) fn new(ty: SwiftType) -> UninitValue {
+        let ptr = NonNull::new(unsafe { std::alloc::alloc(ty.layout()) }).expect("allocation failed");
+        UninitValue { ptr, ty }
+    }
+
+    /// # Safety
+    /// The storage must now hold an initialized value.
+    pub(crate) unsafe fn assume_init(self) -> SwiftValue {
+        let this = std::mem::ManuallyDrop::new(self);
+        SwiftValue { ptr: this.ptr, ty: this.ty }
+    }
+}
+
+impl Drop for UninitValue {
+    fn drop(&mut self) {
+        unsafe { std::alloc::dealloc(self.ptr.as_ptr(), self.ty.layout()) }
+    }
+}
+
+/// An owned value of any Swift type.
+pub struct SwiftValue {
+    ptr: NonNull<u8>,
+    ty: SwiftType,
+}
+
+// As for SwiftAny: copies and destruction go through atomic reference counting.
+unsafe impl Send for SwiftValue {}
+
+impl SwiftValue {
+    /// Converts a Rust value into the corresponding Swift value.
+    pub fn new<T: IntoSwift>(value: T) -> SwiftValue {
+        let storage = UninitValue::new(T::swift_type());
+        unsafe {
+            value.write(storage.ptr.as_ptr().cast());
+            storage.assume_init()
+        }
+    }
+
+    pub fn ty(&self) -> SwiftType {
+        self.ty
+    }
+
+    pub fn as_ptr(&self) -> *mut c_void {
+        self.ptr.as_ptr().cast()
+    }
+
+    /// Copies the value out as `T` if it is exactly that Swift type.
+    pub fn get<T: FromSwiftAny>(&self) -> Option<T> {
+        (self.ty.0 == T::swift_metadata()).then(|| unsafe { T::from_value(self.as_ptr()) })
+    }
+
+    /// `String(describing:)`.
+    pub fn description(&self) -> String {
+        unsafe {
+            let copy = self.clone();
+            let mut text = rt::string_describing(copy.as_ptr(), copy.ty.0); // consumes the copy's value
+            drop(UninitValue { ptr: copy.ptr, ty: copy.ty });
+            std::mem::forget(copy);
+            let out = rt::string_to_rust(&text);
+            rt::destroy_string(&mut text);
+            out
+        }
+    }
+}
+
+impl Clone for SwiftValue {
+    fn clone(&self) -> Self {
+        let storage = UninitValue::new(self.ty);
+        unsafe {
+            (rt::value_witnesses(self.ty.0).initialize_with_copy)(storage.ptr.as_ptr().cast(), self.as_ptr(), self.ty.0);
+            storage.assume_init()
+        }
+    }
+}
+
+impl Drop for SwiftValue {
+    fn drop(&mut self) {
+        unsafe {
+            (rt::value_witnesses(self.ty.0).destroy)(self.as_ptr(), self.ty.0);
+            std::alloc::dealloc(self.ptr.as_ptr(), self.ty.layout());
+        }
+    }
+}
+
+impl std::fmt::Debug for SwiftValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SwiftValue({}: {})", self.ty.name(), self.description())
+    }
+}
+
+/// Rust values that can become Swift values: integers, `bool`, `f64`, strings, and `Vec`s of them.
+pub trait IntoSwift {
+    #[doc(hidden)]
+    fn swift_type() -> SwiftType;
+
+    /// Initializes `dest` (uninitialized storage of `swift_type()`) with the value.
+    #[doc(hidden)]
+    unsafe fn write(self, dest: *mut c_void);
+}
+
+macro_rules! plain_into {
+    ($($t:ty),*) => {$(
+        impl IntoSwift for $t {
+            fn swift_type() -> SwiftType {
+                SwiftType::of::<$t>()
+            }
+            unsafe fn write(self, dest: *mut c_void) {
+                (dest as *mut $t).write(self)
+            }
+        }
+    )*};
+}
+plain_into!(i64, i32, u64, f64);
+
+impl IntoSwift for bool {
+    fn swift_type() -> SwiftType {
+        SwiftType::of::<bool>()
+    }
+    unsafe fn write(self, dest: *mut c_void) {
+        (dest as *mut u8).write(self as u8)
+    }
+}
+
+impl IntoSwift for &str {
+    fn swift_type() -> SwiftType {
+        SwiftType::of::<String>()
+    }
+    unsafe fn write(self, dest: *mut c_void) {
+        (dest as *mut rt::SwiftString).write(rt::string_from_utf8(self))
+    }
+}
+
+impl IntoSwift for String {
+    fn swift_type() -> SwiftType {
+        SwiftType::of::<String>()
+    }
+    unsafe fn write(self, dest: *mut c_void) {
+        self.as_str().write(dest)
+    }
+}
+
+/// `[T]`, built with the standard library's array-literal entry point.
+impl<T: IntoSwift> IntoSwift for Vec<T> {
+    fn swift_type() -> SwiftType {
+        SwiftType(unsafe { rt::array_metadata(0, T::swift_type().0) }.metadata)
+    }
+    unsafe fn write(self, dest: *mut c_void) {
+        let element = T::swift_type();
+        let allocated = rt::allocate_uninitialized_array(self.len(), element.0);
+        let stride = element.stride();
+        for (i, item) in self.into_iter().enumerate() {
+            item.write(allocated.elements.byte_add(i * stride));
+        }
+        (dest as *mut *mut c_void).write(allocated.array);
+    }
+}

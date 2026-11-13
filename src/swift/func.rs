@@ -7,8 +7,9 @@
 //! owned (+1): `String` in two, `Array`/`Dictionary`/objects as one reference, `Int?` as value + nil flag.
 
 use super::any::{FromSwiftAny, SwiftAny, SwiftHashable};
-use super::call::{AsyncFunctionPointer, CallError, CallRegs, Owned, RetRegs, SwiftCall};
+use super::call::{AsyncFunctionPointer, CallError, CallRegs, IndirectSlot, Owned, RetRegs, SwiftCall};
 use super::rt;
+use super::value::{IntoSwift, SwiftType, SwiftValue, UninitValue, WitnessTable};
 use std::collections::HashMap;
 use std::ffi::{c_void, CString};
 use std::ptr::NonNull;
@@ -73,11 +74,27 @@ impl SwiftAsyncFn {
     /// Prepares a call with `args` (a tuple, in declaration order) returning `R`. Nothing runs until awaited.
     /// The argument and result types must match the Swift signature: the compiler cannot check them.
     pub fn call<R: SwiftRet>(&self, args: impl SwiftArgs) -> SwiftCall<R> {
-        let mut lowering = ArgLowering::new(R::INDIRECT);
+        self.prepare(args, IndirectSlot::inline(), R::INDIRECT)
+    }
+
+    /// Like [`call`](Self::call) for a result returned by address: a value of generic type, or a large or
+    /// resilient struct (every struct of an Apple framework). `ty` is the result's Swift type.
+    pub fn call_returning(&self, ty: SwiftType, args: impl SwiftArgs) -> SwiftCall<SwiftValue> {
+        self.prepare(args, IndirectSlot::boxed(UninitValue::new(ty), false), true)
+    }
+
+    /// Like [`call`](Self::call) for a result of `ty` returned in registers (at most four words of integers
+    /// and references: arrays, dictionaries, small structs), kept as an opaque value.
+    pub fn call_direct(&self, ty: SwiftType, args: impl SwiftArgs) -> SwiftCall<SwiftValue> {
+        self.prepare(args, IndirectSlot::boxed(UninitValue::new(ty), true), false)
+    }
+
+    fn prepare<R: SwiftRet>(&self, args: impl SwiftArgs, slot: IndirectSlot, indirect: bool) -> SwiftCall<R> {
+        let mut lowering = ArgLowering::new(indirect);
         args.lower(&mut lowering);
         match self.resolve() {
-            Some(function) => SwiftCall::build(function, lowering, None),
-            None => SwiftCall::build(std::ptr::null(), lowering, Some(CallError::Unavailable(self.symbol))),
+            Some(function) => SwiftCall::build(function, lowering, None, slot, indirect),
+            None => SwiftCall::build(std::ptr::null(), lowering, Some(CallError::Unavailable(self.symbol)), slot, indirect),
         }
     }
 }
@@ -124,11 +141,7 @@ impl ArgLowering {
 
     /// A Swift `String` built from `value`, passed guaranteed and released when the call is over.
     pub fn string(&mut self, value: &str) {
-        let Ok(c) = CString::new(value) else {
-            self.error = Some("a string argument contains a NUL byte");
-            return;
-        };
-        let string = unsafe { rt::string_from_c_string(c.as_ptr()) };
+        let string = rt::string_from_utf8(value);
         self.owned.push(Owned::Bridge(string.words[1]));
         self.int(string.words[0]);
         self.int(string.words[1]);
@@ -178,6 +191,38 @@ impl SwiftArg for &SwiftObject {
     }
 }
 
+/// A type argument of a generic function.
+impl SwiftArg for SwiftType {
+    fn lower(&self, into: &mut ArgLowering) {
+        into.int(self.as_ptr() as u64)
+    }
+}
+
+/// A conformance argument of a constrained generic function.
+impl SwiftArg for WitnessTable {
+    fn lower(&self, into: &mut ArgLowering) {
+        into.int(self.0 as u64)
+    }
+}
+
+/// A value passed by address: an argument of generic type, or a large or resilient struct.
+impl SwiftArg for &SwiftValue {
+    fn lower(&self, into: &mut ArgLowering) {
+        let copy = (*self).clone(); // the call may outlive the borrow
+        into.int(copy.as_ptr() as u64);
+        into.owned.push(Owned::Value(copy));
+    }
+}
+
+/// A concrete `[T]` parameter: an array is one reference, passed directly.
+impl<T: IntoSwift + Clone> SwiftArg for Vec<T> {
+    fn lower(&self, into: &mut ArgLowering) {
+        let array = SwiftValue::new(self.clone());
+        into.int(unsafe { *(array.as_ptr() as *const u64) });
+        into.owned.push(Owned::Value(array));
+    }
+}
+
 /// A tuple of arguments, in declaration order.
 pub trait SwiftArgs {
     #[doc(hidden)]
@@ -213,15 +258,19 @@ pub trait SwiftRet: Sized {
     #[doc(hidden)]
     const INDIRECT: bool = false;
 
-    /// Takes the owned result out of the result registers (or the indirect buffer).
+    /// The Swift type is returned in floating-point registers.
     #[doc(hidden)]
-    unsafe fn lift(ret: &RetRegs, indirect: *mut c_void) -> Self;
+    const FLOAT: bool = false;
+
+    /// Takes the owned result out of the result registers (or the indirect slot).
+    #[doc(hidden)]
+    unsafe fn lift(ret: &RetRegs, indirect: &mut IndirectSlot) -> Self;
 }
 
 macro_rules! direct_ret {
     ($($t:ty: |$ret:ident| $value:expr),* $(,)?) => {$(
         impl SwiftRet for $t {
-            unsafe fn lift($ret: &RetRegs, _indirect: *mut c_void) -> Self {
+            unsafe fn lift($ret: &RetRegs, _indirect: &mut IndirectSlot) -> Self {
                 $value
             }
         }
@@ -233,7 +282,6 @@ direct_ret! {
     i32: |ret| ret.gpr[0] as i32,
     u64: |ret| ret.gpr[0],
     bool: |ret| ret.gpr[0] & 1 == 1,
-    f64: |ret| ret.fpr[0],
     // `Int?`: the value, then a flag whose low bit is set for nil.
     Option<i64>: |ret| (ret.gpr[1] & 1 == 0).then_some(ret.gpr[0] as i64),
     String: |ret| take_string(ret.gpr[0], ret.gpr[1]),
@@ -241,6 +289,14 @@ direct_ret! {
     Option<String>: |ret| (ret.gpr[1] != 0).then(|| take_string(ret.gpr[0], ret.gpr[1])),
     SwiftObject: |ret| SwiftObject::from_raw(ret.gpr[0] as *mut c_void),
     Option<SwiftObject>: |ret| NonNull::new(ret.gpr[0] as *mut c_void).map(SwiftObject),
+}
+
+impl SwiftRet for f64 {
+    const FLOAT: bool = true;
+
+    unsafe fn lift(ret: &RetRegs, _indirect: &mut IndirectSlot) -> Self {
+        ret.fpr[0]
+    }
 }
 
 unsafe fn take_string(w0: u64, w1: u64) -> String {
@@ -258,13 +314,13 @@ unsafe fn take_collection<C: FromSwiftAny>(reference: u64) -> C {
 }
 
 impl<T: FromSwiftAny> SwiftRet for Vec<T> {
-    unsafe fn lift(ret: &RetRegs, _indirect: *mut c_void) -> Self {
+    unsafe fn lift(ret: &RetRegs, _indirect: &mut IndirectSlot) -> Self {
         take_collection(ret.gpr[0])
     }
 }
 
 impl<K: SwiftHashable, V: FromSwiftAny> SwiftRet for HashMap<K, V> {
-    unsafe fn lift(ret: &RetRegs, _indirect: *mut c_void) -> Self {
+    unsafe fn lift(ret: &RetRegs, _indirect: &mut IndirectSlot) -> Self {
         take_collection(ret.gpr[0])
     }
 }
@@ -272,8 +328,21 @@ impl<K: SwiftHashable, V: FromSwiftAny> SwiftRet for HashMap<K, V> {
 impl SwiftRet for SwiftAny {
     const INDIRECT: bool = true;
 
-    unsafe fn lift(_ret: &RetRegs, indirect: *mut c_void) -> Self {
-        SwiftAny::from_raw_initialized(*(indirect as *const [usize; 4]))
+    unsafe fn lift(_ret: &RetRegs, indirect: &mut IndirectSlot) -> Self {
+        SwiftAny::from_raw_initialized(indirect.inline)
+    }
+}
+
+/// A value of the type given to `call_returning` / `call_direct`.
+impl SwiftRet for SwiftValue {
+    const INDIRECT: bool = true;
+
+    unsafe fn lift(ret: &RetRegs, indirect: &mut IndirectSlot) -> Self {
+        let storage = indirect.boxed.take().expect("use call_returning or call_direct to name the Swift type that comes back");
+        if indirect.direct {
+            std::ptr::copy_nonoverlapping(ret.gpr.as_ptr().cast::<u8>(), storage.ptr.as_ptr(), storage.ty.size());
+        }
+        storage.assume_init()
     }
 }
 

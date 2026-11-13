@@ -176,14 +176,15 @@ fn missing_symbol_is_an_error() -> Result<(), Failed> {
     check(!MISSING.is_available() && matches!(r, Err(CallError::Unavailable(_))), format!("got {r:?}"))
 }
 
-fn bad_arguments_are_rejected_before_the_call() -> Result<(), Failed> {
+fn argument_edge_cases() -> Result<(), Failed> {
     let (nul, many) = in_task(async {
         (
+            // A NUL byte is a legal character in both languages.
             f!(GREET).call::<String>(("a\0b", 1i64, 0i64)).throws().await,
             f!(GREET).call::<String>(("a", "b", "c", "d", "e")).throws().await, // 10 integer registers
         )
     });
-    check(matches!(nul, Err(CallError::InvalidArgument(_))), format!("nul: {nul:?}"))?;
+    check(matches!(&nul, Ok(s) if s == "a\0b "), format!("nul: {nul:?}"))?;
     check(matches!(many, Err(CallError::InvalidArgument(_))), format!("many: {many:?}"))
 }
 
@@ -237,7 +238,7 @@ fn main() {
         Trial::test("cancellation_reaches_the_callee", cancellation_reaches_the_callee),
         Trial::test("os_function_found_at_run_time", os_function_found_at_run_time),
         Trial::test("missing_symbol_is_an_error", missing_symbol_is_an_error),
-        Trial::test("bad_arguments_are_rejected_before_the_call", bad_arguments_are_rejected_before_the_call),
+        Trial::test("argument_edge_cases", argument_edge_cases),
         Trial::test("outside_a_task", outside_a_task),
         Trial::test("concurrent_calls_become_children", concurrent_calls_become_children),
         Trial::test("many_sequential_calls", many_sequential_calls),

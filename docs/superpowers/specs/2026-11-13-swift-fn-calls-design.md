@@ -1,6 +1,6 @@
 # Swift async 함수 직접 호출 설계 (제안)
 
-작성일: 2026-11-13 · 상태: 제안 (승인 전) · 실험: `docs/superpowers/specs/spikes/m1/` (`./build.sh && ./m1 --m1`)
+작성일: 2026-11-13 · 상태: 1단계와 제네릭 확장 구현 완료, 2~3단계 남음 (아래 7절) · 실험: `docs/superpowers/specs/spikes/m1/` (`./build.sh && ./m1 --m1`)
 
 ## 1. 의도
 
@@ -100,3 +100,30 @@ mangling 구현이 큰 작업이라 1단계와 분리한다.
 1. 1단계(심볼 문자열로 호출)부터 구현하고, 2단계(선언에서 심볼 계산)는 그다음에 하는 순서로 갈지.
 2. 1단계의 타입 범위가 위 목록으로 충분한지. 특히 StoreKit 2를 바로 쓰려면 4절의 "간접 반환"과 "제네릭"이 필요해서,
    그걸 1단계에 포함할지 여부.
+
+## 7. 진행 상황 (2026-11-13)
+
+사용자가 범위를 넓히기로 했다: 매크로, 제네릭, metadata, witness table까지 포함한다.
+
+**구현 완료**
+- 1단계: `SwiftAsyncFn`, `SwiftCall`, 인자/결과 변환 (`tests/swift_fn.rs`, 17개).
+  클로저 호출(`SwiftAsync`)도 같은 범용 호출 경로를 쓰도록 통합했다.
+- 제네릭 확장 (실험: `spikes/m2/`, arm64 20/20, x86_64 10/10; 테스트: `tests/swift_generic.rs`, 8개):
+  - `SwiftType`(metadata), `SwiftProtocol`/`WitnessTable`(`swift_conformsToProtocol`), `SwiftValue`(임의 타입의 소유 값).
+  - 제네릭 함수: 값은 주소로, 그 뒤에 타입 인자 metadata, 그 뒤에 요구 conformance마다 witness table.
+  - 주소로 넘기고 받는 값(제네릭, 큰 struct, 프레임워크의 resilient struct): `call_returning`, `&SwiftValue`.
+  - 동기 함수 호출: `SwiftFn` (getter, 메서드, 자유 함수). 간접 결과 주소는 별도 레지스터(x8 / rax)로 간다.
+  - **실제 StoreKit 2 `Product.products(for:)` 호출 확인**: 앱 번들이 없는 테스트 프로세스에서는
+    `StoreKitError.systemError(invalidApp)`을 던지며 정상 복귀한다.
+
+**M2에서 확정한 규약**
+- async 함수의 간접 결과 주소는 첫 정수 인자다. 동기 함수는 `swift_indirect_result` 레지스터를 쓴다.
+- 동기 함수의 직접 결과는 반환 레지스터(정수 4개 또는 실수 4개)로 온다. 정수와 실수가 섞인 결과는 아직 지원하지 않는다.
+- `throws` 동기 함수의 에러는 `swift_error_result` 레지스터로 온다. 항상 넘겨도 던지지 않는 함수는 건드리지 않는다.
+- 임의 길이 문자열은 `String._fromUTF8Repairing`으로 만든다 (NUL 바이트 포함 가능). 배열은 `_allocateUninitializedArray`로 만든다.
+- 타입은 `swift_getTypeByMangledNameInContext`로 mangled 이름에서 얻는다 (없으면 null).
+
+**남은 것**
+- 2단계: 선언에서 심볼을 계산하는 매크로. 사용자가 원하는 모습은 `swift-rs`의 `swift!(fn …)`처럼 한 줄 선언이다.
+- 3단계: `AsyncSequence` → `Stream`.
+- `SwiftValue`의 필드/프로퍼티 접근을 편하게 하는 계층 (지금은 getter 심볼을 `SwiftFn`으로 직접 호출).

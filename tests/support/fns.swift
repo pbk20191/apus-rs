@@ -73,3 +73,23 @@ public final class Counter {
     await Task.yield()
     return ["a": 1, "b": 2]
 }
+// ---- M2: generics, metadata, witness tables, indirect values, synchronous calls ----
+public struct Big {
+    public var a: Int, b: Int, c: Int, d: Int
+    public var name: String
+    public var total: Int { a + b + c + d }                       // sync getter, self passed indirectly
+    @inline(never) public func scaled(by k: Int) -> Big { Big(a: a * k, b: b * k, c: c * k, d: d * k, name: name + "x\(k)") }
+    @inline(never) public static func make(n: Int) async -> Big { await Task.yield(); return Big(a: n, b: n + 1, c: n + 2, d: n + 3, name: "big\(n)") }
+}
+@inline(never) public func echo<T>(_ x: T) async -> T { await Task.yield(); return x }
+@inline(never) public func joinAll<C: Collection>(_ c: C, sep: String) async -> String where C.Element == String {
+    await Task.yield(); return c.joined(separator: sep)
+}
+@inline(never) public func describeIt<T: CustomStringConvertible>(_ x: T, times: Int) async throws -> String {
+    await Task.yield(); return String(repeating: x.description, count: times)
+}
+@inline(never) public func bigSum(_ b: Big, plus: Int) async -> Int { await Task.yield(); return b.total + plus }
+@inline(never) public func syncAdd(_ a: Int, _ b: Double) -> Double { Double(a) + b }
+@inline(never) public func syncThrow(_ fail: Bool) throws -> Int { if fail { throw DemoError.code(9) }; return 1 }
+@inline(never) public func sumAll(_ xs: [Int]) async -> Int { await Task.yield(); return xs.reduce(0, +) }
+@inline(never) public func byteCount(_ s: String) -> Int { s.utf8.count }

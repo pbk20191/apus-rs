@@ -64,6 +64,12 @@ pub struct SwiftString {
     pub words: [u64; 2],
 }
 
+#[repr(C)]
+pub struct ArrayAndElements {
+    pub array: *mut c_void,
+    pub elements: *mut c_void,
+}
+
 /// `ErrorValueResult` (include/swift/Runtime/Error.h).
 #[repr(C)]
 pub struct ErrorValueResult {
@@ -103,9 +109,11 @@ extern "C" {
     pub fn swift_release(object: *mut c_void); // C-CC
     pub fn swift_errorRelease(error: *mut c_void); // C-CC
     pub fn swift_bridgeObjectRelease(object: *mut c_void); // C-CC
-    /// `String.init(cString: UnsafePointer<CChar>)`.
-    #[link_name = "$sSS7cStringSSSPys4Int8VG_tcfC"]
-    pub fn string_from_c_string(c_string: *const c_char) -> SwiftString;
+    pub fn swift_conformsToProtocol(metadata: *const c_void, protocol: *const c_void) -> *const c_void; // C-CC
+    pub fn swift_getTypeByMangledNameInContext(name: *const u8, length: usize, context: *const c_void, generic_arguments: *const *const c_void) -> *const c_void;
+    /// `_allocateUninitializedArray<T>(_: Builtin.Word) -> ([T], Builtin.RawPointer)`: what array literals compile to.
+    #[link_name = "$ss27_allocateUninitializedArrayySayxG_BptBwlF"]
+    pub fn allocate_uninitialized_array(count: usize, element: *const c_void) -> ArrayAndElements;
     pub fn swift_dynamicCast(dest: *mut c_void, src: *mut c_void, src_type: *const c_void, target_type: *const c_void, flags: usize) -> bool; // C-CC
     pub fn swift_getErrorValue(error: *const c_void, scratch: *mut *mut c_void, out: *mut ErrorValueResult); // C-CC
     pub fn swift_getExistentialTypeMetadata(class_constraint_any: bool, superclass: *const c_void, count: usize, protocols: *const c_void) -> *const c_void; // C-CC
@@ -186,7 +194,8 @@ pub const REQUIRED_SYMBOLS: &[&str] = &[
     "swift_errorRelease", "swift_dynamicCast", "swift_getErrorValue", "swift_getExistentialTypeMetadata",
     "swift_getTypeName", "$sSqMa", "$sSS11utf8CStrings15ContiguousArrayVys4Int8VGvg", "$sSS10describingSSx_tclufC",
     "$sSiN", "$ss5Int32VN", "$ss6UInt64VN", "$sSdN", "$sSbN", "$sSSN",
-    "swift_bridgeObjectRelease", "$sSS7cStringSSSPys4Int8VG_tcfC",
+    "swift_bridgeObjectRelease", "$sSS18_fromUTF8RepairingySS6result_Sb11repairsMadetSRys5UInt8VGFZ",
+    "swift_conformsToProtocol", "swift_getTypeByMangledNameInContext", "$ss27_allocateUninitializedArrayySayxG_BptBwlF",
     "$sSaMa", "$sSDMa", "$sSSSHsWP", "$sSiSHsWP", "$ss5Int32VSHsWP", "$ss6UInt64VSHsWP",
 ];
 
@@ -246,8 +255,16 @@ pub fn empty_tuple_metadata() -> *const c_void {
         .0
 }
 
+/// A Swift `String` holding a copy of `value` (owned).
+pub fn string_from_utf8(value: &str) -> SwiftString {
+    let mut string = SwiftString { words: [0; 2] };
+    unsafe { rs_string_from_utf8(value.as_ptr(), value.len() as isize, &mut string) };
+    string
+}
+
 // Funclets (csrc/funclets.c).
 extern "C" {
+    fn rs_string_from_utf8(start: *const u8, count: isize, out: *mut SwiftString);
     pub fn rs_entry_fn() -> *const c_void;
     pub fn rs_context_size() -> usize;
     pub fn rs_job_metadata() -> *const c_void;
