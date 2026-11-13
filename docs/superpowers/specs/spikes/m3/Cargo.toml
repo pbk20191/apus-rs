@@ -1,0 +1,13 @@
+[package]
+name = "m3-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+async-swift-rs = { path = "../../../../.." }
+
+[build-dependencies]
+cc = "1"
+
+[workspace]
