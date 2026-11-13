@@ -32,7 +32,7 @@ pub(crate) struct Task {
     continuation: AtomicPtr<c_void>,
     pub(crate) main: bool,
     pub(crate) cancelled: AtomicBool,
-    pub(crate) cancel_waker: Mutex<Option<Waker>>,
+    pub(crate) cancel_wakers: Mutex<Vec<Waker>>,
     on_finish: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
@@ -132,10 +132,8 @@ extern "C" fn rs_is_main(rust: *mut c_void) -> bool {
 extern "C" fn rs_cancelled(rust: *mut c_void) {
     let t = unsafe { task(rust) };
     t.cancelled.store(true, SeqCst);
-    let waker = t.cancel_waker.lock().unwrap().take();
-    if let Some(w) = waker {
-        w.wake();
-    }
+    let wakers = std::mem::take(&mut *t.cancel_wakers.lock().unwrap());
+    wakers.into_iter().for_each(Waker::wake);
 }
 
 /// Creates the Swift Task. `on_finish` runs when the Task completes (after any children).
@@ -146,7 +144,7 @@ pub(crate) fn create(options: SpawnOptions, future: BoxFuture, on_finish: Box<dy
         continuation: AtomicPtr::default(),
         main: options.main,
         cancelled: AtomicBool::new(false),
-        cancel_waker: Mutex::new(None),
+        cancel_wakers: Mutex::new(Vec::new()),
         on_finish: Mutex::new(Some(on_finish)),
     });
     let mut flags = options.priority.raw() as usize | rt::CREATE_ENQUEUE_JOB | rt::CREATE_IS_TASK_FUNCTION_CONSUMED;

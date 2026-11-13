@@ -4,7 +4,9 @@ mod common;
 mod probe;
 
 use async_swift_rs::is_main_thread;
-use async_swift_rs::swift::{current_task, sleep, spawn, spawn_detached, spawn_on_main, spawn_with};
+use async_swift_rs::swift::{cancelled, current_task, priority, sleep, spawn, spawn_detached, spawn_on_main, spawn_with, JoinHandle};
+use std::sync::Mutex;
+use std::task::Waker;
 use std::time::Instant;
 use async_swift_rs::{JoinError, Priority, SpawnOptions};
 use common::{block, check, Failed, Trial};
@@ -99,6 +101,108 @@ fn sleeps_overlap() -> Result<(), Failed> {
     check(start.elapsed() < Duration::from_millis(500), format!("took {:?}", start.elapsed()))
 }
 
+async fn race<T>(a: impl std::future::Future<Output = T>, b: impl std::future::Future<Output = T>) -> T {
+    let (mut a, mut b) = (std::pin::pin!(a), std::pin::pin!(b));
+    poll_fn(|cx| if let Poll::Ready(v) = a.as_mut().poll(cx) { Poll::Ready(v) } else { b.as_mut().poll(cx) }).await
+}
+
+fn cancel_wakes_cancelled_future() -> Result<(), Failed> {
+    let h = spawn(async {
+        let start = Instant::now();
+        let winner = race(async { cancelled().await; "cancelled" }, async { sleep(Duration::from_secs(10)).await; "slept" }).await;
+        (winner, unsafe { probe_is_cancelled() }, start.elapsed())
+    });
+    std::thread::sleep(Duration::from_millis(30));
+    h.cancel();
+    let r = block(h);
+    match r {
+        Ok(("cancelled", true, took)) => check(took < Duration::from_millis(130), format!("took {took:?}")),
+        other => Err(format!("got {other:?}").into()),
+    }
+}
+
+fn abort_drops_future() -> Result<(), Failed> {
+    struct SetOnDrop(Arc<AtomicBool>);
+    impl Drop for SetOnDrop {
+        fn drop(&mut self) { self.0.store(true, Ordering::SeqCst) }
+    }
+    let dropped = Arc::new(AtomicBool::new(false));
+    let guard = SetOnDrop(dropped.clone());
+    let h = spawn(async move { let _g = guard; sleep(Duration::from_secs(10)).await; 1 });
+    std::thread::sleep(Duration::from_millis(10));
+    let start = Instant::now();
+    h.abort();
+    let r = block(h);
+    check(matches!(r, Err(JoinError::Aborted)), format!("got {r:?}"))?;
+    check(start.elapsed() < Duration::from_millis(100), format!("took {:?}", start.elapsed()))?;
+    check(dropped.load(Ordering::SeqCst), "future was not dropped")
+}
+
+fn escalation_visible_after_resume() -> Result<(), Failed> {
+    let options = SpawnOptions { priority: Priority::Utility, ..SpawnOptions::default() };
+    let h = spawn_with(options, async {
+        let before = unsafe { probe_priority() };
+        sleep(Duration::from_millis(40)).await;
+        (before, unsafe { probe_priority() }, priority())
+    });
+    std::thread::sleep(Duration::from_millis(10));
+    h.escalate(Priority::UserInitiated);
+    let r = block(h);
+    check(matches!(r, Ok((0x11, 0x19, Priority::UserInitiated))), format!("got {r:?}"))
+}
+
+static LOCAL_CHILDREN: Mutex<Vec<JoinHandle<String>>> = Mutex::new(Vec::new());
+extern "C" fn spawn_local_readers() {
+    let mut children = LOCAL_CHILDREN.lock().unwrap();
+    children.push(spawn(async { read_local() }));
+    children.push(spawn_with(SpawnOptions { copy_task_locals: false, ..SpawnOptions::default() }, async { read_local() }));
+}
+
+fn task_locals_copied() -> Result<(), Failed> {
+    block(spawn(async { unsafe { probe_with_local(c"hello".as_ptr(), spawn_local_readers) } })).unwrap();
+    let children: Vec<_> = LOCAL_CHILDREN.lock().unwrap().drain(..).collect();
+    let values: Vec<String> = children.into_iter().map(|h| block(h).unwrap()).collect();
+    check(values == ["hello", "<none>"], format!("got {values:?}"))
+}
+
+fn late_wake_after_done_is_noop() -> Result<(), Failed> {
+    for _ in 0..1000 {
+        let stash: Arc<Mutex<Option<Waker>>> = Arc::default();
+        let s = stash.clone();
+        block(spawn(poll_fn(move |cx| { *s.lock().unwrap() = Some(cx.waker().clone()); Poll::Ready(()) }))).unwrap();
+        let waker = stash.lock().unwrap().take().unwrap();
+        waker.wake_by_ref();
+        waker.wake();
+    }
+    Ok(())
+}
+
+fn stress_spawn_wake_cancel() -> Result<(), Failed> {
+    let handles: Vec<_> = (0..20_000u32)
+        .map(|i| {
+            let h = spawn(async move {
+                match i % 4 {
+                    0 => sleep(Duration::from_micros((i % 2000) as u64)).await,
+                    1 => {
+                        let mut n = 0;
+                        poll_fn(|cx| { n += 1; if n > 3 { Poll::Ready(()) } else { cx.waker().wake_by_ref(); Poll::Pending } }).await
+                    }
+                    2 => { race(cancelled(), sleep(Duration::from_secs(5))).await }
+                    _ => {}
+                }
+                i
+            });
+            if i % 4 == 2 { h.cancel() }
+            h
+        })
+        .collect();
+    let start = Instant::now();
+    for h in handles {
+        block(h).map_err(|e| format!("join error {e:?}"))?;
+    }
+    check(start.elapsed() < Duration::from_secs(5), format!("took {:?}", start.elapsed()))
+}
+
 fn main() {
     common::run(vec![
         Trial::test("task_is_swift_task", task_is_swift_task),
@@ -111,5 +215,11 @@ fn main() {
         Trial::test("spawn_in_main_inherits_main", spawn_in_main_inherits_main),
         Trial::test("detached_inherits_nothing", detached_inherits_nothing),
         Trial::test("sleeps_overlap", sleeps_overlap),
+        Trial::test("cancel_wakes_cancelled_future", cancel_wakes_cancelled_future),
+        Trial::test("abort_drops_future", abort_drops_future),
+        Trial::test("escalation_visible_after_resume", escalation_visible_after_resume),
+        Trial::test("task_locals_copied", task_locals_copied),
+        Trial::test("late_wake_after_done_is_noop", late_wake_after_done_is_noop),
+        Trial::test("stress_spawn_wake_cancel", stress_spawn_wake_cancel),
     ])
 }

@@ -126,7 +126,6 @@ impl<F: Future> Future for Guarded<F> {
 
 impl AbortState {
     /// Asks the task to stop at its next poll and wakes it so that poll happens.
-    #[cfg_attr(not(feature = "dispatch"), allow(dead_code))]
     pub(crate) fn request(&self) {
         self.requested.store(true, Ordering::SeqCst);
         if let Some(w) = self.waker.lock().unwrap().take() {

@@ -34,8 +34,26 @@ impl<T> JoinState<T> {
 pub struct JoinHandle<T> {
     pub(crate) state: Arc<JoinState<T>>,
     pub(crate) task: *mut c_void, // +1 AsyncTask
-    #[allow(dead_code)] // read by abort(), which arrives with cancellation
     pub(crate) abort: Arc<AbortState>,
+}
+
+impl<T> JoinHandle<T> {
+    /// Cooperative cancellation, exactly Swift's `task.cancel()`: `cancelled()` resolves and
+    /// `is_cancelled()` turns true inside the task; Swift code it calls sees `Task.isCancelled`.
+    pub fn cancel(&self) {
+        unsafe { rt::swift_task_cancel(self.task) }
+    }
+
+    /// Cancels the task and drops its future at the next poll; awaiting then yields `Err(JoinError::Aborted)`.
+    pub fn abort(&self) {
+        self.cancel();
+        self.abort.request();
+    }
+
+    /// Raises the task's priority, as Swift does when a higher-priority task awaits it.
+    pub fn escalate(&self, priority: crate::Priority) {
+        unsafe { rt::swift_task_escalate(self.task, priority.raw() as usize) };
+    }
 }
 
 unsafe impl<T: Send> Send for JoinHandle<T> {}

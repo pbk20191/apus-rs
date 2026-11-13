@@ -1,16 +1,17 @@
 //! Swift Concurrency backend: every spawned future is a genuine Swift Task.
 
+mod current;
 mod join;
 pub(crate) mod rt;
 mod selfcheck;
 mod task;
 mod timer;
 
+pub use current::{cancelled, current_task, is_cancelled, priority, Cancelled, TaskRef};
 pub use join::{JoinHandle, MainOnlyHandle};
 pub use timer::{sleep, Sleep};
 
 use crate::{Priority, SpawnOptions};
-use std::ffi::c_void;
 use std::future::Future;
 
 /// Spawns `future` like Swift's `Task {}`.
@@ -68,20 +69,4 @@ where
     }
     let inner = task::spawn_with(SpawnOptions { main: true, ..SpawnOptions::default() }, false, MainOnly(future));
     join::unwrap_main_only(inner, |m: MainOnly<F::Output>| m.0)
-}
-
-/// A Swift task, not owned.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TaskRef(*mut c_void);
-
-impl TaskRef {
-    pub fn as_ptr(self) -> *mut c_void {
-        self.0
-    }
-}
-
-/// The Swift task the caller runs in, if any.
-pub fn current_task() -> Option<TaskRef> {
-    let task = unsafe { rt::swift_task_getCurrent() };
-    (!task.is_null()).then_some(TaskRef(task))
 }
