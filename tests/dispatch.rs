@@ -1,6 +1,7 @@
 mod common;
 
-use async_swift_rs::dispatch::{sleep, spawn, spawn_with};
+use async_swift_rs::dispatch::{block_on, sleep, spawn, spawn_detached, spawn_on_main, spawn_with, SerialQueue};
+use async_swift_rs::{is_main_thread, run_main};
 use async_swift_rs::{JoinError, Priority, SpawnOptions};
 use common::{block, check, current_qos, Failed, Trial};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -54,6 +55,62 @@ fn dropped_handle_detaches() -> Result<(), Failed> {
     check(ran.load(Ordering::SeqCst), "detached task did not run")
 }
 
+fn main_task_runs_on_main_thread() -> Result<(), Failed> {
+    let r = block(spawn_on_main(async {
+        let before = is_main_thread();
+        sleep(Duration::from_millis(5)).await;
+        (before, is_main_thread())
+    }));
+    check(matches!(r, Ok((true, true))), format!("got {r:?}"))
+}
+
+fn spawn_inside_main_stays_main() -> Result<(), Failed> {
+    let r = block(spawn_on_main(async {
+        let inherited = spawn(async { is_main_thread() }).await;
+        let detached = spawn_detached(async { is_main_thread() }).await;
+        (inherited, detached)
+    }));
+    check(matches!(r, Ok((Ok(true), Ok(false)))), format!("got {r:?}"))
+}
+
+fn priority_inherited() -> Result<(), Failed> {
+    let r = block(spawn_with(with_priority(Priority::Utility), async { spawn(async { current_qos() }).await }));
+    check(matches!(r, Ok(Ok(0x11))), format!("got {r:?}"))
+}
+
+fn serial_queue_never_overlaps() -> Result<(), Failed> {
+    use std::sync::atomic::AtomicUsize;
+    let queue = SerialQueue::new("async-swift-rs.test.serial", Priority::Utility);
+    let in_flight = Arc::new(AtomicUsize::new(0));
+    let max_seen = Arc::new(AtomicUsize::new(0));
+    let handles: Vec<_> = (0..100)
+        .map(|_| {
+            let (in_flight, max_seen) = (in_flight.clone(), max_seen.clone());
+            queue.spawn(async move {
+                let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                max_seen.fetch_max(now, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_micros(200));
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+            })
+        })
+        .collect();
+    for h in handles {
+        block(h).unwrap();
+    }
+    check(max_seen.load(Ordering::SeqCst) == 1, format!("max in flight {}", max_seen.load(Ordering::SeqCst)))
+}
+
+fn block_on_off_main() -> Result<(), Failed> {
+    let v = block_on(async { sleep(Duration::from_millis(5)).await; 3 });
+    check(v == 3, format!("got {v}"))
+}
+
+fn run_main_off_main_panics() -> Result<(), Failed> {
+    let err = std::panic::catch_unwind(|| run_main(async {})).expect_err("run_main off main must panic");
+    let msg = err.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| err.downcast_ref::<String>().cloned()).unwrap_or_default();
+    check(msg.contains("run_main must be called on the main thread"), format!("message: {msg}"))
+}
+
 fn main() {
     common::run(vec![
         Trial::test("spawn_returns_value", spawn_returns_value),
@@ -62,5 +119,11 @@ fn main() {
         Trial::test("abort_yields_aborted", abort_yields_aborted),
         Trial::test("panic_becomes_join_error", panic_becomes_join_error),
         Trial::test("dropped_handle_detaches", dropped_handle_detaches),
+        Trial::test("main_task_runs_on_main_thread", main_task_runs_on_main_thread),
+        Trial::test("spawn_inside_main_stays_main", spawn_inside_main_stays_main),
+        Trial::test("priority_inherited", priority_inherited),
+        Trial::test("serial_queue_never_overlaps", serial_queue_never_overlaps),
+        Trial::test("block_on_off_main", block_on_off_main),
+        Trial::test("run_main_off_main_panics", run_main_off_main_panics),
     ])
 }

@@ -6,5 +6,7 @@
 mod common;
 #[cfg(feature = "dispatch")]
 pub mod dispatch;
+mod runloop;
 
 pub use common::{JoinError, Priority, SpawnOptions};
+pub use runloop::{is_main_thread, run_main};

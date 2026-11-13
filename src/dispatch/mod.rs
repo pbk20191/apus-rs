@@ -3,7 +3,12 @@
 //! The runnable/trampoline structure follows `dgrijalva/async-dispatch` (Apache-2.0), which in turn follows
 //! the dispatcher in Zed's gpui crate.
 
+mod block_on;
 mod ffi;
+mod queue;
+
+pub use block_on::block_on;
+pub use queue::SerialQueue;
 
 use crate::{JoinError, Priority, SpawnOptions};
 use async_task::Runnable;
@@ -18,7 +23,7 @@ use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy)]
-struct Queue(DispatchQueue);
+pub(crate) struct Queue(DispatchQueue);
 unsafe impl Send for Queue {}
 unsafe impl Sync for Queue {}
 
@@ -28,16 +33,35 @@ impl Queue {
     }
 }
 
+/// `Unspecified` inherits the calling thread's QoS, like an unprioritized Swift `Task {}`.
 fn global_queue(priority: Priority) -> Queue {
     let qos = match priority {
-        Priority::Unspecified => Priority::Default,
+        Priority::Unspecified => match Priority::from_raw(unsafe { qos_class_self() } as u8) {
+            Priority::Unspecified => Priority::Default,
+            inherited => inherited,
+        },
         p => p,
     };
     Queue(unsafe { dispatch_get_global_queue(qos.raw() as isize, 0) })
 }
 
+fn main_queue() -> Queue {
+    Queue(std::ptr::addr_of!(_dispatch_main_q) as DispatchQueue)
+}
+
+thread_local! {
+    /// True while a main-queue task is being polled: `spawn` inside it stays on the main queue.
+    static IN_MAIN_TASK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 extern "C" fn run_runnable(runnable: *mut c_void) {
     unsafe { Runnable::<()>::from_raw(std::ptr::NonNull::new_unchecked(runnable.cast())) }.run();
+}
+
+extern "C" fn run_main_runnable(runnable: *mut c_void) {
+    let previous = IN_MAIN_TASK.replace(true);
+    run_runnable(runnable);
+    IN_MAIN_TASK.set(previous);
 }
 
 /// Shared between a `JoinHandle` and its task: the abort request and the waker that notices it.
@@ -110,19 +134,61 @@ impl<T> Drop for JoinHandle<T> {
     }
 }
 
-fn spawn_on<F>(queue: Queue, future: F) -> JoinHandle<F::Output>
+fn guard<F>(future: F) -> (Guarded<F>, Arc<AbortState>) {
+    let abort = Arc::new(AbortState { requested: AtomicBool::new(false), waker: Mutex::new(None) });
+    (Guarded { future: Some(future), abort: abort.clone() }, abort)
+}
+
+/// Schedules a runnable on `queue`; `keep_alive` is held by the schedule closure (serial queues).
+fn scheduler<K: Send + Sync + 'static>(queue: Queue, keep_alive: K) -> impl Fn(Runnable) + Send + Sync + 'static {
+    let trampoline: DispatchFunction = if queue.raw() == main_queue().raw() { run_main_runnable } else { run_runnable };
+    move |runnable: Runnable| {
+        let _ = &keep_alive;
+        unsafe { dispatch_async_f(queue.raw(), runnable.into_raw().as_ptr().cast(), trampoline) }
+    }
+}
+
+pub(crate) fn spawn_on<F, K>(queue: Queue, keep_alive: K, future: F) -> JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+    K: Send + Sync + 'static,
+{
+    let (guarded, abort) = guard(future);
+    let (runnable, task) = async_task::spawn(guarded, scheduler(queue, keep_alive));
+    runnable.schedule();
+    JoinHandle { task: Some(task), abort }
+}
+
+/// Spawns `future` on the main queue. Main-queue tasks run only while the main run loop runs.
+pub fn spawn_on_main<F>(future: F) -> JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    let abort = Arc::new(AbortState { requested: AtomicBool::new(false), waker: Mutex::new(None) });
-    let guarded = Guarded { future: Some(future), abort: abort.clone() };
-    let schedule = move |runnable: Runnable| unsafe {
-        dispatch_async_f(queue.raw(), runnable.into_raw().as_ptr().cast(), run_runnable)
-    };
-    let (runnable, task) = async_task::spawn(guarded, schedule);
+    spawn_on(main_queue(), (), future)
+}
+
+/// Like [`spawn_on_main`] for `!Send` futures. Panics off the main thread.
+pub fn spawn_local_on_main<F>(future: F) -> JoinHandle<F::Output>
+where
+    F: Future + 'static,
+    F::Output: 'static,
+{
+    assert!(crate::is_main_thread(), "spawn_local_on_main must be called on the main thread");
+    let (guarded, abort) = guard(future);
+    let (runnable, task) = async_task::spawn_local(guarded, scheduler(main_queue(), ()));
     runnable.schedule();
     JoinHandle { task: Some(task), abort }
+}
+
+/// Spawns without inheriting anything from the caller (Swift's `Task.detached`): default priority, not main.
+pub fn spawn_detached<F>(future: F) -> JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    spawn_on(global_queue(Priority::Default), (), future)
 }
 
 /// Spawns `future` with default options.
@@ -134,13 +200,17 @@ where
     spawn_with(SpawnOptions::default(), future)
 }
 
-/// Spawns `future` with explicit options.
+/// Spawns `future` with explicit options. Inside a main-queue task the new task stays on the main queue
+/// (Swift keeps the actor for `Task {}`); use [`spawn_detached`] to leave it.
 pub fn spawn_with<F>(options: SpawnOptions, future: F) -> JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    spawn_on(global_queue(options.priority), future)
+    if options.main || IN_MAIN_TASK.get() {
+        return spawn_on_main(future);
+    }
+    spawn_on(global_queue(options.priority), (), future)
 }
 
 /// Completes after `duration`, using `dispatch_after_f`.

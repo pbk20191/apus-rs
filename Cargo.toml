@@ -25,3 +25,13 @@ libtest-mimic = "0.8"
 name = "dispatch"
 harness = false
 required-features = ["dispatch"]
+
+[[test]]
+name = "dispatch_main_deadlock"
+harness = false
+required-features = ["dispatch"]
+
+[[test]]
+name = "dispatch_run_main"
+harness = false
+required-features = ["dispatch"]
