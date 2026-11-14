@@ -65,3 +65,20 @@ tokio에는 공식 guest mode가 없다. `current_thread` 런타임으로 두 �
 - 유휴 2초 동안 turn: 세션이 있으면 약 2번/초(SLOW + stats 요청), 세션 종료 후에는 stats 요청에 따른 것뿐.
 
 주의: `block2`는 C `bool` 블록 인자를 직접 받지 못해 `u8`로 선언했다.
+
+## nw_hyper: 같은 서버, HTTP는 hyper
+
+`cargo build --bin nw_hyper && BIN=nw_hyper ./test_nw.sh`
+
+- `NwIo`가 `nw_connection`을 `hyper::rt::Read`/`Write`로 감싼다. hyper는 `http1` + `server` feature만 쓰고 타이머와 executor는 넘기지 않았다.
+- 읽기 큐는 `dispatch_data` 그대로다: 새 조각은 `dispatch_data_create_concat`으로 붙이고, `dispatch_data_apply`가 주는 각 조각의 주소에서
+  hyper 버퍼로 바로 복사하고, 읽은 만큼 `dispatch_data_create_subrange`로 잘라 낸다. 복사는 hyper 버퍼로 가는 1번뿐
+  (`/stats`의 `bytes_copied_in`이 받은 바이트 수와 같다).
+- 쓰기는 `dispatch_data_create`가 복사한다 (hyper는 바이트를 빌려줄 뿐). 미전송 바이트가 256 KB를 넘으면 `Pending`으로 역압을 건다.
+- GET /mcp는 SSE 스트림 (`http_body::Body`를 채널로 구현). 서버가 먼저 보내는 메시지가 여기로 나간다:
+  `announce` 도구가 보낸 `notifications/resources/list_changed`를 curl이 받았다.
+- 300 KB 요청 본문(여러 조각으로 도착)도 정상 처리.
+
+결과: nw_mcp의 모든 시나리오 통과. 한 연결에서 `sum` 200회: 중앙값 171 µs, p95 239 µs (직접 쓴 HTTP는 156 µs / 191 µs). 스레드 2개.
+
+주의: 함수 이름은 `dispatch_data_create_subrange`다 (`subregion`은 없다).

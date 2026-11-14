@@ -1,7 +1,7 @@
 #!/bin/bash
 # Drives the nw_mcp server with curl.
 cd "$(dirname "$0")"
-./target/debug/nw_mcp > server.out 2> server.err & SERVER=$!
+./target/debug/${BIN:-nw_mcp} > server.out 2> server.err & SERVER=$!
 trap 'kill $SERVER 2>/dev/null' EXIT
 for _ in $(seq 50); do PORT=$(sed -n 's/.*127.0.0.1:\([0-9]*\).*/\1/p' server.out); [ -n "$PORT" ] && break; sleep 0.1; done
 [ -n "$PORT" ] || { echo "server did not start"; cat server.err; exit 1; }
@@ -22,6 +22,19 @@ echo "bad json          → HTTP $(post '{nope' -o /dev/null -w '%{http_code}')"
 sleep 0.05
 echo "concurrent fast   → $(post '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"sum","arguments":{"a":1,"b":1}}}' | text)"
 wait $SLOW
+if [ "${BIN:-nw_mcp}" = nw_hyper ]; then
+  curl -s -N --max-time 2 $U/mcp > sse.out & SSE=$!
+  sleep 0.3
+  echo "announce          → $(post '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"announce","arguments":{}}}' | text)"
+  wait $SSE; echo "GET stream got    → $(tr '\n' '|' < sse.out | cut -c1-200)"
+  python3 - $U <<'PY2'
+import http.client, sys, urllib.parse, json
+u = urllib.parse.urlparse(sys.argv[1]); c = http.client.HTTPConnection(u.hostname, u.port, timeout=5)
+big = "x" * 300000
+c.request("POST", "/mcp", json.dumps({"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"sum","arguments":{"a":1,"b":2},"_pad":big}}), {"Content-Type":"application/json"})
+r = c.getresponse(); print("300 KB request    →", r.status, r.read()[:90])
+PY2
+fi
 python3 - $U <<'PY'
 import json, sys, time, http.client, urllib.parse
 u = urllib.parse.urlparse(sys.argv[1]); c = http.client.HTTPConnection(u.hostname, u.port, timeout=5); samples = []
