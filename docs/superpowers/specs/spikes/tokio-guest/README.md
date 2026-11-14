@@ -91,3 +91,9 @@ tokio에는 공식 guest mode가 없다. `current_thread` 런타임으로 두 �
 - `schemars`가 유도한 `inputSchema`는 의미는 같지만 형태가 다르다: `$schema`, `$defs`/`$ref`(enum), `"format": "int64"`,
   nullable이 `anyOf` 대신 `"type": ["array", "null"]`, `$ref`로 빠진 enum의 `default` 누락.
 - 매크로에는 `input_schema = <expr>` 인자가 있어서, 라우팅과 인자 타입은 매크로로 하고 스키마만 계약에서 가져올 수 있다.
+
+## stateless: 요청마다 rmcp 서비스 하나 (`serve_directly`)
+
+`cargo run --bin stateless`. initialize 핸드셰이크 없이 `rmcp::service::serve_directly`로 서비스를 만들고, 메시지 하나를
+전달한 뒤 응답이 나가면 닫는 `OneShot` 트랜스포트를 붙였다. `initialize`, `tools/list`, `tools/call`, `ping` 모두 응답했고
+서비스는 매번 `Closed`로 바로 끝났다 (4개 요청에 약 5 ms). desktop-mcp의 기본 모드(stateless `POST /mcp`)를 이렇게 구현할 수 있다.
