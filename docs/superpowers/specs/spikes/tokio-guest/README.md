@@ -82,3 +82,12 @@ tokio에는 공식 guest mode가 없다. `current_thread` 런타임으로 두 �
 결과: nw_mcp의 모든 시나리오 통과. 한 연결에서 `sum` 200회: 중앙값 171 µs, p95 239 µs (직접 쓴 HTTP는 156 µs / 191 µs). 스레드 2개.
 
 주의: 함수 이름은 `dispatch_data_create_subrange`다 (`subregion`은 없다).
+
+## schema: rmcp 매크로가 만든 스키마 vs desktop-mcp의 `spec/tools.json`
+
+`cargo run --bin schema` (Click, Scroll 두 도구로 비교).
+
+- `#[tool(name, description, annotations(...))]`: annotations는 계약과 같게 나온다.
+- `schemars`가 유도한 `inputSchema`는 의미는 같지만 형태가 다르다: `$schema`, `$defs`/`$ref`(enum), `"format": "int64"`,
+  nullable이 `anyOf` 대신 `"type": ["array", "null"]`, `$ref`로 빠진 enum의 `default` 누락.
+- 매크로에는 `input_schema = <expr>` 인자가 있어서, 라우팅과 인자 타입은 매크로로 하고 스키마만 계약에서 가져올 수 있다.
