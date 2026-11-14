@@ -47,3 +47,21 @@ tokio에는 공식 guest mode가 없다. `current_thread` 런타임으로 두 �
   "tick 켜기를 빠뜨리면 멈춘다"는 위험이 실제로 나타난 사례다.
 - `dispatch::spawn`은 메인 큐 태스크 안에서 부르면 메인 큐에 남는다. 메인 밖에서 일하려면 `spawn_detached`를 써야 한다.
 - tokio 타이머 정밀도는 tick(50 ms)에 묶인다 (120 ms 요청 → 약 150 ms).
+
+## nw_mcp: Network.framework + rmcp, HTTP로 MCP 서버
+
+`cargo build --bin nw_mcp && ./test_nw.sh` (curl과 Python 클라이언트로 구동).
+
+- 트랜스포트: Network.framework C API (`nw_listener`, `nw_connection`)를 직접 선언해서 사용, 블록은 `block2`. 모든 콜백을 메인 큐로 받는다.
+  읽기/쓰기 완료 블록을 `oneshot`으로 future에 연결했다.
+- HTTP/1.1: `httparse` + Content-Length만 처리 (keep-alive 포함). POST 하나에 JSON-RPC 메시지 하나, 응답은 `application/json`.
+- 세션: rmcp 서비스 하나 = 세션 하나. 응답은 요청 id로 대기 중인 HTTP 요청에 돌려준다. GET 스트림이 없어서 서버가 먼저 보내는 메시지는 버린다.
+- turn: poll 직후 1회(KICK), 요청 처리 중 50 ms(FAST), 세션이 살아 있는 동안 1 s(SLOW).
+
+결과 (macOS 27.3 arm64, debug 빌드):
+- initialize, notifications/initialized(202), tools/list, tools/call 3종, 없는 도구 오류, 잘못된 JSON(400), 세션 없는 요청(400), 동시 요청, DELETE로 세션 종료 모두 동작.
+- 한 연결에서 `sum` 200회: 중앙값 152 µs, p95 203 µs.
+- 프로세스 스레드 2개: 메인 스레드와 유휴 dispatch 워커 1개. tokio 스레드 없음.
+- 유휴 2초 동안 turn: 세션이 있으면 약 2번/초(SLOW + stats 요청), 세션 종료 후에는 stats 요청에 따른 것뿐.
+
+주의: `block2`는 C `bool` 블록 인자를 직접 받지 못해 `u8`로 선언했다.
