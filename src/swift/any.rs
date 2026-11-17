@@ -1,6 +1,7 @@
 //! Owned Swift `Any` values and `any Error` boxes, read through the runtime's casting and value witnesses.
 
 use super::rt;
+use super::value::{SwiftType, SwiftValue, UninitValue};
 use std::ffi::c_void;
 
 /// An owned Swift `Any` (opaque existential: 3-word value buffer + type metadata).
@@ -220,22 +221,60 @@ impl SwiftError {
         SwiftError { boxed }
     }
 
-    fn opened(&self) -> rt::ErrorValueResult {
+    /// Runs `f` on the opened error: its value's address, dynamic type and Error conformance. For an NSError the
+    /// runtime stores the object in `scratch` and the value is the address of `scratch`, so it lives only as long
+    /// as this call.
+    fn with_opened<R>(&self, f: impl FnOnce(&rt::ErrorValueResult) -> R) -> R {
         let mut scratch = std::ptr::null_mut();
         let mut out = rt::ErrorValueResult { value: std::ptr::null(), type_: std::ptr::null(), error_conformance: std::ptr::null() };
         unsafe { rt::swift_getErrorValue(self.boxed, &mut scratch, &mut out) };
-        out
+        f(&out)
+    }
+
+    /// The error's dynamic type.
+    pub fn ty(&self) -> SwiftType {
+        self.with_opened(|opened| unsafe { SwiftType::from_metadata(opened.type_) })
+    }
+
+    /// A copy of the error as a value of `ty`, if it is one (`swift_dynamicCast`); the error itself is kept.
+    pub fn downcast(&self, ty: SwiftType) -> Option<SwiftValue> {
+        let storage = UninitValue::new(ty);
+        let mut boxed = self.boxed; // the `any Error` value: one reference, not consumed (no TakeOnSuccess)
+        let any_error = SwiftType::from_mangled_name("s5Error_p")?;
+        let cast = unsafe {
+            rt::swift_dynamicCast(storage.ptr.as_ptr().cast(), (&mut boxed as *mut *mut c_void).cast(), any_error.as_ptr(), ty.as_ptr(), 0)
+        };
+        cast.then(|| unsafe { storage.assume_init() })
+    }
+
+    /// [`downcast`](Self::downcast) to the Swift type of `T`, copied out as `T`.
+    pub fn downcast_value<T: FromSwiftAny>(&self) -> Option<T> {
+        self.downcast(SwiftType::of::<T>())?.get::<T>()
+    }
+
+    /// The error's domain, as `NSError.domain` gives it: the NSError's own for an NSError, else the type's name.
+    pub fn domain(&self) -> String {
+        self.with_opened(|opened| unsafe {
+            let mut domain = rt::apus_error_domain(opened.value, opened.type_, opened.error_conformance);
+            let out = rt::string_to_rust(&domain);
+            rt::destroy_string(&mut domain);
+            out
+        })
+    }
+
+    /// The error's code, as `NSError.code` gives it.
+    pub fn code(&self) -> i64 {
+        self.with_opened(|opened| unsafe { rt::apus_error_code(opened.value, opened.type_, opened.error_conformance) as i64 })
     }
 
     /// The qualified Swift name of the error's dynamic type.
     pub fn type_name(&self) -> String {
-        unsafe { rt::type_name(self.opened().type_) }
+        self.with_opened(|opened| unsafe { rt::type_name(opened.type_) })
     }
 
     /// `String(describing: error)`.
     pub fn description(&self) -> String {
-        let opened = self.opened();
-        unsafe {
+        self.with_opened(|opened| unsafe {
             let witnesses = rt::value_witnesses(opened.type_);
             let align = (witnesses.flags as usize & 0xff) + 1;
             let layout = std::alloc::Layout::from_size_align(witnesses.size.max(1), align.max(16)).unwrap();
@@ -246,7 +285,7 @@ impl SwiftError {
             let out = rt::string_to_rust(&text);
             rt::destroy_string(&mut text);
             out
-        }
+        })
     }
 }
 

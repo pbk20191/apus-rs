@@ -92,6 +92,11 @@ harness = false
 required-features = ["test-probe"]
 
 [[test]]
+name = "swift_errors"
+harness = false
+required-features = ["test-probe"]
+
+[[test]]
 name = "swift_isolation"
 harness = false
 required-features = ["test-probe"]

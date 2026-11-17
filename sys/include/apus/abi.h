@@ -36,6 +36,8 @@
 #define rs_entry_fn APUS_NAME(rs_entry_fn)
 #define apus_fill_isolation APUS_NAME(apus_fill_isolation)
 #define apus_actor_unowned_executor APUS_NAME(apus_actor_unowned_executor)
+#define apus_error_domain APUS_NAME(apus_error_domain)
+#define apus_error_code APUS_NAME(apus_error_code)
 #define rs_context_size APUS_NAME(rs_context_size)
 #define rs_job_metadata APUS_NAME(rs_job_metadata)
 #define rs_run_job_fn APUS_NAME(rs_run_job_fn)
@@ -289,6 +291,9 @@ void rs_call_sync(const void *function, const CallRegs *regs, void *indirect, Re
 
 // swift_task_isCancelled: its Bool result is not extended to a full register as a C uint8_t return would be.
 uint8_t apus_swift_task_isCancelled(void *task) APUS_BOUNDARY(apus_swift_task_isCancelled) APUS_C;
+// Error._domain / Error._code: self (the opened error value) rides in swift_context.
+SwiftString apus_error_domain(const void *value, const void *self_type, const void *error_witness) APUS_BOUNDARY(apus_error_domain) APUS_C;
+intptr_t apus_error_code(const void *value, const void *self_type, const void *error_witness) APUS_BOUNDARY(apus_error_code) APUS_C;
 // actor_unowned_executor: self rides in swift_context.
 SerialExecutorRef apus_actor_unowned_executor(void *actor, const void *self_type, const void *actor_witness)
     APUS_BOUNDARY(apus_actor_unowned_executor) APUS_C;
@@ -298,6 +303,11 @@ SerialExecutorRef apus_actor_unowned_executor(void *actor, const void *self_type
 
 // Returns Bool: only bit 0 is defined.
 extern APUS_SWIFTCALL uint8_t swift_task_isCancelled(void *task) APUS_THUNK;
+// `Error._domain` and `Error._code` through the protocol's dispatch thunks: (swiftself value, Self metadata, witness).
+extern APUS_SWIFTCALL SwiftString error_domain(APUS_SWIFT_CONTEXT const void *value, const void *self_type, const void *error_witness)
+    APUS_SYMBOL("$ss5ErrorP7_domainSSvgTj") APUS_THUNK;
+extern APUS_SWIFTCALL intptr_t error_code(APUS_SWIFT_CONTEXT const void *value, const void *self_type, const void *error_witness)
+    APUS_SYMBOL("$ss5ErrorP5_codeSivgTj") APUS_THUNK;
 // `Actor.unownedExecutor` through the protocol's dispatch thunk: (swiftself actor, Self metadata, Actor witness table).
 extern APUS_SWIFTCALL SerialExecutorRef actor_unowned_executor(APUS_SWIFT_CONTEXT void *actor, const void *self_type,
                                                                const void *actor_witness)

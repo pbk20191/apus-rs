@@ -282,3 +282,13 @@ public actor Slow {
 }
 @inline(never) public func makeSlow() -> Slow { Slow() }
 @inline(never) public func slowDeinitState() -> Int { slowDeinitInJob }
+
+// Errors (tests/swift_errors.rs).
+public struct StructError: Error {
+    public let code: Int
+    public let detail: String
+    public init(code: Int, detail: String) { self.code = code; self.detail = detail }
+}
+@inline(never) public func throwStruct(code: Int) throws -> Int { throw StructError(code: code, detail: "bad") }
+@inline(never) public func throwNSError(code: Int) throws -> Int { throw NSError(domain: "probe.domain", code: code) }
+@inline(never) public func structErrorCode<E: Error>(_ error: E) -> Int { (error as? StructError)?.code ?? -1 }
