@@ -2,7 +2,7 @@
 //! drains it on a worker thread) while libtest-mimic runs the trials on other threads.
 #![allow(dead_code)]
 
-use std::future::Future;
+use std::future::{poll_fn, Future};
 use std::pin::pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -81,4 +81,16 @@ pub fn latest_waker_woken<S: Future<Output = ()>>(sleep: S) -> bool {
     assert!(sleep.as_mut().poll(&mut Context::from_waker(&wb)).is_pending());
     std::thread::sleep(std::time::Duration::from_millis(200));
     b.0.load(Ordering::SeqCst)
+}
+
+/// Polls two futures together, like `join!`.
+pub async fn join2<A, B>(a: impl Future<Output = A>, b: impl Future<Output = B>) -> (A, B) {
+    let (mut a, mut b) = (pin!(a), pin!(b));
+    let (mut ra, mut rb) = (None, None);
+    poll_fn(|cx| {
+        if ra.is_none() { if let Poll::Ready(v) = a.as_mut().poll(cx) { ra = Some(v) } }
+        if rb.is_none() { if let Poll::Ready(v) = b.as_mut().poll(cx) { rb = Some(v) } }
+        if ra.is_some() && rb.is_some() { Poll::Ready((ra.take().unwrap(), rb.take().unwrap())) } else { Poll::Pending }
+    })
+    .await
 }

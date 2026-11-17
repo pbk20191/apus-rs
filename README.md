@@ -381,6 +381,8 @@ A SwiftUI app whose `App` type is written in Swift starts with `App.main()`:
 - **Actor and `@MainActor` sync members**: a sync method or getter of an `(actor)` type, or a declaration marked
   `@MainActor`, is declared `async fn` in Rust; apus hops to the executor (`Actor.unownedExecutor`, so custom executors
   work), calls, and hops back. Declared `fn`, it is a compile error. `nonisolated` members are called directly.
+  Isolation a member inherits from its type (members of a `@MainActor class`) is not in the symbol: write
+  `@MainActor` on each such member's declaration, or apus calls it without hopping.
   ```rust
   apus::swift! {
       #[swift_linked = "MyApp.Store(actor).count: Int { get }"]
@@ -391,7 +393,8 @@ A SwiftUI app whose `App` type is written in Swift starts with `App.main()`:
   ```
 - **Typed throws**: only a generic or associated error type (`throws(E)`): pass an `ErrorSlot::of(E's type)` after the
   generic arguments (`swift!` requires it, and refuses it elsewhere) and declare no `throws` in Rust; a thrown error is `CallError::Typed(SwiftValue)`. A concrete error
-  type is refused: whether its error comes back in registers or through a slot depends on its layout.
+  type is refused: whether its error comes back in registers or through a slot depends on its layout. `throws(Never)`
+  is a function that does not throw, as in Swift.
 - **`nonisolated(nonsending)`**: write it in the declaration; apus passes the caller's isolation as the hidden first
   argument. **The symbol is the same as a plain async function's**: a declaration without the attribute calls such a
   function with its arguments shifted, and nothing can detect it.

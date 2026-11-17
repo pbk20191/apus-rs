@@ -114,6 +114,11 @@ impl SwiftProtocol {
         self.symbol
     }
 
+    /// Whether the descriptor is in the process (a protocol of a framework the OS lacks is not).
+    pub fn is_available(&self) -> bool {
+        self.descriptor().is_some()
+    }
+
     fn descriptor(&self) -> Option<*const c_void> {
         let address = *self.descriptor.get_or_init(|| lookup(self.symbol));
         (address != 0).then_some(address as *const c_void)

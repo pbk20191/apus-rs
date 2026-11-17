@@ -9,7 +9,7 @@ use apus::{Priority, SpawnOptions};
 use std::future::poll_fn;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use common::{block, check, Failed, Trial};
+use common::{block, check, join2, Failed, Trial};
 use probe::*;
 use std::future::Future;
 use std::pin::pin;
@@ -95,17 +95,6 @@ fn main_actor_kept_after_call() -> Result<(), Failed> {
         is_main_thread() && unsafe { probe_assume_main() }
     }));
     check(matches!(r, Ok(true)), format!("got {r:?}"))
-}
-
-async fn join2<A, B>(a: impl Future<Output = A>, b: impl Future<Output = B>) -> (A, B) {
-    let (mut a, mut b) = (pin!(a), pin!(b));
-    let (mut ra, mut rb) = (None, None);
-    poll_fn(|cx| {
-        if ra.is_none() { if let Poll::Ready(v) = a.as_mut().poll(cx) { ra = Some(v) } }
-        if rb.is_none() { if let Poll::Ready(v) = b.as_mut().poll(cx) { rb = Some(v) } }
-        if ra.is_some() && rb.is_some() { Poll::Ready((ra.take().unwrap(), rb.take().unwrap())) } else { Poll::Pending }
-    })
-    .await
 }
 
 async fn race<T>(a: impl Future<Output = T>, b: impl Future<Output = T>) -> T {

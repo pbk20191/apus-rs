@@ -501,13 +501,17 @@ impl<'a> Parser<'a> {
                 params.push(Param { label, ty, inout, variadic, isolated });
             }
             let is_async = self.eat_keyword("async");
-            let throws = self.eat_keyword("throws");
-            // `throws(E)`; `throws(any Error)` is plain `throws`.
+            let mut throws = self.eat_keyword("throws");
+            // `throws(E)`; `throws(any Error)` is plain `throws`, `throws(Never)` no `throws` at all.
             let typed_error = if throws && self.eat("(") {
                 let ty = self.ty()?;
                 self.expect(")")?;
                 match ty {
                     Ty::Existential(ref p) if p.name == "Error" && p.module == "Swift" => None,
+                    Ty::Nominal { ref module, ref path, ref args } if module == "Swift" && args.is_empty() && matches!(path.as_slice(), [(name, _)] if name == "Never") => {
+                        throws = false;
+                        None
+                    }
                     ty => Some(ty),
                 }
             } else {

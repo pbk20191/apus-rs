@@ -88,6 +88,9 @@ pub fn isolation(declaration: &str) -> Result<Isolation, Error> {
     })
 }
 
+const CONCRETE_TYPED_THROWS: &str =
+    "concrete typed throws is not supported yet: its error may come back in registers or through a slot depending on layout";
+
 /// Whether the declaration has typed throws (`throws(E)`), which apus calls with an error slot. Only a generic or
 /// associated error type is accepted: a concrete one comes back in registers or through a slot depending on its
 /// layout, which the declaration does not tell.
@@ -95,10 +98,7 @@ pub fn typed_throws(declaration: &str) -> Result<bool, Error> {
     let decl = parse::parse(declaration).map_err(Error)?;
     match &decl.signature {
         ast::Signature::Function { typed_error: Some(ast::Ty::Param(_) | ast::Ty::Member(..)), .. } => Ok(true),
-        ast::Signature::Function { typed_error: Some(_), .. } => Err(Error(
-            "concrete typed throws is not supported yet: its error may come back in registers or through a slot depending on layout"
-                .into(),
-        )),
+        ast::Signature::Function { typed_error: Some(_), .. } => Err(Error(CONCRETE_TYPED_THROWS.into())),
         _ => Ok(false),
     }
 }
@@ -265,7 +265,8 @@ pub fn generic_plan(declaration: &str) -> Result<Option<GenericPlan>, Error> {
     }
     let error_slot_from = match typed_error {
         Some(Ty::Param(param)) => Some(metadata_from[param.index]),
-        Some(_) => return explicit("typed throws of an associated type".into()),
+        Some(Ty::Member(..)) => return explicit("typed throws of an associated type".into()),
+        Some(_) => return Err(Error(CONCRETE_TYPED_THROWS.into())),
         None => None,
     };
     let result_from = match result {
@@ -345,5 +346,11 @@ mod isolation_tests {
         assert_eq!(typed_throws("M.f() throws(any Error) -> Int").unwrap(), false);
         assert_eq!(typed_throws("M.f() throws -> Int").unwrap(), false);
         assert!(typed_throws("M.f() throws(Boom(struct)) -> Int").unwrap_err().to_string().contains("concrete typed throws"));
+        // `throws(Never)` cannot throw: Swift mangles and calls it as a function without `throws`.
+        assert_eq!(super::mangle("M.f() throws(Never) -> Int").unwrap(), "$s1M1fSiyF");
+        assert_eq!(super::mangle("M.g() async throws(Never) -> Int").unwrap(), "$s1M1gSiyYaF");
+        assert_eq!(typed_throws("M.f() throws(Never) -> Int").unwrap(), false);
+        let concrete = super::generic_plan("M.g<T>(_: T) throws(Boom(struct)) -> Int").unwrap_err().to_string();
+        assert!(concrete.contains("concrete typed throws") && !concrete.contains("associated"), "{concrete}");
     }
 }

@@ -196,7 +196,7 @@ impl<R: SwiftRet> SwiftSyncCall<R> {
     #[doc(hidden)]
     pub fn hop(self, to: HopTo) -> SwiftCall<R> {
         let SwiftSyncCall { function, symbol, lowering, slot, indirect, throws, consumed, invalid, .. } = self;
-        debug_assert!(consumed.is_none(), "an actor's self is a class reference, never consumed");
+        assert!(consumed.is_none(), "apus: a consumed self cannot hop to an executor (the callee would destroy it, then apus again)");
         let kind = if indirect { KIND_INDIRECT } else if R::FLOAT { KIND_FLOATS } else { KIND_INTEGERS };
         let executor = match to {
             HopTo::Main => Some(unsafe { super::rt::swift_task_getMainExecutor() }),

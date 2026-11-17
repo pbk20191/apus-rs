@@ -7,7 +7,7 @@ mod probe;
 
 use apus::is_main_thread;
 use apus::swift::{spawn, spawn_on_main, CallError, ErrorSlot, Isolation, SwiftObject, SwiftProtocol, SwiftType, SwiftValue, WitnessTable};
-use common::{block, check, Failed, Trial};
+use common::{block, check, join2, Failed, Trial};
 
 apus::swift! {
     #[swift_linked = "Probe.withIsolation(_: Int, isolation: isolated (any Actor)? = #isolation) async -> Int"]
@@ -131,6 +131,11 @@ fn isolated_parameter() -> Result<(), Failed> {
     check(plain == 5, format!("plain task: nil, got {plain}"))?;
     let child = block(spawn_on_main(async { with_isolation(5, Isolation::current()).child().await.unwrap() })).unwrap();
     check(child == 5, format!("child Task of a main task: nil, got {child}"))?;
+    let joined = block(spawn_on_main(async {
+        join2(with_isolation(5, Isolation::current()), with_isolation(6, Isolation::current())).await
+    }))
+    .unwrap();
+    check(matches!(joined, (Ok(5), Ok(6))), format!("calls polled together run as child Tasks: nil, got {joined:?}"))?;
     // A sync call runs where it is made.
     let sync_main = block(spawn_on_main(async { isolation_kind(Isolation::current()).unwrap() })).unwrap();
     check(sync_main == 1, format!("sync, main task: MainActor, got {sync_main}"))?;
