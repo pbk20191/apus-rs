@@ -220,7 +220,7 @@ fn sleep_wakes_latest_waker() -> Result<(), Failed> {
 
 /// macOS 15 runtime functions are looked up at run time (or linked with `macos15`); the test host runs macOS 15+.
 fn preferred_executor_is_optional() -> Result<(), Failed> {
-    check(apus_sys::optional::swift_task_getPreferredTaskExecutor().is_some(), "macOS 15+ runtime")
+    check(apus::__sys::optional::swift_task_getPreferredTaskExecutor().is_some(), "macOS 15+ runtime")
 }
 
 fn main() {

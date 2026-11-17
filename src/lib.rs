@@ -3,8 +3,10 @@
 //! The main queue must be drained by `CFRunLoopRun` or `NSApplication.run`, never by `dispatch_main`:
 //! `dispatch_main` drains it on a worker thread, which breaks AppKit and MainActor code.
 
+/// apus-sys, for apus's own tests. Not part of the API.
 #[cfg(feature = "swift")]
-extern crate apus_sys;
+#[doc(hidden)]
+pub use ::apus_sys as __sys;
 
 mod common;
 #[cfg(feature = "dispatch")]

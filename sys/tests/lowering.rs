@@ -21,13 +21,18 @@ fn caller(decl: &Decl) -> String {
     format!("{} call_{}({params}) {{ {body} }}\n", decl.ret, decl.name)
 }
 
+/// This run's scratch directory (removed when the test ends).
+fn scratch() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("apus-lowering-{}", std::process::id()))
+}
+
 fn disassemble(source: &str, arch: &str, tag: &str, bindgen: bool) -> String {
-    let dir = std::env::temp_dir().join(format!("apus-lowering-{}", std::process::id()));
+    let dir = scratch();
     std::fs::create_dir_all(&dir).unwrap();
     let (c, o) = (dir.join(format!("{tag}-{arch}.c")), dir.join(format!("{tag}-{arch}.o")));
     std::fs::write(&c, source).unwrap();
     let mut clang = Command::new("xcrun");
-    clang.args(["clang", "-O2", "-arch", arch, "-c"]).arg(format!("-I{}", ast::include_dir().display()));
+    clang.args(["clang", "-O2", "-arch", arch, "-c", "-DAPUS_SYS_BUILD"]).arg(format!("-I{}", ast::include_dir().display()));
     if bindgen {
         clang.arg("-DAPUS_BINDGEN");
     }
@@ -86,6 +91,7 @@ fn main() {
             }
         }
     }
+    std::fs::remove_dir_all(scratch()).ok();
     if direct.is_empty() {
         failures.push("no APUS_DIRECT declarations found".to_string());
     }

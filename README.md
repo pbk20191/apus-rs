@@ -347,5 +347,11 @@ rustflags = ["-Clinker-plugin-lto"]
 lto = "fat"
 ```
 
-The C side is compiled for the CPU rustc targets (`-C target-cpu`, default `apple-m1`); LLVM does not inline a Rust
-function into C compiled for a lesser CPU. A clang with another LLVM version stops the build with a message.
+`scripts/xlto-link` links with the LLVM at `APUS_LLVM` (default `/opt/homebrew/opt/llvm`); point it at the same LLVM as
+`CC_*`. With a git or registry dependency, copy the script into your project and set `linker` to it.
+
+The C side is compiled for the CPU rustc targets (the last `-C target-cpu`, default `apple-m1`); LLVM does not inline a
+Rust function into C compiled for a lesser CPU. `-C target-feature` is not forwarded, so extra features may keep the
+callbacks from inlining (it still links and runs). The build stops with a message when the feature is used with Apple
+clang, a clang of another LLVM version, a non-macOS target, or without `-Clinker-plugin-lto`. `xlto-link` drops
+rustc's `-plugin-opt` arguments, the LTO optimization level among them, so the link uses libLTO's default level.

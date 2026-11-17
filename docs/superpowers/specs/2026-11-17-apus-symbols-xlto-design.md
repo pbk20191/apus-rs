@@ -1,6 +1,6 @@
 # apus 내부 경계 심볼: 충돌 방지와 크로스 언어 LTO
 
-작성일: 2026-11-17 · 상태: 승인 (소유자 "continue")
+작성일: 2026-11-17 · 상태: 구현됨 (7d614a3, b293a01, 리뷰 반영). 4.1의 이름 바꾸기는 구현 중 바뀜(아래)
 
 ## 1. 의도
 
@@ -54,14 +54,17 @@ apus의 C 코드(funclet, thunk)와 Rust 코드는 서로 이름으로 부른다
 ### 4.1 경계 심볼 이름공간
 
 - 우리가 정의하는 모든 경계 심볼(C 정의: funclet export와 thunk, Rust 정의: funclet이 부르는 콜백)의 **링크 이름**은
-  `apus_<tag>_<C 이름>`이다. C 식별자는 그대로 두고, 헤더의 asm label로 링크 이름만 바꾼다
-  (`APUS_BOUNDARY(rs_poll)` → `__asm__("_apus_<tag>_rs_poll")`).
-- `<tag>` = `sys` 버전(`.`→`_`) + `_` + 그 버전 문자열의 FNV-1a 하위 32비트 16진수 8자리. 예: `0_1_0_1a2b3c4d`.
-  헤더의 `#define APUS_TAG "…"`가 유일한 정의이고, `fresh` 테스트가 `CARGO_PKG_VERSION`에서 계산한 값과 다르면 실패한다
-  (버전을 올리면 헤더도 고치게 됨).
-- bindgen은 asm label을 `#[link_name]`으로 옮기므로 Rust가 부르는 C 함수는 자동으로 맞는다.
-- Rust 콜백은 `#[no_mangle]` 대신 `#[export_name = apus_sys::boundary_name!(rs_poll)]`. 매크로는 `fresh`가 헤더에서
-  생성한다(`src/boundary.rs`). 매크로가 attribute 값에 쓰일 수 없으면 생성기가 상수 대신 리터럴을 직접 쓴 매크로를 만든다.
+  `apus_<tag>_<C 이름>`이다.
+- **구현 중 변경**: 처음 설계는 헤더의 asm label로 링크 이름만 바꾸는 것이었지만, xLTO에서 asm label은 IR에
+  `\01_이름`으로 남아 Rust의 `이름`과 합쳐지지 않았다("missing LTO symbols"). 그래서
+  - apus 자신의 C(`APUS_SYS_BUILD`로 컴파일, bindgen 모드 제외)는 `#define rs_poll APUS_NAME(rs_poll)`로 **식별자 자체를** 바꾼다.
+    다른 C가 헤더를 include해도 이 매크로는 적용되지 않는다.
+  - bindgen 모드에서는 asm label(`APUS_BOUNDARY`)로 링크 이름을 알리고, `fresh`가 bindgen 출력의 `\u{1}_` 이스케이프를 지워
+    Rust IR 이름도 `apus_…`가 되게 한다(출력 형식이 바뀌면 `fresh`가 실패).
+  - `fresh`는 각 `#define x APUS_NAME(x)`와 각 bindgen 링크 이름이 자기 이름을 가리키는지 확인한다.
+- `<tag>` = `sys` 버전(C 식별자에 쓸 수 없는 문자는 `_`) + `_` + 그 버전 문자열의 FNV-1a 하위 32비트 16진수 8자리.
+  헤더의 `APUS_TAG`/`APUS_TAG_ID`가 유일한 정의이고, `fresh`가 `CARGO_PKG_VERSION`에서 계산한 값과 비교한다.
+- Rust 콜백은 `#[no_mangle]` 대신 `#[export_name = apus_sys::boundary_name!(rs_poll)]`(생성된 `src/boundary.rs`).
 - `REQUIRED_SYMBOLS` 제외 규칙(C 이름 접두사 `rs_`/`apus_`)은 그대로다.
 
 ### 4.2 C 가시성
@@ -72,9 +75,9 @@ apus의 C 코드(funclet, thunk)와 Rust 코드는 서로 이름으로 부른다
 
 - `apus-sys/xlto`, `apus`의 `xlto = ["swift", "apus-sys/xlto"]`.
 - `build.rs` (feature가 켜졌을 때)
-  - C 컴파일러의 LLVM 주 버전(`<cc> --version`의 `clang version N`)과 rustc의 LLVM 주 버전(`$RUSTC -vV`의 `LLVM version: N`)이
-    다르면 두 값과 설정 방법(`CC_<target>`)을 적어 멈춘다. Apple clang도 버전이 다르면 같은 오류.
-  - `-flto=full`, 그리고 rustc의 target CPU: `CARGO_ENCODED_RUSTFLAGS`의 `-Ctarget-cpu`/`target-cpu=`가 있으면 그 값,
+  - macOS 타깃이 아니거나, RUSTFLAGS에 `-Clinker-plugin-lto`가 없거나, Apple clang이거나(버전 번호가 LLVM 것이 아님),
+    LLVM 주 버전이 rustc와 다르면 이유와 설정 방법을 적어 멈춘다(리뷰 반영: 플러그인 없이 링크하면 Apple ld가 LLVM 오류로 죽었다).
+  - `-flto=full`, 그리고 rustc의 target CPU: `CARGO_ENCODED_RUSTFLAGS`의 `target-cpu`(`-C`, `--codegen` 형식 모두, 마지막 값)가 있으면 그 값,
     없으면 aarch64는 `apple-m1`, x86_64는 rustc의 기본값(`rustc --print target-cpus`의 default로 확인해 상수로 둠).
     arm64는 `-mcpu=`, x86_64는 `-march=`.
   - archiver는 같은 디렉터리의 `llvm-ar`.

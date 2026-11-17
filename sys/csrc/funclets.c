@@ -36,7 +36,6 @@ typedef struct __attribute__((aligned(16))) {
 // address-point offset itself; passing it directly crashes swift_task_create_common.
 static const void *empty_tuple_metadata(void) { return swift_getTupleTypeMetadata(0, 0, NULL, NULL, NULL).metadata; }
 
-typedef APUS_SWIFTASYNCCALL void CompleteFn(APUS_ASYNC_CONTEXT AsyncContext *, APUS_SWIFT_CONTEXT void *error);
 
 static APUS_SWIFTCALL void on_cancel(APUS_SWIFT_CONTEXT void *rust) { rs_cancelled(rust); }
 
@@ -50,7 +49,7 @@ static APUS_SWIFTASYNCCALL void finish(APUS_ASYNC_CONTEXT AsyncContext *ctx) {
   RsTaskContext *c = (RsTaskContext *)ctx;
   swift_task_removeCancellationHandler(c->cancel_record);
   rs_finish(c->rust);
-  return ((CompleteFn *)c->base.resume_parent)(&c->base, NULL);   // completeTaskAndRelease(ctx, error: nil)
+  return ((ThrowingContinuation *)c->base.resume_parent)(&c->base, NULL);   // completeTaskAndRelease(ctx, error: nil)
 }
 
 static APUS_SWIFTASYNCCALL void after_wait_all(APUS_ASYNC_CONTEXT AsyncContext *ctx, APUS_SWIFT_CONTEXT void *error) {
@@ -98,7 +97,7 @@ static APUS_SWIFTASYNCCALL void child_after(uint64_t r0, uint64_t r1, uint64_t r
   swift_task_dealloc(callee);
   store_results(k->ret, r0, r1, r2, r3, f0, f1, f2, f3, error);
   rs_call_done(k->record);
-  return ((CompleteFn *)k->base.resume_parent)(&k->base, NULL);
+  return ((ThrowingContinuation *)k->base.resume_parent)(&k->base, NULL);
 }
 
 // AsyncVoidClosureEntryPoint: discarding children start through the runtime's non_future_adapter.
@@ -121,7 +120,7 @@ static void spawn_child(RsTaskContext *c, void *record) {
     swift_taskGroup_initializeWithFlags(GROUP_DISCARD_RESULTS, c->group, empty_tuple_metadata());
     c->group_initialized = true;
   }
-  struct { size_t flags; void *parent; void *group; } option = { OPTION_KIND_TASK_GROUP, NULL, c->group };
+  TaskGroupOption option = { OPTION_KIND_TASK_GROUP, NULL, c->group };
   size_t flags = CREATE_IS_CHILD_TASK | CREATE_ENQUEUE_JOB | CREATE_ADD_PENDING_GROUP_TASK_UNCONDITIONALLY
                | CREATE_IS_DISCARDING_TASK | CREATE_IS_TASK_FUNCTION_CONSUMED;
   AsyncTaskAndContext child = swift_task_create_common(flags, &option, empty_tuple_metadata(), (void *)child_entry,
@@ -175,20 +174,13 @@ const void *rs_entry_fn(void) { return (const void *)entry; }
 size_t rs_context_size(void) { return sizeof(RsTaskContext); }
 
 // ---- plain Jobs (timers): the runtime hands them to dispatch, which calls the metadata's VTableInvoke ----
-// Job header: include/swift/ABI/Task.h (class Job). Metadata shape: FullMetadata<DispatchClassMetadata> as in
-// stdlib/public/Concurrency/Task.cpp (jobHeapMetadata, which is not exported): kind Job = 3 | NonType |
-// RuntimePrivate (ABI/MetadataKind.def), dispatchSwiftObjectType = 1, OpaqueObjC[3] on ObjC platforms.
 
 static APUS_SWIFTASYNCCALL void run_job(void *job) { rs_job_run(job); }
 static void invoke_job(void *job, void *unused, uint32_t flags) {
   swift_job_run(job, (SerialExecutorRef){0, 0});   // SerialExecutorRef::generic()
 }
 static void destroy_job(void *job) {}
-static const struct {
-  void *type_layout; void (*destroy)(void *); void *value_witnesses;            // FullMetadata prefix
-  uintptr_t kind; void *opaque; void *opaque_objc[3];                           // HeapMetadata + DispatchClassMetadata
-  unsigned long vtable_type; void (*vtable_invoke)(void *, void *, uint32_t);
-} job_metadata = { 0, destroy_job, 0, 3 | 0x400 | 0x100, 0, {0, 0, 0}, 1, invoke_job };
+static const JobMetadata job_metadata = { 0, destroy_job, 0, METADATA_KIND_JOB, 0, {0, 0, 0}, DISPATCH_SWIFT_OBJECT_TYPE, invoke_job };
 
 const void *rs_job_metadata(void) { return &job_metadata.kind; }
 const void *rs_run_job_fn(void) { return (const void *)run_job; }

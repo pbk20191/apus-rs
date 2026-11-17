@@ -23,39 +23,69 @@ fn output(program: &Path, arg: &str) -> String {
     Command::new(program).arg(arg).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
 }
 
-/// The CPU rustc compiles for: `-C target-cpu` from RUSTFLAGS, else the target's default.
-fn rustc_target_cpu(arch: &str) -> String {
+/// The values of rustc codegen option `name` in RUSTFLAGS, in order (`-Cname=v`, `-C name=v`, `--codegen name=v`,
+/// `--codegen=name=v`); an option without `=` gives an empty value. rustc uses the last one.
+fn codegen_options(name: &str) -> Vec<String> {
     let flags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
-    let flags: Vec<&str> = flags.split('\x1f').collect();
-    let set = flags.iter().enumerate().find_map(|(i, flag)| {
-        let value = flag.strip_prefix("-Ctarget-cpu=").or_else(|| {
-            (*flag == "-C").then(|| flags.get(i + 1).and_then(|next| next.strip_prefix("target-cpu="))).flatten()
-        });
-        value.map(str::to_string)
-    });
-    // rustc's defaults for aarch64-apple-darwin and x86_64-apple-darwin.
-    set.unwrap_or_else(|| if arch == "aarch64" { "apple-m1".into() } else { "penryn".into() })
+    let flags: Vec<&str> = flags.split('\x1f').filter(|f| !f.is_empty()).collect();
+    let mut values = Vec::new();
+    let mut i = 0;
+    while i < flags.len() {
+        let option = match flags[i] {
+            "-C" | "--codegen" => {
+                i += 1;
+                flags.get(i).copied()
+            }
+            flag => flag.strip_prefix("--codegen=").or_else(|| flag.strip_prefix("-C").filter(|rest| !rest.is_empty())),
+        };
+        if let Some((key, value)) = option.map(|o| o.split_once('=').unwrap_or((o, ""))) {
+            if key == name {
+                values.push(value.to_string());
+            }
+        }
+        i += 1;
+    }
+    values
 }
 
 /// Cross-language LTO: the C side becomes LLVM bitcode that rustc's LLVM reads at link time, so it must come from a clang
-/// with the same LLVM major version, compiled for the same CPU (otherwise LLVM refuses to inline Rust into C).
+/// with the same LLVM major version, compiled for the same CPU (otherwise LLVM refuses to inline Rust into C), and the
+/// final link must run rustc's linker-plugin LTO.
 fn configure_xlto(build: &mut cc::Build) {
+    let guide = "README: Cross-language LTO";
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        panic!("apus-sys: the xlto feature supports macOS targets only ({guide})");
+    }
+    let plugin = codegen_options("linker-plugin-lto");
+    if plugin.last().is_none_or(|value| matches!(value.as_str(), "no" | "n" | "off" | "false")) {
+        panic!(
+            "apus-sys: the xlto feature needs RUSTFLAGS -Clinker-plugin-lto and the scripts/xlto-link linker; without them Apple's ld reads the bitcode with its own LTO library and fails ({guide})"
+        );
+    }
     let compiler = build.get_compiler();
     let clang = compiler.path().to_path_buf();
+    let target = env::var("TARGET").unwrap_or_default().replace('-', "_");
+    let version = output(&clang, "--version");
+    if version.contains("Apple clang") {
+        panic!(
+            "apus-sys: the xlto feature needs an LLVM clang, not Apple clang (whose version numbers are Apple's, not LLVM's); set CC_{target} to one with rustc's LLVM version ({guide})"
+        );
+    }
     let rustc = PathBuf::from(env::var("RUSTC").unwrap_or_else(|_| "rustc".into()));
-    let theirs = major_after(&output(&clang, "--version"), "clang version");
+    let theirs = major_after(&version, "clang version");
     let ours = major_after(&output(&rustc, "-vV"), "LLVM version:");
     if theirs.is_none() || theirs != ours {
-        let target = env::var("TARGET").unwrap_or_default().replace('-', "_");
         panic!(
-            "apus-sys: the xlto feature needs a clang with rustc's LLVM {}, but {} is LLVM {}; set CC_{target} to such a clang (for example /opt/homebrew/opt/llvm/bin/clang)",
+            "apus-sys: the xlto feature needs a clang with rustc's LLVM {}, but {} is LLVM {}; set CC_{target} to such a clang, for example /opt/homebrew/opt/llvm/bin/clang ({guide})",
             ours.map_or("?".into(), |v| v.to_string()),
             clang.display(),
             theirs.map_or("?".into(), |v| v.to_string()),
         );
     }
     let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-    let cpu = rustc_target_cpu(&arch);
+    // rustc's defaults for aarch64-apple-darwin and x86_64-apple-darwin.
+    let default = if arch == "aarch64" { "apple-m1" } else { "penryn" };
+    let cpu = codegen_options("target-cpu").pop().unwrap_or_else(|| default.into());
     build.flag("-flto=full").flag(if arch == "aarch64" { format!("-mcpu={cpu}") } else { format!("-march={cpu}") });
     let archiver = clang.with_file_name("llvm-ar");
     assert!(archiver.exists(), "apus-sys: the xlto feature needs llvm-ar next to {}", clang.display());
@@ -108,6 +138,8 @@ fn main() {
         .flag("-Wno-unused-parameter")
         // Boundary functions are found by name inside the binary only, never exported.
         .flag("-fvisibility=hidden")
+        // The header renames the boundary identifiers only for apus's own C (not for C that includes it elsewhere).
+        .define("APUS_SYS_BUILD", None)
         .flag(format!("-mmacosx-version-min={}.{}", minimum.0, minimum.1))
         .compile("apus_funclets");
     println!("cargo:rustc-link-search=native=/usr/lib/swift");

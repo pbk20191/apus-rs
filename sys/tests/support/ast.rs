@@ -115,7 +115,9 @@ extern "C" fn visit(cursor: CXCursor, _parent: CXCursor, data: CXClientData) -> 
 /// extra `-D` options (for example `APUS_BINDGEN`).
 pub fn declarations(defines: &[&str]) -> Vec<Decl> {
     clang_sys::load().ok();
-    let mut args: Vec<CString> = vec![CString::new("-xc").unwrap(), CString::new(format!("-I{}", include_dir().display())).unwrap()];
+    // Parsed as apus's own C sees it (APUS_SYS_BUILD: the boundary identifiers carry their namespace).
+    let mut args: Vec<CString> =
+        vec![CString::new("-xc").unwrap(), CString::new("-DAPUS_SYS_BUILD").unwrap(), CString::new(format!("-I{}", include_dir().display())).unwrap()];
     args.extend(defines.iter().map(|d| CString::new(format!("-D{d}")).unwrap()));
     let argv: Vec<*const i8> = args.iter().map(|a| a.as_ptr()).collect();
     let path = CString::new(header().to_str().unwrap()).unwrap();

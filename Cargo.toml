@@ -29,7 +29,6 @@ libc = "0.2"
 
 [dev-dependencies]
 libtest-mimic = "0.8"
-apus-sys = { path = "sys" }
 
 [[test]]
 name = "dispatch"

@@ -12,13 +12,16 @@ fn main() {
     assert_eq!(value, 7);
     let exe = std::env::current_exe().unwrap();
     let out = Command::new("xcrun").args(["dyld_info", "-exports"]).arg(&exe).output().unwrap();
+    assert!(out.status.success(), "dyld_info failed: {}", String::from_utf8_lossy(&out.stderr));
     let exports = String::from_utf8(out.stdout).unwrap();
-    let prefix = format!("_{}", apus_sys::BOUNDARY_PREFIX);
+    let prefix = format!("_{}", apus::__sys::BOUNDARY_PREFIX);
+    // Unstripped, the Rust-defined callbacks are exported: under the namespace. Seeing one proves the list was read.
+    assert!(exports.contains(&format!("{prefix}rs_poll")), "no {prefix}rs_poll in the export list:\n{exports}");
     let mut failures = Vec::new();
     for symbol in exports.lines().filter_map(|l| l.split_whitespace().nth(1)) {
         if C_DEFINED.iter().any(|c| symbol.ends_with(c)) {
             failures.push(format!("C-defined boundary symbol exported: {symbol}"));
-        } else if (symbol.contains("rs_") || symbol.contains("apus_")) && !symbol.starts_with("__R") && !symbol.starts_with(&prefix) {
+        } else if (symbol.starts_with("_rs_") || symbol.starts_with("_apus_")) && !symbol.starts_with(&prefix) {
             failures.push(format!("boundary symbol outside {prefix}: {symbol}"));
         }
     }

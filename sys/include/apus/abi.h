@@ -30,6 +30,9 @@
 #define APUS_BOUNDARY(name) __asm__("_apus_" APUS_TAG "_" #name)
 #else
 #define APUS_BOUNDARY(name)
+#endif
+// Only apus's own C (built with APUS_SYS_BUILD) renames: another C file including this header keeps its names.
+#if defined(APUS_SYS_BUILD) && !defined(APUS_BINDGEN)
 #define rs_entry_fn APUS_NAME(rs_entry_fn)
 #define rs_context_size APUS_NAME(rs_context_size)
 #define rs_job_metadata APUS_NAME(rs_job_metadata)
@@ -296,6 +299,21 @@ _Static_assert(sizeof(TaskFutureWaitAsyncContext) == 48, "TaskFutureWaitAsyncCon
 
 // Return continuation of a throwing async function / task completion: (context, error).
 typedef APUS_SWIFTASYNCCALL void ThrowingContinuation(APUS_ASYNC_CONTEXT AsyncContext *, APUS_SWIFT_CONTEXT void *error) APUS_ASYNC;
+// include/swift/ABI/TaskOptions.h: TaskOptionRecord + TaskGroupTaskOptionRecord
+typedef struct { size_t flags; void *parent; void *group; } TaskGroupOption;
+
+// A plain Job's metadata (timers): the runtime hands such jobs to dispatch, which calls VTableInvoke. Job header:
+// include/swift/ABI/Task.h (class Job). Shape: FullMetadata<DispatchClassMetadata> as in
+// stdlib/public/Concurrency/Task.cpp (jobHeapMetadata, not exported).
+typedef struct {
+  void *type_layout; void (*destroy)(void *); void *value_witnesses;            // FullMetadata prefix
+  uintptr_t kind; void *opaque; void *opaque_objc[3];                           // HeapMetadata + DispatchClassMetadata
+  unsigned long vtable_type; void (*vtable_invoke)(void *, void *, uint32_t);
+} JobMetadata;
+// MetadataKind::Job = 3 | NonType | RuntimePrivate (ABI/MetadataKind.def); dispatchSwiftObjectType.
+#define METADATA_KIND_JOB (3u | 0x400u | 0x100u)
+#define DISPATCH_SWIFT_OBJECT_TYPE 1u
+
 // A cancellation handler: the runtime calls it with the context it was registered with.
 typedef APUS_SWIFTCALL void CancelFn(APUS_SWIFT_CONTEXT void *) APUS_INTERNAL;
 
@@ -340,15 +358,15 @@ extern APUS_SWIFTCALL StringAndFlag swift_string_from_utf8_repairing(const uint8
     APUS_SYMBOL("$sSS18_fromUTF8RepairingySS6result_Sb11repairsMadetSRys5UInt8VGFZ") APUS_INTERNAL;
 
 // ---- implemented in Rust (src/swift/task.rs, call.rs, timer.rs), called by the funclets ----
-int rs_poll(void *rust) APUS_BOUNDARY(rs_poll);                                                       // 1 = Ready
-int rs_park(void *rust, void *continuation) APUS_BOUNDARY(rs_park);                                   // 1 = parked, 0 = woken mid-poll
-void rs_finish(void *rust) APUS_BOUNDARY(rs_finish);
-void rs_cancelled(void *rust) APUS_BOUNDARY(rs_cancelled);
-bool rs_is_main(void *rust) APUS_BOUNDARY(rs_is_main);
-int rs_take_call(void *rust, const AsyncFunctionPointer **function, CallRegs **regs, RetRegs **ret, void **record) APUS_BOUNDARY(rs_take_call);  // 1 = run it in this Task
-int rs_take_child(void *rust, void **record) APUS_BOUNDARY(rs_take_child);                                  // 1 = run it as a child Task
-void rs_call_target(void *record, const AsyncFunctionPointer **function, CallRegs **regs, RetRegs **ret) APUS_BOUNDARY(rs_call_target);
-void rs_set_child(void *record, void *child_task) APUS_BOUNDARY(rs_set_child);                             // +1 child task
-void rs_call_done(void *record) APUS_BOUNDARY(rs_call_done);                                               // results are in the call's RetRegs
-void rs_job_run(void *job) APUS_BOUNDARY(rs_job_run);
+int rs_poll(void *rust);                                                       // 1 = Ready
+int rs_park(void *rust, void *continuation);                                   // 1 = parked, 0 = woken mid-poll
+void rs_finish(void *rust);
+void rs_cancelled(void *rust);
+bool rs_is_main(void *rust);
+int rs_take_call(void *rust, const AsyncFunctionPointer **function, CallRegs **regs, RetRegs **ret, void **record);  // 1 = run it in this Task
+int rs_take_child(void *rust, void **record);                                  // 1 = run it as a child Task
+void rs_call_target(void *record, const AsyncFunctionPointer **function, CallRegs **regs, RetRegs **ret);
+void rs_set_child(void *record, void *child_task);                             // +1 child task
+void rs_call_done(void *record);                                               // results are in the call's RetRegs
+void rs_job_run(void *job);
 #endif

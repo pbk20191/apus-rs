@@ -24,7 +24,7 @@ if [[ "$(grep -c . <<< "$step")" -lt 20 ]]; then
   echo "check-xlto: FAILED (no step funclet found to inspect)"
   exit 1
 fi
-calls="$(grep -cE '<_apus_[0-9a-f_]+_rs_poll>' <<< "$step" || true)"
+calls="$(grep -cE '<[^>]*rs_poll[^>]*>' <<< "$step" || true)"
 if [[ "$exported" != 0 || "$calls" != 0 ]]; then
   echo "check-xlto: FAILED ($exported boundary symbols exported, $calls calls from step to rs_poll)"
   exit 1
