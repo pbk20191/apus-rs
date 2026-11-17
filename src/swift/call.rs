@@ -79,6 +79,7 @@ impl std::error::Error for CallError {}
 
 /// Something the call keeps alive until it is over; released when dropped.
 pub(crate) enum Owned {
+    /// A class reference (AnyObject), released with swift_unknownObjectRelease.
     Object(*mut c_void),
     /// A `String`'s owner word.
     Bridge(u64),
@@ -92,7 +93,7 @@ impl Drop for Owned {
     fn drop(&mut self) {
         unsafe {
             match *self {
-                Owned::Object(object) => rt::swift_release(object),
+                Owned::Object(object) => rt::swift_unknownObjectRelease(object),
                 Owned::Bridge(word) => rt::swift_bridgeObjectRelease(word as *mut c_void),
                 Owned::Value(_) | Owned::Shared(_) => {} // release themselves
             }
@@ -343,7 +344,7 @@ impl<R> SwiftCall<R> {
     pub fn on(mut self, object: &super::SwiftObject) -> Self {
         let call = self.configure();
         call.regs.get_mut().self_ = object.as_ptr();
-        call.owned.push(Owned::Object(unsafe { rt::swift_retain(object.as_ptr()) }));
+        call.owned.push(Owned::Object(unsafe { rt::swift_unknownObjectRetain(object.as_ptr()) }));
         self
     }
 

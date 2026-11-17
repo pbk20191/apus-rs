@@ -192,7 +192,7 @@ impl SwiftArg for String {
 /// A class instance, passed guaranteed; the call keeps it alive.
 impl SwiftArg for &SwiftObject {
     fn lower(&self, into: &mut ArgLowering) {
-        into.owned.push(Owned::Object(unsafe { rt::swift_retain(self.as_ptr()) }));
+        into.owned.push(Owned::Object(unsafe { rt::swift_unknownObjectRetain(self.as_ptr()) }));
         into.int(self.as_ptr() as u64)
     }
 }
@@ -417,7 +417,7 @@ impl SwiftReceiver for SwiftValue {
     }
 }
 
-/// An owned reference to a Swift class instance.
+/// An owned reference to a class instance: a native Swift object or an Objective-C-backed one (any `AnyObject`).
 pub struct SwiftObject(NonNull<c_void>);
 
 // Swift reference counting is atomic; the object itself is only touched by Swift code.
@@ -439,13 +439,13 @@ impl SwiftObject {
 
 impl Clone for SwiftObject {
     fn clone(&self) -> Self {
-        unsafe { SwiftObject::from_raw(rt::swift_retain(self.as_ptr())) }
+        unsafe { SwiftObject::from_raw(rt::swift_unknownObjectRetain(self.as_ptr())) }
     }
 }
 
 impl Drop for SwiftObject {
     fn drop(&mut self) {
-        unsafe { rt::swift_release(self.as_ptr()) }
+        unsafe { rt::swift_unknownObjectRelease(self.as_ptr()) }
     }
 }
 

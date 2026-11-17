@@ -111,7 +111,7 @@ impl<R> SwiftSyncCall<R> {
     /// Calls a method of a class: `object` is `self`.
     pub fn on(mut self, object: &SwiftObject) -> Self {
         self.lowering.regs.self_ = object.as_ptr();
-        self.lowering.owned.push(Owned::Object(unsafe { super::rt::swift_retain(object.as_ptr()) })); // may outlive the borrow
+        self.lowering.owned.push(Owned::Object(unsafe { super::rt::swift_unknownObjectRetain(object.as_ptr()) })); // may outlive the borrow
         self
     }
 

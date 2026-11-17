@@ -184,6 +184,10 @@ extern void *swift_retain(void *object) APUS_C;
 extern void swift_release(void *object) APUS_C;
 extern void swift_errorRelease(void *error) APUS_C;
 extern void swift_bridgeObjectRelease(void *object) APUS_C;
+// Any class reference (AnyObject): a native Swift object, or an Objective-C one (NSObject subclasses included), which
+// swift_retain/swift_release must not touch.
+extern void *swift_unknownObjectRetain(void *object) APUS_C;
+extern void swift_unknownObjectRelease(void *object) APUS_C;
 extern const void *swift_conformsToProtocol(const void *metadata, const void *protocol) APUS_C;
 extern bool swift_dynamicCast(void *dest, void *src, const void *src_type, const void *target_type, size_t flags) APUS_C;
 extern void swift_getErrorValue(const void *error, void **scratch, ErrorValueResult *out) APUS_C;
