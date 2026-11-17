@@ -25,7 +25,7 @@ struct WakeJob {
 const JOB_KIND_PLAIN: u32 = 1;
 const PRIORITY_DEFAULT: u32 = 0x15;
 
-#[no_mangle]
+#[export_name = apus_sys::boundary_name!(rs_job_run)]
 extern "C" fn rs_job_run(job: *mut c_void) {
     unsafe { Box::from_raw(job.cast::<WakeJob>()) }.slot.fire();
 }

@@ -17,6 +17,12 @@
 
 #define APUS_SWIFT_ABI_TAG "swift-6.4.2-RELEASE"
 
+// The namespace of the C<->Rust boundary symbols apus defines itself: apus-sys's version and an FNV-1a hash of it
+// (checked by sys/tests/fresh.rs). Each boundary function keeps its C name and links as apus_<tag>_<name>, so no other
+// library's symbol can clash with it.
+#define APUS_TAG "0_1_0_e1cf1eb8"
+#define APUS_BOUNDARY(name) __asm__("_apus_" APUS_TAG "_" #name)
+
 #ifdef APUS_BINDGEN
 #define APUS_SWIFTCALL
 #else
@@ -214,18 +220,18 @@ extern APUS_SWIFTCALL TaskExecutorRef swift_task_getPreferredTaskExecutor(void) 
 
 // ---- funclets: C functions in sys/csrc that Rust calls ----
 
-const void *rs_entry_fn(void) APUS_C;
-size_t rs_context_size(void) APUS_C;
-const void *rs_job_metadata(void) APUS_C;
-const void *rs_run_job_fn(void) APUS_C;
-void rs_string_from_utf8(const uint8_t *start, intptr_t count, SwiftString *out) APUS_C;
+const void *rs_entry_fn(void) APUS_BOUNDARY(rs_entry_fn) APUS_C;
+size_t rs_context_size(void) APUS_BOUNDARY(rs_context_size) APUS_C;
+const void *rs_job_metadata(void) APUS_BOUNDARY(rs_job_metadata) APUS_C;
+const void *rs_run_job_fn(void) APUS_BOUNDARY(rs_run_job_fn) APUS_C;
+void rs_string_from_utf8(const uint8_t *start, intptr_t count, SwiftString *out) APUS_BOUNDARY(rs_string_from_utf8) APUS_C;
 // kind: 0 = integer results, 1 = floating-point results, 2 = indirect result at `indirect`
-void rs_call_sync(const void *function, const CallRegs *regs, void *indirect, RetRegs *ret, int kind) APUS_C;
+void rs_call_sync(const void *function, const CallRegs *regs, void *indirect, RetRegs *ret, int kind) APUS_BOUNDARY(rs_call_sync) APUS_C;
 
 // ---- thunks (sys/csrc/thunks.c): C-convention entry points for APUS_THUNK functions ----
 
 // swift_task_isCancelled: its Bool result is not extended to a full register as a C uint8_t return would be.
-uint8_t apus_swift_task_isCancelled(void *task) APUS_C;
+uint8_t apus_swift_task_isCancelled(void *task) APUS_BOUNDARY(apus_swift_task_isCancelled) APUS_C;
 
 #ifndef APUS_BINDGEN
 // ---- for the funclets and thunks only: not visible to Rust ----
@@ -307,15 +313,15 @@ extern APUS_SWIFTCALL StringAndFlag swift_string_from_utf8_repairing(const uint8
     APUS_SYMBOL("$sSS18_fromUTF8RepairingySS6result_Sb11repairsMadetSRys5UInt8VGFZ") APUS_INTERNAL;
 
 // ---- implemented in Rust (src/swift/task.rs, call.rs, timer.rs), called by the funclets ----
-int rs_poll(void *rust);                                                       // 1 = Ready
-int rs_park(void *rust, void *continuation);                                   // 1 = parked, 0 = woken mid-poll
-void rs_finish(void *rust);
-void rs_cancelled(void *rust);
-bool rs_is_main(void *rust);
-int rs_take_call(void *rust, const AsyncFunctionPointer **function, CallRegs **regs, RetRegs **ret, void **record);  // 1 = run it in this Task
-int rs_take_child(void *rust, void **record);                                  // 1 = run it as a child Task
-void rs_call_target(void *record, const AsyncFunctionPointer **function, CallRegs **regs, RetRegs **ret);
-void rs_set_child(void *record, void *child_task);                             // +1 child task
-void rs_call_done(void *record);                                               // results are in the call's RetRegs
-void rs_job_run(void *job);
+int rs_poll(void *rust) APUS_BOUNDARY(rs_poll);                                                       // 1 = Ready
+int rs_park(void *rust, void *continuation) APUS_BOUNDARY(rs_park);                                   // 1 = parked, 0 = woken mid-poll
+void rs_finish(void *rust) APUS_BOUNDARY(rs_finish);
+void rs_cancelled(void *rust) APUS_BOUNDARY(rs_cancelled);
+bool rs_is_main(void *rust) APUS_BOUNDARY(rs_is_main);
+int rs_take_call(void *rust, const AsyncFunctionPointer **function, CallRegs **regs, RetRegs **ret, void **record) APUS_BOUNDARY(rs_take_call);  // 1 = run it in this Task
+int rs_take_child(void *rust, void **record) APUS_BOUNDARY(rs_take_child);                                  // 1 = run it as a child Task
+void rs_call_target(void *record, const AsyncFunctionPointer **function, CallRegs **regs, RetRegs **ret) APUS_BOUNDARY(rs_call_target);
+void rs_set_child(void *record, void *child_task) APUS_BOUNDARY(rs_set_child);                             // +1 child task
+void rs_call_done(void *record) APUS_BOUNDARY(rs_call_done);                                               // results are in the call's RetRegs
+void rs_job_run(void *job) APUS_BOUNDARY(rs_job_run);
 #endif

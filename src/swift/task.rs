@@ -84,7 +84,7 @@ unsafe fn task<'a>(rust: *mut c_void) -> &'a Task {
     &*(rust as *const Task)
 }
 
-#[no_mangle]
+#[export_name = apus_sys::boundary_name!(rs_poll)]
 extern "C" fn rs_poll(rust: *mut c_void) -> i32 {
     let t = unsafe { task(rust) };
     t.state.store(RUNNING, SeqCst);
@@ -109,7 +109,7 @@ extern "C" fn rs_poll(rust: *mut c_void) -> i32 {
     ready as i32
 }
 
-#[no_mangle]
+#[export_name = apus_sys::boundary_name!(rs_park)]
 extern "C" fn rs_park(rust: *mut c_void, continuation: *mut c_void) -> i32 {
     let t = unsafe { task(rust) };
     t.continuation.store(continuation, SeqCst);
@@ -121,7 +121,7 @@ extern "C" fn rs_park(rust: *mut c_void, continuation: *mut c_void) -> i32 {
     0
 }
 
-#[no_mangle]
+#[export_name = apus_sys::boundary_name!(rs_finish)]
 extern "C" fn rs_finish(rust: *mut c_void) {
     let t = unsafe { Arc::from_raw(rust as *const Task) };
     let on_finish = t.on_finish.lock().unwrap().take();
@@ -130,12 +130,12 @@ extern "C" fn rs_finish(rust: *mut c_void) {
     }
 }
 
-#[no_mangle]
+#[export_name = apus_sys::boundary_name!(rs_is_main)]
 extern "C" fn rs_is_main(rust: *mut c_void) -> bool {
     unsafe { task(rust) }.main
 }
 
-#[no_mangle]
+#[export_name = apus_sys::boundary_name!(rs_cancelled)]
 extern "C" fn rs_cancelled(rust: *mut c_void) {
     let t = unsafe { task(rust) };
     t.cancelled.store(true, SeqCst);

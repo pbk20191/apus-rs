@@ -51,6 +51,8 @@ fn main() {
         .warnings(true)
         .extra_warnings(true)
         .flag("-Wno-unused-parameter")
+        // Boundary functions are found by name inside the binary only, never exported.
+        .flag("-fvisibility=hidden")
         .flag(format!("-mmacosx-version-min={}.{}", minimum.0, minimum.1))
         .compile("apus_funclets");
     println!("cargo:rustc-link-search=native=/usr/lib/swift");

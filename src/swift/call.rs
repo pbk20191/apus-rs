@@ -243,7 +243,7 @@ unsafe fn describe_target(call: &CallShared, function: *mut *const AsyncFunction
     *ret = call.ret.get();
 }
 
-#[no_mangle]
+#[export_name = apus_sys::boundary_name!(rs_take_call)]
 extern "C" fn rs_take_call(
     rust: *mut c_void,
     function: *mut *const AsyncFunctionPointer,
@@ -262,7 +262,7 @@ extern "C" fn rs_take_call(
 
 /// Calls the funclet must run as child Tasks (discarding TaskGroup): everything still registered after
 /// `rs_take_call` declined.
-#[no_mangle]
+#[export_name = apus_sys::boundary_name!(rs_take_child)]
 extern "C" fn rs_take_child(rust: *mut c_void, record: *mut *const c_void) -> i32 {
     let t = unsafe { &*(rust as *const task::Task) };
     let Some(call) = take_registered(t, false) else { return 0 };
@@ -270,19 +270,19 @@ extern "C" fn rs_take_child(rust: *mut c_void, record: *mut *const c_void) -> i3
     1
 }
 
-#[no_mangle]
+#[export_name = apus_sys::boundary_name!(rs_call_target)]
 extern "C" fn rs_call_target(record: *const c_void, function: *mut *const AsyncFunctionPointer, regs: *mut *mut CallRegs, ret: *mut *mut RetRegs) {
     unsafe { describe_target(&*(record as *const CallShared), function, regs, ret) }
 }
 
 /// Stores the child Task (+1) and releases the reference hand_to_child added for this call.
-#[no_mangle]
+#[export_name = apus_sys::boundary_name!(rs_set_child)]
 extern "C" fn rs_set_child(record: *const c_void, child: *mut c_void) {
     let call = unsafe { Arc::from_raw(record as *const CallShared) };
     call.child.store(child, SeqCst);
 }
 
-#[no_mangle]
+#[export_name = apus_sys::boundary_name!(rs_call_done)]
 extern "C" fn rs_call_done(record: *const c_void) {
     let call = unsafe { Arc::from_raw(record as *const CallShared) };
     let mut state = call.state.lock().unwrap();

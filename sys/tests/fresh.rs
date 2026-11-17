@@ -83,6 +83,31 @@ fn rust_type(c: &str) -> String {
     }
 }
 
+/// The tag apus-sys's version gives the boundary namespace: `<version with . as _>_<FNV-1a, low 32 bits, hex>`.
+fn expected_tag() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let hash = version.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+    format!("{}_{:08x}", version.replace('.', "_"), hash & 0xffff_ffff)
+}
+
+fn header_tag() -> String {
+    let text = std::fs::read_to_string(ast::header()).unwrap();
+    let line = text.lines().find(|l| l.starts_with("#define APUS_TAG ")).expect("abi.h defines APUS_TAG");
+    line.trim_start_matches("#define APUS_TAG ").trim().trim_matches('"').to_string()
+}
+
+/// The link-name prefix, and the link name of every boundary function Rust implements (declared without a marker).
+fn boundary(decls: &[Decl]) -> String {
+    let prefix = format!("apus_{}_", header_tag());
+    let mut out = format!("/// The link-name prefix of the C<->Rust boundary symbols apus defines.\npub const BOUNDARY_PREFIX: &str = {prefix:?};\n\n");
+    out.push_str("/// The link name of a boundary function Rust implements, for `#[export_name = …]`.\n#[macro_export]\nmacro_rules! boundary_name {\n");
+    for d in decls.iter().filter(|d| d.kind == Kind::Function && d.marker.is_empty() && d.link_name.starts_with(&prefix)) {
+        writeln!(out, "    ({}) => {{ {:?} }};", d.name, d.link_name).unwrap();
+    }
+    out.push_str("}\n");
+    out
+}
+
 fn optional_decls(decls: &[Decl]) -> Vec<&Decl> {
     let found: Vec<&Decl> = decls.iter().filter(|d| d.available.is_some()).collect();
     for d in &found {
@@ -160,7 +185,9 @@ fn main() {
         ("symbols.rs", format!("{top}{}", symbols(&decls))),
         ("optional.rs", format!("{top}{}", optional(&decls))),
         ("bindings_macos15.rs", format!("{top}{}", bindings_macos15(&decls))),
+        ("boundary.rs", format!("{top}{}", boundary(&decls))),
     ];
+    assert_eq!(header_tag(), expected_tag(), "APUS_TAG in include/apus/abi.h must follow apus-sys's version");
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     if std::env::var_os("APUS_BLESS").is_some() {
         for (name, contents) in &files {

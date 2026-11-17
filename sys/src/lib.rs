@@ -9,7 +9,9 @@ include!("bindings.rs");
 #[cfg(feature = "macos15")]
 include!("bindings_macos15.rs");
 
+mod boundary;
 mod symbols;
+pub use boundary::BOUNDARY_PREFIX;
 pub use symbols::{OPTIONAL_SYMBOLS, REQUIRED_SYMBOLS};
 
 /// macOS 15 declarations, looked up at run time unless the `macos15` feature makes them required.

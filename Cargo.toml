@@ -64,6 +64,11 @@ name = "swift_call"
 harness = false
 required-features = ["test-probe"]
 
+[[test]]
+name = "symbols"
+harness = false
+required-features = ["swift"]
+
 [[example]]
 name = "dispatch_basic"
 required-features = ["dispatch"]
