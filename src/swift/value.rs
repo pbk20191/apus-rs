@@ -311,3 +311,65 @@ impl<T: IntoSwift> IntoSwift for Vec<T> {
         (dest as *mut *mut c_void).write(allocated.array);
     }
 }
+
+/// An `any P` value opened: its value's address, its dynamic type and the witness table of `P`, as Swift has them
+/// inside an existential. Made by [`SwiftValue::open`]; a receiver (`self: &Opened`) for `P`'s requirements, which
+/// are called through their dispatch thunks.
+pub struct Opened {
+    value: *mut c_void,
+    ty: SwiftType,
+    witness: WitnessTable,
+    /// The existential it was opened from (a copy), which owns the value.
+    _container: SwiftValue,
+}
+
+unsafe impl Send for Opened {}
+unsafe impl Sync for Opened {}
+
+impl Opened {
+    /// The value's dynamic type.
+    pub fn ty(&self) -> SwiftType {
+        self.ty
+    }
+
+    pub(crate) fn value(&self) -> *mut c_void {
+        self.value
+    }
+
+    pub(crate) fn witness(&self) -> WitnessTable {
+        self.witness
+    }
+}
+
+impl SwiftValue {
+    /// Opens an `any P` value of one protocol (not class-bound): its value, dynamic type and `P`'s witness table.
+    /// `None` for any other value. The container layout is the ABI's: a three-word buffer holding the value inline,
+    /// or a box when the value does not fit, then the metadata, then the witness table.
+    pub fn open(&self) -> Option<Opened> {
+        let metadata = self.ty().as_ptr();
+        unsafe {
+            if *(metadata as *const usize) != rt::METADATA_KIND_EXISTENTIAL as usize {
+                return None;
+            }
+            let flags = *(metadata.byte_add(std::mem::size_of::<usize>()) as *const u32);
+            let opaque = flags & rt::EXISTENTIAL_ANY_CLASS_CONSTRAINT != 0;
+            if !opaque || flags & rt::EXISTENTIAL_WITNESS_TABLES_MASK != 1 {
+                return None;
+            }
+            // A copy keeps the value alive: inline values are copied, a box is shared.
+            let container = self.clone();
+            let words = container.as_ptr() as *const usize;
+            let ty = SwiftType::from_metadata(*words.add(3) as *const c_void);
+            let witness = WitnessTable(*words.add(4) as *const c_void);
+            let witnesses = rt::value_witnesses(ty.as_ptr());
+            let value = if witnesses.flags & rt::VALUE_WITNESS_IS_NON_INLINE != 0 {
+                let alignment = (witnesses.flags as usize & 0xff) + 1;
+                let header = std::mem::size_of::<rt::HeapObject>().next_multiple_of(alignment);
+                (*words as *mut u8).add(header).cast()
+            } else {
+                container.as_ptr()
+            };
+            Some(Opened { value, ty, witness, _container: container })
+        }
+    }
+}

@@ -120,6 +120,15 @@ pub fn nonsending(declaration: &str) -> Result<bool, Error> {
     Ok(parse::parse(declaration).map_err(Error)?.nonsending)
 }
 
+/// The symbol apus calls for `declaration`: the mangled name, or for a protocol requirement its dispatch thunk
+/// (`…Tj`), which library-evolution modules (Apple's frameworks) export instead of the requirement itself.
+pub fn call_symbol(declaration: &str) -> Result<String, Error> {
+    let decl = parse::parse(declaration).map_err(Error)?;
+    let symbol = mangler::mangle(&decl).map_err(Error)?;
+    let requirement = decl.extension.is_none() && decl.context.last().is_some_and(|(_, kind)| *kind == ast::Kind::Protocol);
+    Ok(if requirement { format!("{symbol}Tj") } else { symbol })
+}
+
 /// The number of formal parameters of a function declaration (0 for a getter).
 pub fn formal_count(declaration: &str) -> Result<usize, Error> {
     Ok(match parse::parse(declaration).map_err(Error)?.signature {

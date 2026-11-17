@@ -249,3 +249,22 @@ fn automatic_slot_missing(declaration: &Option<String>, how: &proc_macro::Ident,
         _ => false,
     }
 }
+
+/// Like `mangle!`, with the symbol apus calls: a protocol requirement's dispatch thunk (`…Tj`).
+#[doc(hidden)]
+#[proc_macro]
+pub fn __call_symbol(input: TokenStream) -> TokenStream {
+    let tokens = flatten(input);
+    let (declaration, suffix) = match tokens.as_slice() {
+        [declaration] => (string_literal(declaration), Some(String::new())),
+        [declaration, TokenTree::Punct(comma), suffix] if comma.as_char() == ',' => (string_literal(declaration), string_literal(suffix)),
+        _ => (None, None),
+    };
+    let (Some(declaration), Some(suffix)) = (declaration, suffix) else {
+        return compile_error("expected a Swift declaration as a string literal");
+    };
+    match apus_mangle::call_symbol(&declaration) {
+        Ok(symbol) => TokenTree::Literal(Literal::string(&format!("{symbol}{suffix}"))).into(),
+        Err(error) => compile_error(&format!("cannot mangle `{declaration}`: {error}")),
+    }
+}

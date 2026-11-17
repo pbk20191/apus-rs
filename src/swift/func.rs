@@ -109,7 +109,7 @@ impl SwiftAsyncFn {
 #[doc(hidden)]
 pub struct ArgLowering {
     pub(crate) regs: CallRegs,
-    ints: usize,
+    pub(crate) ints: usize,
     floats: usize,
     pub(crate) owned: Vec<Owned>,
     pub(crate) error: Option<&'static str>,
@@ -440,6 +440,15 @@ pub trait SwiftReceiver {
     fn bind<R>(&self, call: SwiftCall<R>) -> SwiftCall<R>;
     #[doc(hidden)]
     fn bind_sync<R>(&self, call: super::SwiftSyncCall<R>) -> super::SwiftSyncCall<R>;
+}
+
+impl SwiftReceiver for super::value::Opened {
+    fn bind<R>(&self, call: SwiftCall<R>) -> SwiftCall<R> {
+        call.on_opened(self)
+    }
+    fn bind_sync<R>(&self, call: super::SwiftSyncCall<R>) -> super::SwiftSyncCall<R> {
+        call.on_opened(self)
+    }
 }
 
 impl SwiftReceiver for SwiftObject {

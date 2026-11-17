@@ -167,6 +167,8 @@ pub(crate) struct CallShared {
     child: AtomicPtr<c_void>, // +1 child AsyncTask when run as a child
     /// A sync call that hops to another executor (`function` null otherwise); `indirect` is filled when it runs.
     pub(crate) hop: apus_sys::HopCall,
+    /// The next free integer argument register (receivers append arguments after the formal ones).
+    next_int: usize,
     force_child: bool,
 }
 
@@ -178,6 +180,7 @@ impl CallShared {
     /// (`lowering` reserved that register).
     fn new<R: SwiftRet>(function: *const AsyncFunctionPointer, mut lowering: ArgLowering, slot: IndirectSlot, indirect: bool) -> Arc<CallShared> {
         let typed_error = lowering.typed_error.take();
+        let next_int = lowering.ints;
         let shared = Arc::new(CallShared {
             function,
             regs: UnsafeCell::new(lowering.regs),
@@ -191,6 +194,7 @@ impl CallShared {
             waker: Mutex::new(None),
             child: AtomicPtr::default(),
             force_child: false,
+            next_int,
             hop: apus_sys::HopCall { function: std::ptr::null(), indirect: std::ptr::null_mut(), executor: rt::SerialExecutorRef { identity: std::ptr::null(), implementation: 0 }, kind: 0 },
         });
         if indirect {
@@ -388,6 +392,22 @@ impl<R> SwiftCall<R> {
         let call = self.configure();
         call.regs.get_mut().self_ = object.as_ptr();
         call.owned.push(Owned::Object(unsafe { rt::swift_unknownObjectRetain(object.as_ptr()) }));
+        self
+    }
+
+    /// Calls a protocol requirement on an opened `any P`: the value's address is `self`, and the dynamic type and
+    /// the witness table follow the arguments.
+    pub fn on_opened(mut self, opened: &super::value::Opened) -> Self {
+        let call = self.configure();
+        if call.next_int + 2 > call.regs.get_mut().gpr.len() {
+            self.invalid.get_or_insert(CallError::InvalidArgument("too many integer arguments for the argument registers"));
+            return self;
+        }
+        let regs = call.regs.get_mut();
+        regs.self_ = opened.value();
+        regs.gpr[call.next_int] = opened.ty().as_ptr() as u64;
+        regs.gpr[call.next_int + 1] = opened.witness().0 as u64;
+        call.next_int += 2;
         self
     }
 

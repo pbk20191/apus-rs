@@ -115,6 +115,15 @@ impl<R> SwiftSyncCall<R> {
         self
     }
 
+    /// Calls a protocol requirement on an opened `any P`: the value's address is `self`, and the dynamic type and
+    /// the witness table follow the arguments.
+    pub fn on_opened(mut self, opened: &super::value::Opened) -> Self {
+        self.lowering.regs.self_ = opened.value();
+        self.lowering.int(opened.ty().as_ptr() as u64);
+        self.lowering.int(opened.witness().0 as u64);
+        self
+    }
+
     /// Calls a method of a value passed by address (a large or resilient struct): `value` is `self`.
     pub fn on_value(mut self, value: &SwiftValue) -> Self {
         let copy = value.clone();

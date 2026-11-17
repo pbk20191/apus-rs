@@ -164,6 +164,16 @@ typedef struct { const void *function; void *indirect; SerialExecutorRef executo
 #define GROUP_DISCARD_RESULTS (1u << 8)
 // NumWords_TaskGroup
 #define NUM_WORDS_TASK_GROUP 32u
+// MetadataKind::Existential = 3 | RuntimePrivate | NonHeap.
+#define METADATA_KIND_EXISTENTIAL 0x303u
+// include/swift/ABI/MetadataValues.h: ExistentialTypeFlags (after the kind word): witness tables in the low 24 bits;
+// the top bit set means any type (an opaque container: three-word buffer, metadata, witness tables), clear means
+// class-bound.
+#define EXISTENTIAL_WITNESS_TABLES_MASK 0x00FFFFFFu
+#define EXISTENTIAL_ANY_CLASS_CONSTRAINT 0x80000000u
+// ValueWitnessFlags::IsNonInline: the value does not fit an existential's inline buffer; the buffer holds a box and
+// the value follows the box's HeapObject header, aligned.
+#define VALUE_WITNESS_IS_NON_INLINE 0x00020000u
 // MetadataKind::Tuple = 1 | RuntimePrivate | NonHeap; MetadataKind::Struct = 0 | NonHeap.
 #define METADATA_KIND_TUPLE 0x301u
 #define METADATA_KIND_STRUCT 0x200u

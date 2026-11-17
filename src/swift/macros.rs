@@ -245,7 +245,7 @@ macro_rules! __swift_result_type {
 #[macro_export]
 macro_rules! __swift_symbol {
     (literal $symbol:literal) => { $symbol };
-    (declared $declaration:literal) => { $crate::mangle!($declaration) };
+    (declared $declaration:literal) => { $crate::__call_symbol!($declaration) };
 }
 
 /// The symbol of the function's async function pointer (`…Tu`).
@@ -253,7 +253,7 @@ macro_rules! __swift_symbol {
 #[macro_export]
 macro_rules! __swift_async_pointer {
     (literal $symbol:literal) => { concat!($symbol, "Tu") };
-    (declared $declaration:literal) => { $crate::mangle!($declaration, "Tu") };
+    (declared $declaration:literal) => { $crate::__call_symbol!($declaration, "Tu") };
 }
 
 #[doc(hidden)]
