@@ -15,8 +15,13 @@ macos15 = []
 cc = "1"
 
 [dev-dependencies]
+bindgen = "=0.73.2"
 clang-sys = { version = "1.9", features = ["runtime", "clang_12_0"] }
 
 [[test]]
 name = "lowering"
+harness = false
+
+[[test]]
+name = "fresh"
 harness = false
