@@ -9,7 +9,10 @@ use apus::is_main_thread;
 use apus::swift::{cancelled, spawn, ByAddress, CallError, SwiftClosure, SwiftError, SwiftValue};
 use common::{block, check, Failed, Trial};
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+/// Swift's `keep` has one slot; tests that use it run one at a time.
+static KEPT: Mutex<()> = Mutex::new(());
 
 apus::swift! {
     #[swift_linked = "Probe.applyConcrete(_: (Int) async -> Int) async -> Int"]
@@ -108,6 +111,7 @@ fn kept_by_swift() -> Result<(), Failed> {
             self.0.store(true, SeqCst);
         }
     }
+    let _slot = KEPT.lock().unwrap_or_else(|e| e.into_inner());
     let dropped = Arc::new(AtomicBool::new(false));
     let flag = Flag(dropped.clone());
     let f = SwiftClosure::new_sync(move || if flag.0.load(SeqCst) { -2 } else { 5 });
@@ -121,6 +125,7 @@ fn kept_by_swift() -> Result<(), Failed> {
 
 /// Marking a closure `@MainActor` after Swift already holds it would change it under Swift: refused.
 fn main_actor_only_before_sharing() -> Result<(), Failed> {
+    let _slot = KEPT.lock().unwrap_or_else(|e| e.into_inner());
     let f = SwiftClosure::new_sync(|| 1i64);
     keep(&f).unwrap();
     let marked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(f.on_main_actor())));
