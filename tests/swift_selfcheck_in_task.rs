@@ -3,7 +3,7 @@
 #[path = "common/probe.rs"]
 mod probe;
 
-use async_swift_rs::swift::spawn;
+use apus::swift::spawn;
 use std::ffi::c_void;
 use std::sync::mpsc;
 use std::time::Duration;

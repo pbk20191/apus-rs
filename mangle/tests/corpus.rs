@@ -1,6 +1,6 @@
 //! Mangles each declaration and checks the result against the symbols swiftc actually produced for
 //! tests/corpus.swift. Needs `xcrun swiftc` and `nm`.
-use async_swift_rs_mangle::mangle;
+use apus_mangle::mangle;
 use std::collections::HashSet;
 use std::process::Command;
 
@@ -133,7 +133,7 @@ const DECLARATIONS: &[&str] = &[
 ];
 
 fn compiled_symbols() -> HashSet<String> {
-    let dir = std::env::temp_dir().join(format!("async-swift-rs-mangle-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("apus-mangle-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let lib = dir.join("libcorpus.dylib");
     let source = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/corpus.swift");
@@ -200,7 +200,7 @@ fn errors_are_reported() {
 
 #[test]
 fn result_types() {
-    use async_swift_rs_mangle::result_type;
+    use apus_mangle::result_type;
     assert_eq!(result_type("Probe.f() -> [String]").unwrap().as_deref(), Some("SaySSG"));
     assert_eq!(result_type("Probe.Big(struct).scaled(by: Int) -> Big(struct)").unwrap().as_deref(), Some("5Probe3BigV"));
     assert_eq!(result_type("StoreKit.f() async throws -> [Product(struct)]").unwrap().as_deref(), Some("Say8StoreKit7ProductVG"));

@@ -50,7 +50,7 @@ fn source(sigs: &[Sig], swiftcall: bool) -> String {
 }
 
 fn disassemble(src: &str, arch: &str, tag: &str) -> String {
-    let dir = std::env::temp_dir().join(format!("async-swift-rs-abi-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("apus-abi-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let (c, o) = (dir.join(format!("{tag}-{arch}.c")), dir.join(format!("{tag}-{arch}.o")));
     std::fs::write(&c, src).unwrap();

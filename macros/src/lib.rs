@@ -1,4 +1,4 @@
-//! Procedural macros of `async-swift-rs`. Use them through that crate.
+//! Procedural macros of `apus`. Use them through that crate.
 
 use proc_macro::{Delimiter, Literal, TokenStream, TokenTree};
 
@@ -60,7 +60,7 @@ pub fn mangle(input: TokenStream) -> TokenStream {
     let (Some(declaration), Some(suffix)) = (declaration, suffix) else {
         return compile_error("expected a Swift declaration as a string literal, e.g. mangle!(\"Module.function(_: Int) -> Int\")");
     };
-    match async_swift_rs_mangle::mangle(&declaration) {
+    match apus_mangle::mangle(&declaration) {
         Ok(symbol) => TokenTree::Literal(Literal::string(&format!("{symbol}{suffix}"))).into(),
         Err(error) => compile_error(&format!("cannot mangle `{declaration}`: {error}")),
     }
@@ -77,7 +77,7 @@ pub fn result_type(input: TokenStream) -> TokenStream {
     let Some(declaration) = string_literal(declaration) else {
         return compile_error("expected a Swift declaration as a string literal");
     };
-    match async_swift_rs_mangle::result_type(&declaration) {
+    match apus_mangle::result_type(&declaration) {
         Ok(Some(name)) => format!("::core::option::Option::Some({name:?})").parse().expect("an Option expression"),
         Ok(None) => "::core::option::Option::<&'static str>::None".parse().expect("an Option expression"),
         Err(error) => compile_error(&format!("cannot mangle `{declaration}`: {error}")),

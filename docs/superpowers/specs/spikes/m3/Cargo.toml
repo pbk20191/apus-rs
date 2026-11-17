@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-async-swift-rs = { path = "../../../../.." }
+apus = { path = "../../../../.." }
 
 [build-dependencies]
 cc = "1"

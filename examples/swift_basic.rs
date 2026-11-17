@@ -1,7 +1,7 @@
 //! Rust futures as Swift Tasks: priorities, inheritance, cancellation, timers.
 //! Run: cargo run --example swift_basic
-use async_swift_rs::swift::{cancelled, current_task, priority, sleep, spawn, spawn_with};
-use async_swift_rs::{is_main_thread, run_main, Priority, SpawnOptions};
+use apus::swift::{cancelled, current_task, priority, sleep, spawn, spawn_with};
+use apus::{is_main_thread, run_main, Priority, SpawnOptions};
 use std::time::{Duration, Instant};
 
 fn main() {

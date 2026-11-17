@@ -5,8 +5,8 @@ mod common;
 #[path = "common/probe.rs"]
 mod probe;
 
-use async_swift_rs::is_main_thread;
-use async_swift_rs::swift::{
+use apus::is_main_thread;
+use apus::swift::{
     current_task, sleep, spawn, spawn_on_main, timeout, AsyncFunctionPointer, CallError, SwiftAny, SwiftAsyncFn, SwiftObject,
 };
 use common::{block, check, Failed, Trial};

@@ -2,11 +2,11 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use async_swift_rs::swift::{spawn, CallError};
+use apus::swift::{spawn, CallError};
 use common::{block, check, Failed, Trial};
 use std::time::{Duration, Instant};
 
-async_swift_rs::swift! {
+apus::swift! {
     /// `func addAsync(_ a: Int, _ b: Int) async -> Int`
     #[linked = "$s5Probe8addAsyncyS2i_SitYaF"]
     pub async fn add_async(a: i64, b: i64) -> i64;
@@ -42,7 +42,7 @@ async_swift_rs::swift! {
 
 // The same, with the symbol computed from the Swift declaration at compile time.
 mod declared {
-    async_swift_rs::swift! {
+    apus::swift! {
         #[swift_linked = "Probe.addAsync(_: Int, _: Int) async -> Int"]
         pub async fn add_async(a: i64, b: i64) -> i64;
 
@@ -68,7 +68,7 @@ mod declared {
 }
 
 fn declarations_compute_the_symbol() -> Result<(), Failed> {
-    check(async_swift_rs::mangle!("Probe.addAsync(_: Int, _: Int) async -> Int") == "$s5Probe8addAsyncyS2i_SitYaF", "mangle! literal")?;
+    check(apus::mangle!("Probe.addAsync(_: Int, _: Int) async -> Int") == "$s5Probe8addAsyncyS2i_SitYaF", "mangle! literal")?;
     let (sum, text, names, scores, absent) = block(spawn(async {
         (
             declared::add_async(20, 22).await,
@@ -90,8 +90,8 @@ fn declarations_compute_the_symbol() -> Result<(), Failed> {
 
 // Methods and properties: `self` is the receiver; `SwiftValue` results take their Swift type from the declaration.
 mod members {
-    use async_swift_rs::swift::{DirectValue, SwiftObject, SwiftValue};
-    async_swift_rs::swift! {
+    use apus::swift::{DirectValue, SwiftObject, SwiftValue};
+    apus::swift! {
         #[swift_linked = "static Probe.Big(struct).make(n: Int) async -> Big(struct)"]
         pub async fn big_make(n: i64) -> SwiftValue;
 
@@ -155,8 +155,8 @@ fn members_and_opaque_results() -> Result<(), Failed> {
     check(names.0 == "Swift.Array<Swift.String>" && names.1.as_deref() == Some(&["name0".to_string(), "name1".into()][..]), format!("{names:?}"))?;
     check(matches!(by_symbol, Err(CallError::InvalidArgument(_))), format!("{by_symbol:?}"))?;
     let _ = display_name; // compiles; needs a real Product to call
-    check(async_swift_rs::result_type!("Probe.f() -> [Big(struct)?]") == Some("Say5Probe3BigVSgG"), "result_type!")?;
-    check(async_swift_rs::result_type!("Probe.f<T>(_: T) -> T").is_none(), "a generic result has no fixed type")
+    check(apus::result_type!("Probe.f() -> [Big(struct)?]") == Some("Say5Probe3BigVSgG"), "result_type!")?;
+    check(apus::result_type!("Probe.f<T>(_: T) -> T").is_none(), "a generic result has no fixed type")
 }
 
 fn async_functions() -> Result<(), Failed> {
@@ -184,7 +184,7 @@ fn async_functions() -> Result<(), Failed> {
 fn calls_are_builders() -> Result<(), Failed> {
     // The generated function returns the call itself, so `.child()` and `timeout` apply.
     let timed_out = block(spawn(async {
-        async_swift_rs::swift::timeout(Duration::from_millis(30), greet("x", 1, 10_000)).await.is_none()
+        apus::swift::timeout(Duration::from_millis(30), greet("x", 1, 10_000)).await.is_none()
     }))
     .unwrap();
     check(timed_out, "timeout did not fire")

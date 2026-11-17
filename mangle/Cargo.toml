@@ -1,5 +1,5 @@
 [package]
-name = "async-swift-rs-mangle"
+name = "apus-mangle"
 version = "0.1.0"
 edition = "2021"
 description = "Computes Swift mangled symbol names from declarations"

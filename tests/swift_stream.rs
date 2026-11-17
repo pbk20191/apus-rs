@@ -4,20 +4,20 @@ mod common;
 #[path = "common/probe.rs"]
 mod probe;
 
-use async_swift_rs::is_main_thread;
-use async_swift_rs::swift::{sleep, spawn, spawn_on_main, within, CallError, SwiftFn, SwiftStream, SwiftType, SwiftValue};
+use apus::is_main_thread;
+use apus::swift::{sleep, spawn, spawn_on_main, within, CallError, SwiftFn, SwiftStream, SwiftType, SwiftValue};
 use common::{block, check, Failed, Trial};
 use std::future::Future;
 use std::time::{Duration, Instant};
 
 extern "C" {
-    #[link_name = async_swift_rs::mangle!("Probe.countdown(from: Int) -> AsyncStream<Int>")]
+    #[link_name = apus::mangle!("Probe.countdown(from: Int) -> AsyncStream<Int>")]
     static COUNTDOWN: u8;
-    #[link_name = async_swift_rs::mangle!("Probe.failingStream(after: Int) -> AsyncThrowingStream<String, any Error>")]
+    #[link_name = apus::mangle!("Probe.failingStream(after: Int) -> AsyncThrowingStream<String, any Error>")]
     static FAILING_STREAM: u8;
-    #[link_name = async_swift_rs::mangle!("Probe.ticks(_: Int) -> Ticks(struct)")]
+    #[link_name = apus::mangle!("Probe.ticks(_: Int) -> Ticks(struct)")]
     static TICKS: u8;
-    #[link_name = async_swift_rs::mangle!("Probe.endless(tag: Int) -> AsyncStream<Int>")]
+    #[link_name = apus::mangle!("Probe.endless(tag: Int) -> AsyncStream<Int>")]
     static ENDLESS: u8;
     fn probe_endless_terminated(tag: isize) -> bool;
 }

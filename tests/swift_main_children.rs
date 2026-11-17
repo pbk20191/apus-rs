@@ -3,8 +3,8 @@
 #[path = "common/probe.rs"]
 mod probe;
 
-use async_swift_rs::swift::{sleep, spawn_on_main, SwiftAsync};
-use async_swift_rs::{is_main_thread, run_main};
+use apus::swift::{sleep, spawn_on_main, SwiftAsync};
+use apus::{is_main_thread, run_main};
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::time::Duration;
 

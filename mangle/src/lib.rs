@@ -1,7 +1,7 @@
 //! Computes the mangled symbol of a Swift declaration, the name it has in a binary.
 //!
 //! ```
-//! let symbol = async_swift_rs_mangle::mangle("Greeter.greet(_: String, times: Int) async throws -> String").unwrap();
+//! let symbol = apus_mangle::mangle("Greeter.greet(_: String, times: Int) async throws -> String").unwrap();
 //! assert_eq!(symbol, "$s7Greeter5greet_5timesS2S_SitYaKF");
 //! ```
 //!

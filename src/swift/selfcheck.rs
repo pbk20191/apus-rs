@@ -17,7 +17,7 @@ extern "C" {
 }
 const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
 
-const FAILED: &str = "async-swift-rs: Swift runtime ABI self-check failed";
+const FAILED: &str = "apus: Swift runtime ABI self-check failed";
 
 pub(crate) fn ensure() {
     static CHECK: Once = Once::new();

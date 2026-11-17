@@ -1,4 +1,8 @@
-# async-swift-rs
+# apus
+
+Rust ↔ Swift at the runtime ABI (repository `apus-rs`; *Apus* is the swifts' genus). Formerly `async-swift-rs`: the
+dated design documents under `docs/superpowers/` keep that name. Other Swift interop crates and how this one differs:
+[docs/prior-art.md](docs/prior-art.md).
 
 Run Rust futures as genuine **Swift Concurrency Tasks** on macOS, or on **libdispatch**.
 
@@ -9,14 +13,14 @@ await Swift `async` closures **inside the same Task**.
 
 ```toml
 [dependencies]
-async-swift-rs = { path = "…" }                                          # swift backend (default)
-async-swift-rs = { path = "…", default-features = false, features = ["dispatch"] }
+apus = { path = "…" }                                          # swift backend (default)
+apus = { path = "…", default-features = false, features = ["dispatch"] }
 ```
 
 | Feature | Backend |
 |---|---|
-| `swift` (default) | `async_swift_rs::swift`: tasks are Swift Tasks on the cooperative pool / MainActor |
-| `dispatch` | `async_swift_rs::dispatch`: `async-task` runnables on GCD queues via [`dispatch2`](https://crates.io/crates/dispatch2) (QoS, main queue, serial queues) |
+| `swift` (default) | `apus::swift`: tasks are Swift Tasks on the cooperative pool / MainActor |
+| `dispatch` | `apus::dispatch`: `async-task` runnables on GCD queues via [`dispatch2`](https://crates.io/crates/dispatch2) (QoS, main queue, serial queues) |
 | `stream` | `impl futures_core::Stream for SwiftStream` |
 | `test-probe` | test-only Swift probes (needs `swiftc`) |
 
@@ -63,7 +67,7 @@ main thread.
 No Swift code is needed for an existing Swift async function: name its symbol, pass Rust values, await.
 
 ```rust
-use async_swift_rs::swift::SwiftAsyncFn;
+use apus::swift::SwiftAsyncFn;
 
 // `func greet(_ name: String, times: Int, sleepMs: Int) async throws -> String` in module Probe.
 // The mangled name comes from `nm -gU <binary> | grep greet` (drop the leading underscore).
@@ -89,7 +93,7 @@ let total: i64 = BUMP.call((5i64,)).on(&counter).await?;          // a method: `
 Write the Swift declaration; the symbol is computed at compile time.
 
 ```rust
-async_swift_rs::swift! {
+apus::swift! {
     #[swift = "Greeter.greet(_: String, times: Int) async throws -> String"]
     pub async fn greet(name: &str, times: i64) throws -> String;
 
@@ -111,7 +115,7 @@ let text = greet("Kim", 2).await?;          // a SwiftCall<String>: `.child()` a
   declaration.
 
 ```rust
-async_swift_rs::swift! {
+apus::swift! {
     #[swift = "static StoreKit.Product(struct).products<I: Collection>(for: I) async throws -> [Product(struct)] where I.Element == String"]
     async fn products(ids: &SwiftValue, ids_type: SwiftType, collection: WitnessTable) throws -> DirectValue;
 
@@ -121,10 +125,10 @@ async_swift_rs::swift! {
 let name = display_name(&product)?;
 ```
 
-- `async_swift_rs::mangle!("…")` is the symbol alone, as a string literal:
+- `apus::mangle!("…")` is the symbol alone, as a string literal:
 
 ```rust
-static PRODUCTS: SwiftAsyncFn = SwiftAsyncFn::new(async_swift_rs::mangle!(
+static PRODUCTS: SwiftAsyncFn = SwiftAsyncFn::new(apus::mangle!(
     "static StoreKit.Product(struct).products<I: Collection>(for: I) async throws -> [Product(struct)] where I.Element == String"
 ));
 ```
@@ -170,7 +174,7 @@ parameter, then a witness table per conformance requirement. Values of generic t
 structs (every struct of an Apple framework), are passed and returned by address, as a `SwiftValue`.
 
 ```rust
-use async_swift_rs::swift::{SwiftAsyncFn, SwiftFn, SwiftProtocol, SwiftType, SwiftValue};
+use apus::swift::{SwiftAsyncFn, SwiftFn, SwiftProtocol, SwiftType, SwiftValue};
 
 // StoreKit 2: static func Product.products<I: Collection>(for: I) async throws -> [Product] where I.Element == String
 static PRODUCTS: SwiftAsyncFn = SwiftAsyncFn::new("$s8StoreKit7ProductV8products3forSayACGx_tYaKSlRzSS7ElementRtzlFZ");
@@ -200,7 +204,7 @@ println!("{}", products.description());                                     // S
 Any value whose type is a Swift `AsyncSequence` can be consumed element by element:
 
 ```rust
-use async_swift_rs::swift::SwiftStream;
+use apus::swift::SwiftStream;
 
 let mut updates = SwiftStream::new(sequence)?;              // e.g. an AsyncStream, or StoreKit's Transaction.updates
 while let Some(update) = updates.next().await {

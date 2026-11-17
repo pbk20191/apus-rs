@@ -53,10 +53,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-swift-rs"
+name = "apus"
 version = "0.1.0"
 dependencies = [
- "async-swift-rs-macros",
+ "apus-macros",
  "async-task",
  "cc",
  "dispatch2",
@@ -67,14 +67,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-swift-rs-macros"
+name = "apus-macros"
 version = "0.1.0"
 dependencies = [
- "async-swift-rs-mangle",
+ "apus-mangle",
 ]
 
 [[package]]
-name = "async-swift-rs-mangle"
+name = "apus-mangle"
 version = "0.1.0"
 
 [[package]]

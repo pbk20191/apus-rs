@@ -1,5 +1,5 @@
 [package]
-name = "async-swift-rs"
+name = "apus"
 version = "0.1.0"
 edition = "2021"
 description = "Run Rust futures as Swift Concurrency Tasks (or on libdispatch) on Apple platforms"
@@ -17,7 +17,7 @@ stream = ["swift", "dep:futures-core"]
 [dependencies]
 async-task = "4"
 futures-core = { version = "0.3", optional = true, default-features = false }
-async-swift-rs-macros = { path = "macros" }
+apus-macros = { path = "macros" }
 dispatch2 = { version = "0.3.1", default-features = false, features = ["std"] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFRunLoop", "CFString", "CFDate"] }
 libc = "0.2"

@@ -1,5 +1,5 @@
 //! SwiftAny downcasts, type names and drops; SwiftError descriptions.
-use async_swift_rs::swift::{SwiftAny, SwiftError};
+use apus::swift::{SwiftAny, SwiftError};
 use std::ffi::c_void;
 
 extern "C" {

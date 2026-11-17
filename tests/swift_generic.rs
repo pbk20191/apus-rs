@@ -2,7 +2,7 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use async_swift_rs::swift::{
+use apus::swift::{
     spawn, AsyncFunctionPointer, CallError, SwiftAsyncFn, SwiftFn, SwiftProtocol, SwiftType, SwiftValue,
 };
 use common::{block, check, Failed, Trial};
@@ -144,7 +144,7 @@ fn storekit_products_reaches_the_framework() -> Result<(), Failed> {
 
 /// Arguments a call keeps alive are released even when the call is never run or fails before running.
 fn unrun_calls_release_their_arguments() -> Result<(), Failed> {
-    use async_swift_rs::swift::SwiftObject;
+    use apus::swift::SwiftObject;
     extern "C" { fn probe_make_flagged_object(flag: *mut bool) -> *mut std::ffi::c_void; }
     static MISSING: SwiftFn = SwiftFn::new("$s5Probe12doesNotExistyyF");
     let (mut never_run, mut unavailable, mut run) = (false, false, false);
@@ -165,7 +165,7 @@ fn unrun_calls_release_their_arguments() -> Result<(), Failed> {
 }
 
 // Declared in Swift syntax; symbols and result types are computed at compile time.
-async_swift_rs::swift! {
+apus::swift! {
     /// `Task.sleep(nanoseconds:)` lives in a constrained extension of `Task`.
     #[swift = "static (extension in _Concurrency where Success == Never, Failure == Never) \
                _Concurrency.Task<Success, Failure>.sleep(nanoseconds: UInt64) async throws"]
@@ -187,7 +187,7 @@ fn extension_members_by_declaration() -> Result<(), Failed> {
 /// The real `Transaction.updates`: obtained through a declared static getter, turned into a `SwiftStream`.
 /// Nothing is awaited from it (there are no transactions in a test process).
 fn storekit_transaction_updates_is_a_stream() -> Result<(), Failed> {
-    use async_swift_rs::swift::SwiftStream;
+    use apus::swift::SwiftStream;
     extern "C" { fn dlopen(path: *const std::ffi::c_char, mode: i32) -> *mut std::ffi::c_void; }
     unsafe { dlopen(c"/System/Library/Frameworks/StoreKit.framework/StoreKit".as_ptr(), 1) };
     let (tx, rx) = std::sync::mpsc::channel();

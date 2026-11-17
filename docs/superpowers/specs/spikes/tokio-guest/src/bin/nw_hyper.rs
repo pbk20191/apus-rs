@@ -325,7 +325,7 @@ async fn handle_request(request: Request<hyper::body::Incoming>, app: Rc<App>) -
                 .header("Mcp-Session-Id", &session.id).body(ChannelBody(rx).boxed_unsync()).unwrap()
         }
         (Method::GET, "/stats") => reply(StatusCode::OK, None, serde_json::json!({
-            "threads": thread_count(), "turns": TURNS.load(SeqCst), "on_main": async_swift_rs::is_main_thread(), "bytes_copied_in": BYTES_COPIED_IN.load(SeqCst) }).to_string()),
+            "threads": thread_count(), "turns": TURNS.load(SeqCst), "on_main": apus::is_main_thread(), "bytes_copied_in": BYTES_COPIED_IN.load(SeqCst) }).to_string()),
         (Method::DELETE, "/mcp") => { *app.session.borrow_mut() = None; arm(SLOW, false); reply(StatusCode::NO_CONTENT, None, String::new()) }
         _ => reply(StatusCode::NOT_FOUND, None, String::new()),
     })
@@ -369,7 +369,7 @@ impl Desktop {
     #[tool(description = "Adds two numbers")]
     fn sum(&self, Parameters(SumRequest { a, b }): Parameters<SumRequest>) -> String {
         self.calls.set(self.calls.get() + 1);
-        format!("{} (handler on main: {})", a + b, async_swift_rs::is_main_thread())
+        format!("{} (handler on main: {})", a + b, apus::is_main_thread())
     }
     #[tool(description = "Waits on a tokio timer, then reports")]
     async fn wait(&self, Parameters(WaitRequest { millis }): Parameters<WaitRequest>) -> String {
@@ -384,8 +384,8 @@ impl Desktop {
     #[tool(description = "Does heavy work on a dispatch queue, off the main thread")]
     async fn heavy(&self) -> String {
         self.calls.set(self.calls.get() + 1);
-        let worker_on_main = async_swift_rs::dispatch::spawn_detached(async { std::thread::sleep(Duration::from_millis(40)); async_swift_rs::is_main_thread() }).await.unwrap();
-        format!("worker on main: {worker_on_main}; back on main: {}; call #{}", async_swift_rs::is_main_thread(), self.calls.get())
+        let worker_on_main = apus::dispatch::spawn_detached(async { std::thread::sleep(Duration::from_millis(40)); apus::is_main_thread() }).await.unwrap();
+        format!("worker on main: {worker_on_main}; back on main: {}; call #{}", apus::is_main_thread(), self.calls.get())
     }
 }
 #[tool_handler(router = self.tool_router)]
@@ -409,7 +409,7 @@ fn main() {
     install_timers();
     let _guard = handle.enter();
     let local = tokio::task::LocalSet::new();
-    async_swift_rs::run_main(KickAfterPoll(Box::pin(async move {
+    apus::run_main(KickAfterPoll(Box::pin(async move {
         local.run_until(async move {
             let app = Rc::new(App::default());
             let (port, mut connections) = listen();

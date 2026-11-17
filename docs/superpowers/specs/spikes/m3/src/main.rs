@@ -1,6 +1,6 @@
 //! M3 spike: what Rust can do with Swift classes, structs and protocols at the ABI level.
 //! Usage: m3-spike <plain|evolution> <class|struct|protocol>
-use async_swift_rs::swift::SwiftType;
+use apus::swift::SwiftType;
 use std::ffi::{c_char, c_void, CStr, CString};
 
 #[repr(C)]

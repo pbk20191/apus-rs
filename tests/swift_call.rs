@@ -3,9 +3,9 @@ mod common;
 #[path = "common/probe.rs"]
 mod probe;
 
-use async_swift_rs::is_main_thread;
-use async_swift_rs::swift::{current_task, sleep, spawn, spawn_on_main, spawn_with, timeout, CallError, JoinHandle, SwiftAsync};
-use async_swift_rs::{Priority, SpawnOptions};
+use apus::is_main_thread;
+use apus::swift::{current_task, sleep, spawn, spawn_on_main, spawn_with, timeout, CallError, JoinHandle, SwiftAsync};
+use apus::{Priority, SpawnOptions};
 use std::future::poll_fn;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;

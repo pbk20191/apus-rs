@@ -1,6 +1,6 @@
 //! `run_main` drives the main run loop until its future completes and returns the output.
-use async_swift_rs::dispatch::sleep;
-use async_swift_rs::{is_main_thread, run_main};
+use apus::dispatch::sleep;
+use apus::{is_main_thread, run_main};
 use std::time::Duration;
 
 fn main() {

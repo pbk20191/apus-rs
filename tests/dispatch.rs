@@ -1,9 +1,9 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use async_swift_rs::dispatch::{block_on, sleep, spawn, spawn_detached, spawn_on_main, spawn_with, SerialQueue};
-use async_swift_rs::{is_main_thread, run_main};
-use async_swift_rs::{JoinError, Priority, SpawnOptions};
+use apus::dispatch::{block_on, sleep, spawn, spawn_detached, spawn_on_main, spawn_with, SerialQueue};
+use apus::{is_main_thread, run_main};
+use apus::{JoinError, Priority, SpawnOptions};
 use common::{block, check, current_qos, Failed, Trial};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -81,7 +81,7 @@ fn priority_inherited() -> Result<(), Failed> {
 
 fn serial_queue_never_overlaps() -> Result<(), Failed> {
     use std::sync::atomic::AtomicUsize;
-    let queue = SerialQueue::new("async-swift-rs.test.serial", Priority::Utility);
+    let queue = SerialQueue::new("apus.test.serial", Priority::Utility);
     let in_flight = Arc::new(AtomicUsize::new(0));
     let max_seen = Arc::new(AtomicUsize::new(0));
     let handles: Vec<_> = (0..100)

@@ -1,7 +1,7 @@
 //! An MCP server over HTTP where nothing owns a thread but the system:
 //! - transport: Network.framework (C API, blocks delivered on the main queue)
 //! - protocol: rmcp 3.10 (`local` feature), its tokio runtime a guest of the main run loop (no tokio thread)
-//! - executor: async-swift-rs `run_main` on the main run loop; heavy work goes to dispatch queues
+//! - executor: apus `run_main` on the main run loop; heavy work goes to dispatch queues
 //!
 //! POST /mcp with one JSON-RPC message per request; the answer comes back as application/json.
 //! One session at a time (a new `initialize` replaces it). No GET stream, so server-initiated messages are dropped.
@@ -237,7 +237,7 @@ async fn handle_connection(connection: Connection, app: Rc<App>) {
         let ok = match (request.method.as_str(), request.path.as_str()) {
             ("POST", "/mcp") => handle_post(&connection, &app, &request.body).await,
             ("GET", "/stats") => {
-                let body = serde_json::json!({ "threads": thread_count(), "turns": TURNS.load(SeqCst), "on_main": async_swift_rs::is_main_thread() });
+                let body = serde_json::json!({ "threads": thread_count(), "turns": TURNS.load(SeqCst), "on_main": apus::is_main_thread() });
                 respond(&connection, "200 OK", None, body.to_string().as_bytes()).await
             }
             ("DELETE", "/mcp") => { *app.session.borrow_mut() = None; arm(SLOW, false); respond(&connection, "204 No Content", None, b"").await }
@@ -289,7 +289,7 @@ impl Desktop {
     #[tool(description = "Adds two numbers")]
     fn sum(&self, Parameters(SumRequest { a, b }): Parameters<SumRequest>) -> String {
         self.calls.set(self.calls.get() + 1);
-        format!("{} (handler on main: {})", a + b, async_swift_rs::is_main_thread())
+        format!("{} (handler on main: {})", a + b, apus::is_main_thread())
     }
     #[tool(description = "Waits on a tokio timer, then reports")]
     async fn wait(&self, Parameters(WaitRequest { millis }): Parameters<WaitRequest>) -> String {
@@ -300,8 +300,8 @@ impl Desktop {
     #[tool(description = "Does heavy work on a dispatch queue, off the main thread")]
     async fn heavy(&self) -> String {
         self.calls.set(self.calls.get() + 1);
-        let worker_on_main = async_swift_rs::dispatch::spawn_detached(async { std::thread::sleep(Duration::from_millis(40)); async_swift_rs::is_main_thread() }).await.unwrap();
-        format!("worker on main: {worker_on_main}; back on main: {}; call #{}", async_swift_rs::is_main_thread(), self.calls.get())
+        let worker_on_main = apus::dispatch::spawn_detached(async { std::thread::sleep(Duration::from_millis(40)); apus::is_main_thread() }).await.unwrap();
+        format!("worker on main: {worker_on_main}; back on main: {}; call #{}", apus::is_main_thread(), self.calls.get())
     }
 }
 #[tool_handler(router = self.tool_router)]
@@ -325,7 +325,7 @@ fn main() {
     install_timers();
     let _guard = handle.enter();
     let local = tokio::task::LocalSet::new();
-    async_swift_rs::run_main(KickAfterPoll(Box::pin(async move {
+    apus::run_main(KickAfterPoll(Box::pin(async move {
         local.run_until(async move {
             let app = Rc::new(App::default());
             let (port, mut connections) = listen();

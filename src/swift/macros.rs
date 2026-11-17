@@ -3,7 +3,7 @@
 /// Declares Swift functions as Rust functions.
 ///
 /// ```ignore
-/// async_swift_rs::swift! {
+/// apus::swift! {
 ///     /// The symbol is computed from the Swift declaration.
 ///     #[swift = "Greeter.greet(_: String, times: Int) async throws -> String"]
 ///     pub async fn greet(name: &str, times: i64) throws -> String;
@@ -36,11 +36,11 @@
 ///
 /// ```compile_fail
 /// // `Mystery` is not a standard library type: it needs its kind, e.g. `Mystery(struct)`.
-/// const SYMBOL: &str = async_swift_rs::mangle!("Probe.f(_: Mystery) -> Int");
+/// const SYMBOL: &str = apus::mangle!("Probe.f(_: Mystery) -> Int");
 /// ```
 ///
 /// ```
-/// const SYMBOL: &str = async_swift_rs::mangle!("Probe.f(_: Mystery(struct)) -> Int");
+/// const SYMBOL: &str = apus::mangle!("Probe.f(_: Mystery(struct)) -> Int");
 /// assert_eq!(SYMBOL, "$s5Probe1fySiAA7MysteryVF");
 /// ```
 #[macro_export]

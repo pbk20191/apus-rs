@@ -37,7 +37,7 @@ fn main() {
     let on_main = move || std::thread::current().id() == main_thread;
     let _guard = handle.enter();
     let local = tokio::task::LocalSet::new();
-    async_swift_rs::run_main(async move {
+    apus::run_main(async move {
         local.run_until(async move {
             ticking(true);
             let a = tokio::task::spawn_local(async move {

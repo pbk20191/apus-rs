@@ -1,4 +1,4 @@
-//! Guest mode without polling: a LocalSet polled on the main run loop (async-swift-rs `run_main`), while the
+//! Guest mode without polling: a LocalSet polled on the main run loop (apus `run_main`), while the
 //! runtime's driver (the timer wheel) sleeps on a helper thread that runs no tasks of ours.
 use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::time::{Duration, Instant};
@@ -57,6 +57,6 @@ fn main() {
         tokio::time::sleep(Duration::from_millis(500)).await;
         println!("4 polls of the LocalSet: {} while working, {} during a 500 ms idle sleep", mid - before, POLLS.load(SeqCst) - mid);
     };
-    async_swift_rs::run_main(Counted(Box::pin(async move { local.run_until(work).await })));
+    apus::run_main(Counted(Box::pin(async move { local.run_until(work).await })));
     println!("done at {:?}", start.elapsed());
 }

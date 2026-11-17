@@ -1,7 +1,7 @@
 //! The libdispatch backend: QoS queues, the main queue, serial queues.
 //! Run: cargo run --example dispatch_basic --no-default-features --features dispatch
-use async_swift_rs::dispatch::{sleep, spawn, spawn_with, SerialQueue};
-use async_swift_rs::{is_main_thread, run_main, Priority, SpawnOptions};
+use apus::dispatch::{sleep, spawn, spawn_with, SerialQueue};
+use apus::{is_main_thread, run_main, Priority, SpawnOptions};
 use std::time::Duration;
 
 fn main() {

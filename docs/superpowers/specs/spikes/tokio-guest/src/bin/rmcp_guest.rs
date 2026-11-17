@@ -1,6 +1,6 @@
 //! rmcp (the official Rust MCP SDK) served on the main run loop with no thread owned by tokio.
 //! - tokio current_thread runtime entered on the main thread; rmcp's service loop lives in a LocalSet polled by
-//!   async-swift-rs `run_main`; a run loop timer turns tokio's timer wheel only while a request is in flight.
+//!   apus `run_main`; a run loop timer turns tokio's timer wheel only while a request is in flight.
 //! - The transport is ours (channels here; Network.framework later). The client is a plain thread standing in
 //!   for a connection's callbacks.
 use objc2_core_foundation::{kCFRunLoopCommonModes, CFAbsoluteTimeGetCurrent, CFRunLoop, CFRunLoopTimer};
@@ -39,7 +39,7 @@ extern "C-unwind" fn turn(_timer: *mut CFRunLoopTimer, _info: *mut std::ffi::c_v
 fn ticking(on: bool) {
     TICKER.with(|t| t.borrow().as_ref().unwrap().set_next_fire_date(if on { CFAbsoluteTimeGetCurrent() } else { FAR }));
 }
-fn on_main() -> bool { async_swift_rs::is_main_thread() }
+fn on_main() -> bool { apus::is_main_thread() }
 
 // ---- the transport -----------------------------------------------------------------------------------------
 /// Messages in from any thread, messages out to any thread. Arms the tick while requests are unanswered.
@@ -101,7 +101,7 @@ impl Desktop {
     #[tool(description = "Does heavy work on a dispatch queue, off the main thread")]
     async fn heavy(&self) -> String {
         self.calls.set(self.calls.get() + 1);
-        let worker_on_main = async_swift_rs::dispatch::spawn_detached(async { std::thread::sleep(Duration::from_millis(40)); on_main() }).await.unwrap();
+        let worker_on_main = apus::dispatch::spawn_detached(async { std::thread::sleep(Duration::from_millis(40)); on_main() }).await.unwrap();
         format!("worker on main: {worker_on_main}; back on main: {}; call #{}", on_main(), self.calls.get())
     }
 }
@@ -176,7 +176,7 @@ fn main() {
 
     let _guard = handle.enter();
     let local = tokio::task::LocalSet::new();
-    let reason = async_swift_rs::run_main(KickAfterPoll(Box::pin(async move {
+    let reason = apus::run_main(KickAfterPoll(Box::pin(async move {
         local.run_until(async move {
             let server = Desktop { tool_router: Desktop::tool_router(), calls: Rc::new(Cell::new(0)) };
             let transport = ChannelTransport { incoming, outgoing, in_flight: Rc::new(Cell::new(0)) };

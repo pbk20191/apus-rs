@@ -2,8 +2,8 @@
 #[path = "common/probe.rs"]
 mod probe;
 
-use async_swift_rs::swift::sleep;
-use async_swift_rs::{is_main_thread, run_main};
+use apus::swift::sleep;
+use apus::{is_main_thread, run_main};
 use std::time::Duration;
 
 fn main() {

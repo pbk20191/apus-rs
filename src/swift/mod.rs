@@ -70,7 +70,7 @@ where
 ///
 /// ```compile_fail
 /// fn assert_send<T: Send>(_: &T) {}
-/// let handle = async_swift_rs::swift::spawn_local_on_main(async { std::rc::Rc::new(1) });
+/// let handle = apus::swift::spawn_local_on_main(async { std::rc::Rc::new(1) });
 /// assert_send(&handle);
 /// ```
 pub fn spawn_local_on_main<F>(future: F) -> MainOnlyHandle<impl Send + 'static, F::Output>
