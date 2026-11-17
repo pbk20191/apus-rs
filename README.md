@@ -22,6 +22,7 @@ apus = { path = "…", default-features = false, features = ["dispatch"] }
 | `swift` (default) | `apus::swift`: tasks are Swift Tasks on the cooperative pool / MainActor |
 | `dispatch` | `apus::dispatch`: `async-task` runnables on GCD queues via [`dispatch2`](https://crates.io/crates/dispatch2) (QoS, main queue, serial queues) |
 | `stream` | `impl futures_core::Stream for SwiftStream` |
+| `macos15` | raises the deployment floor from macOS 14 to 15: macOS 15 runtime functions become required instead of looked up at run time |
 | `test-probe` | test-only Swift probes (needs `swiftc`) |
 
 ## API
@@ -281,15 +282,18 @@ Don't block inside tasks: the Swift cooperative pool does not grow to compensate
 
 ## How it works, and what it relies on
 
-- Tasks are created with `swift_task_create_common`; a small C file (`csrc/funclets.c`, clang `swiftasynccall`)
-  holds the async entry/step/resume funclets the runtime calls. Suspension uses `swift_continuation_init/await`;
-  the Rust waker resumes the continuation. Child Tasks use a discarding TaskGroup and `swift_taskGroup_waitAll`.
+- The Swift runtime ABI apus relies on is written once, in the C header `sys/include/apus/abi.h` of the internal
+  crate `apus-sys` (layouts and flags transcribed from `swiftlang/swift` @ `swift-6.4.2-RELEASE`, each item citing
+  its source). The C funclets are compiled against it and the Rust declarations are generated from it by bindgen
+  (`sys/tests/fresh.rs`; `APUS_BLESS=1` regenerates them).
+- Tasks are created with `swift_task_create_common`; small C funclets (`sys/csrc/funclets.c`, clang
+  `swiftasynccall`) hold the async entry/step/resume code the runtime calls. Suspension uses
+  `swift_continuation_init/await`; the Rust waker resumes the continuation. Child Tasks use a discarding TaskGroup
+  and `swift_taskGroup_waitAll`.
 - Rust calls the runtime's synchronous Swift-CC functions directly as `extern "C"`, so the glue inlines.
-  `tests/abi_equivalence.rs` checks, for each of them, that clang lowers a `swiftcall` call and a C call
-  identically on arm64 and x86_64. Swift-CC `bool` returns are read as `u8 & 1`.
-- Layouts and flags are transcribed from `swiftlang/swift` @ `swift-6.4.2-RELEASE`
-  (`include/swift/ABI/{Task,TaskStatus,MetadataValues,MetadataKind,Metadata,Executor}.h`,
-  `include/swift/Runtime/Concurrency.h`, `stdlib/public/Concurrency/Task.cpp`, `TaskGroup.cpp`), each cited where used.
+  `sys/tests/lowering.rs` reads the header and checks, for each such function, that clang lowers a `swiftcall` call
+  and a C call identically on arm64 and x86_64. A function that does not (`swift_task_isCancelled`, whose Bool
+  result is not extended) is reached through a C thunk instead.
 
 **Risks.** `swift_task_create_common`, the continuation and TaskGroup context layouts and the plain-Job metadata
 shape are runtime-internal contracts, not public API. They are tied to libdispatch and back-deployment, so they
@@ -300,4 +304,6 @@ clear message instead of corrupting memory.
 ## Tested on
 
 macOS 27.3 (arm64, and x86_64 under Rosetta), Swift runtime 6.4.2, rustc 1.99. Other versions are untested.
-The test probes need macOS 14 (`MainActor.assumeIsolated`).
+Apple platforms only. Deployment floor: macOS 14 (macOS 15 with the `macos15` feature). The test probes need macOS 14
+(`MainActor.assumeIsolated`). Binaries built by cargo get the `/usr/lib/swift` rpath from apus's build script; a binary
+linked any other way needs `-Wl,-rpath,/usr/lib/swift` itself.

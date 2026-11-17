@@ -6,7 +6,7 @@
 //! stores the result registers, reports through `rs_call_done`, and polls again. Concurrent calls become child
 //! Tasks (`rs_take_child`).
 //!
-//! Every Swift async function has the same shape at this level (csrc/swift_abi.h `GenericAsyncFn`), so one
+//! Every Swift async function has the same shape at this level (apus-sys include/apus/abi.h `GenericAsyncFn`), so one
 //! path serves direct function calls ([`super::SwiftAsyncFn`]) and closures ([`SwiftAsync`]).
 
 use super::any::{SwiftAny, SwiftError};
@@ -25,27 +25,21 @@ use std::task::{Context, Poll, Waker};
 
 /// What a Swift async function symbol with the `Tu` suffix points at (lib/IRGen `AsyncFunctionPointer`):
 /// the code's offset relative to this record, and the size of the context the caller must allocate.
-#[repr(C)]
-pub struct AsyncFunctionPointer {
-    function: i32,
-    context_size: u32,
-}
+#[repr(transparent)]
+pub struct AsyncFunctionPointer(apus_sys::AsyncFunctionPointer);
 
-/// Argument registers of a call (csrc/swift_abi.h `CallRegs`).
-#[repr(C)]
-pub(crate) struct CallRegs {
-    pub(crate) gpr: [u64; 8],
-    pub(crate) fpr: [f64; 8],
-    pub(crate) this: *mut c_void,
-}
+/// Argument registers of a call (apus-sys `CallRegs`).
+pub(crate) use apus_sys::CallRegs;
 
-/// Result registers of a finished call (csrc/swift_abi.h `RetRegs`).
+/// Result registers of a finished call (apus-sys `RetRegs`).
 #[doc(hidden)]
-#[repr(C)]
-pub struct RetRegs {
-    pub gpr: [u64; 4],
-    pub fpr: [f64; 4],
-    pub error: *mut c_void,
+#[repr(transparent)]
+pub struct RetRegs(pub(crate) apus_sys::RetRegs);
+
+impl RetRegs {
+    pub(crate) const fn new() -> RetRegs {
+        RetRegs(apus_sys::RetRegs { gpr: [0; 4], fpr: [0.0; 4], error: std::ptr::null_mut() })
+    }
 }
 
 pub enum CallError {
@@ -169,7 +163,7 @@ impl CallShared {
         let shared = Arc::new(CallShared {
             function,
             regs: UnsafeCell::new(lowering.regs),
-            ret: UnsafeCell::new(RetRegs { gpr: [0; 4], fpr: [0.0; 4], error: std::ptr::null_mut() }),
+            ret: UnsafeCell::new(RetRegs::new()),
             indirect: UnsafeCell::new(slot),
             throws: false,
             owned: lowering.owned,
@@ -188,8 +182,8 @@ impl CallShared {
     /// Takes the finished call's result. Call exactly once, after `Done`.
     unsafe fn take_result<R: SwiftRet>(&self) -> Result<R, CallError> {
         let ret = &*self.ret.get();
-        if self.throws && !ret.error.is_null() {
-            return Err(CallError::Swift(SwiftError::from_raw(ret.error)));
+        if self.throws && !ret.0.error.is_null() {
+            return Err(CallError::Swift(SwiftError::from_raw(ret.0.error)));
         }
         Ok(R::lift(ret, &mut *self.indirect.get()))
     }
@@ -348,7 +342,7 @@ impl<R> SwiftCall<R> {
     /// Calls a method: `object` is the callee's `self`.
     pub fn on(mut self, object: &super::SwiftObject) -> Self {
         let call = self.configure();
-        call.regs.get_mut().this = object.as_ptr();
+        call.regs.get_mut().self_ = object.as_ptr();
         call.owned.push(Owned::Object(unsafe { rt::swift_retain(object.as_ptr()) }));
         self
     }
@@ -357,7 +351,7 @@ impl<R> SwiftCall<R> {
     pub fn on_value(mut self, value: &SwiftValue) -> Self {
         let copy = value.clone();
         let call = self.configure();
-        call.regs.get_mut().this = copy.as_ptr();
+        call.regs.get_mut().self_ = copy.as_ptr();
         call.owned.push(Owned::Value(copy));
         self
     }
@@ -365,7 +359,7 @@ impl<R> SwiftCall<R> {
     /// Calls a `mutating` method: the callee works on the value at `address`, which `keep_alive` owns.
     pub(crate) fn on_inout(mut self, address: *mut c_void, keep_alive: Arc<dyn std::any::Any + Send + Sync>) -> Self {
         let call = self.configure();
-        call.regs.get_mut().this = address;
+        call.regs.get_mut().self_ = address;
         call.owned.push(Owned::Shared(keep_alive));
         self
     }
@@ -388,7 +382,7 @@ impl SwiftCall<SwiftAny> {
         // thick function: function word → AsyncFunctionPointer, context word (passed as the callee's self).
         let function = *(closure_box.byte_add(16) as *const *const AsyncFunctionPointer);
         let mut lowering = ArgLowering::new(true);
-        lowering.regs.this = *(closure_box.byte_add(24) as *const *mut c_void);
+        lowering.regs.self_ = *(closure_box.byte_add(24) as *const *mut c_void);
         lowering.owned.push(Owned::Object(closure_box));
         SwiftCall::build(function, lowering, None, IndirectSlot::inline(), true).throws()
     }

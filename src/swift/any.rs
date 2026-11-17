@@ -50,7 +50,7 @@ impl std::fmt::Debug for SwiftAny {
 impl Drop for SwiftAny {
     fn drop(&mut self) {
         let any = rt::any_metadata();
-        unsafe { (rt::value_witnesses(any).destroy)(self.container.as_mut_ptr().cast(), any) }
+        unsafe { (rt::value_witnesses(any).destroy.unwrap())(self.container.as_mut_ptr().cast(), any) }
     }
 }
 
@@ -75,7 +75,7 @@ pub trait FromSwiftAny: Sized {
             let buf = std::alloc::alloc(layout).cast::<c_void>();
             let out = any.cast_into(metadata, buf).then(|| {
                 let out = Self::from_value(buf);
-                (witnesses.destroy)(buf, metadata);
+                (witnesses.destroy.unwrap())(buf, metadata);
                 out
             });
             std::alloc::dealloc(buf.cast(), layout);
@@ -134,7 +134,7 @@ impl<T: FromSwiftAny> FromSwiftAny for Option<T> {
     unsafe fn from_value(value: *const c_void) -> Self {
         let metadata = Self::swift_metadata();
         // Optional: case some = 0 (payload at offset 0), none = 1.
-        let none = (rt::value_witnesses(metadata).get_enum_tag)(value, metadata) == 1;
+        let none = (rt::value_witnesses(metadata).get_enum_tag.unwrap())(value, metadata) == 1;
         (!none).then(|| T::from_value(value))
     }
 }
@@ -240,7 +240,7 @@ impl SwiftError {
             let align = (witnesses.flags as usize & 0xff) + 1;
             let layout = std::alloc::Layout::from_size_align(witnesses.size.max(1), align.max(16)).unwrap();
             let copy = std::alloc::alloc(layout).cast::<c_void>();
-            (witnesses.initialize_with_copy)(copy, opened.value as *mut c_void, opened.type_);
+            (witnesses.initialize_with_copy.unwrap())(copy, opened.value as *mut c_void, opened.type_);
             let mut text = rt::string_describing(copy, opened.type_); // consumes the copy
             std::alloc::dealloc(copy.cast(), layout);
             let out = rt::string_to_rust(&text);

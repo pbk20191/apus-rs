@@ -122,7 +122,7 @@ impl ArgLowering {
     /// `indirect_result`: the first integer register is reserved for the result address.
     pub(crate) fn new(indirect_result: bool) -> ArgLowering {
         ArgLowering {
-            regs: CallRegs { gpr: [0; 8], fpr: [0.0; 8], this: std::ptr::null_mut() },
+            regs: CallRegs { gpr: [0; 8], fpr: [0.0; 8], self_: std::ptr::null_mut() },
             ints: indirect_result as usize,
             floats: 0,
             owned: Vec::new(),
@@ -294,24 +294,24 @@ macro_rules! direct_ret {
 }
 direct_ret! {
     (): |_ret| (),
-    i64: |ret| ret.gpr[0] as i64,
-    i32: |ret| ret.gpr[0] as i32,
-    u64: |ret| ret.gpr[0],
-    bool: |ret| ret.gpr[0] & 1 == 1,
+    i64: |ret| ret.0.gpr[0] as i64,
+    i32: |ret| ret.0.gpr[0] as i32,
+    u64: |ret| ret.0.gpr[0],
+    bool: |ret| ret.0.gpr[0] & 1 == 1,
     // `Int?`: the value, then a flag whose low bit is set for nil.
-    Option<i64>: |ret| (ret.gpr[1] & 1 == 0).then_some(ret.gpr[0] as i64),
-    String: |ret| take_string(ret.gpr[0], ret.gpr[1]),
+    Option<i64>: |ret| (ret.0.gpr[1] & 1 == 0).then_some(ret.0.gpr[0] as i64),
+    String: |ret| take_string(ret.0.gpr[0], ret.0.gpr[1]),
     // `String?`: nil is the all-zero owner word.
-    Option<String>: |ret| (ret.gpr[1] != 0).then(|| take_string(ret.gpr[0], ret.gpr[1])),
-    SwiftObject: |ret| SwiftObject::from_raw(ret.gpr[0] as *mut c_void),
-    Option<SwiftObject>: |ret| NonNull::new(ret.gpr[0] as *mut c_void).map(SwiftObject),
+    Option<String>: |ret| (ret.0.gpr[1] != 0).then(|| take_string(ret.0.gpr[0], ret.0.gpr[1])),
+    SwiftObject: |ret| SwiftObject::from_raw(ret.0.gpr[0] as *mut c_void),
+    Option<SwiftObject>: |ret| NonNull::new(ret.0.gpr[0] as *mut c_void).map(SwiftObject),
 }
 
 impl SwiftRet for f64 {
     const FLOAT: bool = true;
 
     unsafe fn lift(ret: &RetRegs, _indirect: &mut IndirectSlot) -> Self {
-        ret.fpr[0]
+        ret.0.fpr[0]
     }
 }
 
@@ -331,13 +331,13 @@ unsafe fn take_collection<C: FromSwiftAny>(reference: u64) -> C {
 
 impl<T: FromSwiftAny> SwiftRet for Vec<T> {
     unsafe fn lift(ret: &RetRegs, _indirect: &mut IndirectSlot) -> Self {
-        take_collection(ret.gpr[0])
+        take_collection(ret.0.gpr[0])
     }
 }
 
 impl<K: SwiftHashable, V: FromSwiftAny> SwiftRet for HashMap<K, V> {
     unsafe fn lift(ret: &RetRegs, _indirect: &mut IndirectSlot) -> Self {
-        take_collection(ret.gpr[0])
+        take_collection(ret.0.gpr[0])
     }
 }
 
@@ -364,7 +364,7 @@ impl SwiftRet for SwiftValue {
     unsafe fn lift(ret: &RetRegs, indirect: &mut IndirectSlot) -> Self {
         let storage = indirect.boxed.take().expect("a SwiftValue result always has storage");
         if indirect.direct {
-            std::ptr::copy_nonoverlapping(ret.gpr.as_ptr().cast::<u8>(), storage.ptr.as_ptr(), storage.ty.size());
+            std::ptr::copy_nonoverlapping(ret.0.gpr.as_ptr().cast::<u8>(), storage.ptr.as_ptr(), storage.ty.size());
         }
         storage.assume_init()
     }

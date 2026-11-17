@@ -1,6 +1,6 @@
 //! A Rust future running as a genuine Swift Task.
 //!
-//! The funclets in csrc/funclets.c call `rs_poll` from inside the Task. When the future is Pending they
+//! The funclets in sys/csrc/funclets.c call `rs_poll` from inside the Task. When the future is Pending they
 //! initialize a continuation and call `rs_park`; the Rust waker resumes that continuation. States:
 //! IDLE (not being polled, not parked) → RUNNING (in rs_poll) → PARKED (continuation stored) → IDLE on wake.
 //! A wake during RUNNING sets NOTIFIED, and rs_park then declines so the funclet resumes itself and re-polls.
@@ -155,13 +155,13 @@ pub(crate) fn create(options: SpawnOptions, future: BoxFuture, on_finish: Box<dy
         on_finish: Mutex::new(Some(on_finish)),
         calls: Mutex::new(Vec::new()),
     });
-    let mut flags = options.priority.raw() as usize | rt::CREATE_ENQUEUE_JOB | rt::CREATE_IS_TASK_FUNCTION_CONSUMED;
+    let mut flags = options.priority.raw() as usize | rt::CREATE_ENQUEUE_JOB as usize | rt::CREATE_IS_TASK_FUNCTION_CONSUMED as usize;
     if options.copy_task_locals {
-        flags |= rt::CREATE_COPY_TASK_LOCALS;
+        flags |= rt::CREATE_COPY_TASK_LOCALS as usize;
     }
     unsafe {
         let mut main_option = rt::InitialSerialExecutorOption {
-            flags: rt::OPTION_KIND_INITIAL_SERIAL_EXECUTOR,
+            flags: rt::OPTION_KIND_INITIAL_SERIAL_EXECUTOR as usize,
             parent: std::ptr::null_mut(),
             executor: rt::swift_task_getMainExecutor(),
         };

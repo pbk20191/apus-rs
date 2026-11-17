@@ -38,10 +38,10 @@ fn structural() -> Result<(), String> {
         return Err(format!("runtime symbols not found: {missing:?}"));
     }
     let metadata = rt::empty_tuple_metadata();
-    if metadata.is_null() || unsafe { *(metadata as *const usize) } != rt::METADATA_KIND_TUPLE {
+    if metadata.is_null() || unsafe { *(metadata as *const usize) } != (rt::METADATA_KIND_TUPLE as usize) {
         return Err("metadata for () is not a tuple metadata".into());
     }
-    if unsafe { *(rt::metadata_of(&rt::INT_METADATA) as *const usize) } != rt::METADATA_KIND_STRUCT {
+    if unsafe { *(rt::metadata_of(&rt::INT_METADATA) as *const usize) } != (rt::METADATA_KIND_STRUCT as usize) {
         return Err("$sSiN does not point at Int's metadata address point".into());
     }
     if unsafe { rt::swift_task_getMainExecutor() }.identity.is_null() {

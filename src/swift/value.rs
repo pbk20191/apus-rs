@@ -38,7 +38,7 @@ impl SwiftType {
     /// Resolves a type from its mangled name (no `$s` prefix), e.g. `"8StoreKit7ProductV"` or `"SaySSG"`.
     /// `None` if the type does not exist in this process.
     pub fn from_mangled_name(name: &str) -> Option<SwiftType> {
-        let metadata = unsafe { rt::swift_getTypeByMangledNameInContext(name.as_ptr(), name.len(), std::ptr::null(), std::ptr::null()) };
+        let metadata = unsafe { rt::swift_getTypeByMangledNameInContext(name.as_ptr().cast(), name.len(), std::ptr::null(), std::ptr::null()) };
         (!metadata.is_null()).then_some(SwiftType(metadata))
     }
 
@@ -194,11 +194,11 @@ impl SwiftValue {
     pub(crate) fn into_optional_payload(self, payload: SwiftType) -> Option<SwiftValue> {
         unsafe {
             // Optional: case some = 0 (payload at offset 0), none = 1.
-            if (rt::value_witnesses(self.ty.0).get_enum_tag)(self.as_ptr(), self.ty.0) == 1 {
+            if (rt::value_witnesses(self.ty.0).get_enum_tag.unwrap())(self.as_ptr(), self.ty.0) == 1 {
                 return None;
             }
             let storage = UninitValue::new(payload);
-            (rt::value_witnesses(payload.0).initialize_with_take)(storage.ptr.as_ptr().cast(), self.as_ptr(), payload.0);
+            (rt::value_witnesses(payload.0).initialize_with_take.unwrap())(storage.ptr.as_ptr().cast(), self.as_ptr(), payload.0);
             drop(self.into_uninit()); // the payload was moved out
             Some(storage.assume_init())
         }
@@ -222,7 +222,7 @@ impl Clone for SwiftValue {
     fn clone(&self) -> Self {
         let storage = UninitValue::new(self.ty);
         unsafe {
-            (rt::value_witnesses(self.ty.0).initialize_with_copy)(storage.ptr.as_ptr().cast(), self.as_ptr(), self.ty.0);
+            (rt::value_witnesses(self.ty.0).initialize_with_copy.unwrap())(storage.ptr.as_ptr().cast(), self.as_ptr(), self.ty.0);
             storage.assume_init()
         }
     }
@@ -231,7 +231,7 @@ impl Clone for SwiftValue {
 impl Drop for SwiftValue {
     fn drop(&mut self) {
         unsafe {
-            (rt::value_witnesses(self.ty.0).destroy)(self.as_ptr(), self.ty.0);
+            (rt::value_witnesses(self.ty.0).destroy.unwrap())(self.as_ptr(), self.ty.0);
             std::alloc::dealloc(self.ptr.as_ptr(), self.ty.layout());
         }
     }

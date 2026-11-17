@@ -1,9 +1,9 @@
 //! Calling synchronous Swift functions (getters, methods, free functions) from any thread.
 //!
-//! Same argument lowering as async calls; the differences are in csrc/funclets.c `rs_call_sync`: an indirect
+//! Same argument lowering as async calls; the differences are in sys/csrc/funclets.c `rs_call_sync`: an indirect
 //! result address travels in its own register, and direct results come back as return registers.
 
-use super::call::{CallError, CallRegs, IndirectSlot, Owned, RetRegs};
+use super::call::{CallError, IndirectSlot, Owned, RetRegs};
 use super::func::{ArgLowering, SwiftArgs, SwiftObject, SwiftRet};
 use super::value::{lookup, SwiftType, SwiftValue, UninitValue};
 use super::SwiftError;
@@ -11,9 +11,6 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::sync::OnceLock;
 
-extern "C" {
-    fn rs_call_sync(function: *const c_void, regs: *const CallRegs, indirect: *mut c_void, ret: *mut RetRegs, kind: i32);
-}
 const KIND_INTEGERS: i32 = 0;
 const KIND_FLOATS: i32 = 1;
 const KIND_INDIRECT: i32 = 2;
@@ -113,7 +110,7 @@ impl<R> SwiftSyncCall<R> {
 
     /// Calls a method of a class: `object` is `self`.
     pub fn on(mut self, object: &SwiftObject) -> Self {
-        self.lowering.regs.this = object.as_ptr();
+        self.lowering.regs.self_ = object.as_ptr();
         self.lowering.owned.push(Owned::Object(unsafe { super::rt::swift_retain(object.as_ptr()) })); // may outlive the borrow
         self
     }
@@ -121,7 +118,7 @@ impl<R> SwiftSyncCall<R> {
     /// Calls a method of a value passed by address (a large or resilient struct): `value` is `self`.
     pub fn on_value(mut self, value: &SwiftValue) -> Self {
         let copy = value.clone();
-        self.lowering.regs.this = copy.as_ptr();
+        self.lowering.regs.self_ = copy.as_ptr();
         self.lowering.owned.push(Owned::Value(copy));
         self
     }
@@ -130,7 +127,7 @@ impl<R> SwiftSyncCall<R> {
 impl<R> SwiftSyncCall<R> {
     /// Calls a `__consuming` method of a value passed by address: the callee takes ownership of `value`.
     pub(crate) fn on_consumed(mut self, value: SwiftValue) -> Self {
-        self.lowering.regs.this = value.as_ptr();
+        self.lowering.regs.self_ = value.as_ptr();
         self.consumed = Some(value);
         self
     }
@@ -146,15 +143,15 @@ impl<R: SwiftRet> SwiftSyncCall<R> {
         if let Some(why) = self.lowering.error {
             return Err(CallError::InvalidArgument(why));
         }
-        let mut ret = RetRegs { gpr: [0; 4], fpr: [0.0; 4], error: std::ptr::null_mut() };
+        let mut ret = RetRegs::new();
         let kind = if self.indirect { KIND_INDIRECT } else if R::FLOAT { KIND_FLOATS } else { KIND_INTEGERS };
         unsafe {
-            rs_call_sync(function, &self.lowering.regs, self.slot.address(), &mut ret, kind);
+            apus_sys::rs_call_sync(function, &self.lowering.regs, self.slot.address(), &mut ret.0, kind);
             if let Some(consumed) = self.consumed.take() {
                 drop(consumed.into_uninit()); // the callee destroyed the value; only the storage is ours
             }
-            let result = if self.throws && !ret.error.is_null() {
-                Err(CallError::Swift(SwiftError::from_raw(ret.error)))
+            let result = if self.throws && !ret.0.error.is_null() {
+                Err(CallError::Swift(SwiftError::from_raw(ret.0.error)))
             } else {
                 Ok(R::lift(&ret, &mut self.slot))
             };
