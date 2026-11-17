@@ -1,0 +1,15 @@
+[package]
+name = "apus-sys"
+version = "0.1.0"
+edition = "2021"
+description = "Swift runtime ABI declarations for apus (internal, no stability guarantees)"
+license = "MIT OR Apache-2.0"
+links = "apus_abi"
+publish = false
+
+[features]
+# Raises the deployment floor to macOS 15: macOS 15 declarations become required.
+macos15 = []
+
+[build-dependencies]
+cc = "1"

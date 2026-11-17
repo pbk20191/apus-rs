@@ -4,7 +4,7 @@
 //
 // Tail calls (checked with objdump -d on arm64): the task completion call, swift_continuation_await,
 // swift_task_switch, swift_taskGroup_waitAll and the generic Swift call are emitted as `b`/`br`, never `bl`.
-#include "swift_abi.h"
+#include "apus/abi.h"
 
 // Continuation functions are cast between their (context) and (context, error) shapes, as the runtime itself
 // does with function_cast: the extra argument rides in swift_context and is ignored or supplied.

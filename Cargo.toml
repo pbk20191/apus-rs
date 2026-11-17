@@ -8,7 +8,9 @@ publish = false
 
 [features]
 default = ["swift"]
-swift = []
+swift = ["dep:apus-sys"]
+# Raises the deployment floor to macOS 15 (see sys/README.md).
+macos15 = ["swift", "apus-sys/macos15"]
 dispatch = []
 test-probe = ["swift"]
 # `impl futures_core::Stream for SwiftStream`
@@ -18,12 +20,10 @@ stream = ["swift", "dep:futures-core"]
 async-task = "4"
 futures-core = { version = "0.3", optional = true, default-features = false }
 apus-macros = { path = "macros" }
+apus-sys = { path = "sys", version = "=0.1.0", optional = true }
 dispatch2 = { version = "0.3.1", default-features = false, features = ["std"] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFRunLoop", "CFString", "CFDate"] }
 libc = "0.2"
-
-[build-dependencies]
-cc = "1"
 
 [dev-dependencies]
 libtest-mimic = "0.8"
@@ -107,4 +107,4 @@ harness = false
 required-features = ["test-probe"]
 
 [workspace]
-members = [".", "mangle", "macros"]
+members = [".", "sys", "mangle", "macros"]

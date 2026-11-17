@@ -3,20 +3,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
-    println!("cargo:rerun-if-changed=csrc");
     println!("cargo:rerun-if-changed=tests/support");
     if env::var_os("CARGO_FEATURE_SWIFT").is_none() {
         return;
     }
-    cc::Build::new()
-        .file("csrc/funclets.c")
-        .include("csrc")
-        .opt_level(2)
-        .warnings(true)
-        .extra_warnings(true)
-        .flag("-Wno-unused-parameter")
-        .compile("async_swift_funclets");
-    println!("cargo:rustc-link-search=native=/usr/lib/swift");
+    // apus-sys links the Swift runtime; a link argument does not reach dependents, so the rpath is set here.
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
 
     if env::var_os("CARGO_FEATURE_TEST_PROBE").is_some() {

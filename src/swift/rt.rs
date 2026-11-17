@@ -103,7 +103,6 @@ pub unsafe fn value_witnesses<'a>(metadata: *const c_void) -> &'a ValueWitnessTa
     &**(metadata as *const *const ValueWitnessTable).sub(1)
 }
 
-#[link(name = "swiftCore")]
 extern "C" {
     pub fn swift_retain(object: *mut c_void) -> *mut c_void; // C-CC
     pub fn swift_release(object: *mut c_void); // C-CC
@@ -171,7 +170,6 @@ extern "C" {
     ) -> MetadataResponse;
 }
 
-#[link(name = "swift_Concurrency")]
 extern "C" {
     pub fn swift_task_create_common(
         flags: usize,
