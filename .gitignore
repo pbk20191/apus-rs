@@ -5,3 +5,4 @@ target/
 /docs/superpowers/specs/spikes/**/m0
 /docs/superpowers/specs/spikes/**/m1
 /docs/superpowers/specs/spikes/**/m2
+.superpowers/

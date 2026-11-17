@@ -355,3 +355,10 @@ Rust function into C compiled for a lesser CPU. `-C target-feature` is not forwa
 callbacks from inlining (it still links and runs). The build stops with a message when the feature is used with Apple
 clang, a clang of another LLVM version, a non-macOS target, or without `-Clinker-plugin-lto`. `xlto-link` drops
 rustc's `-plugin-opt` arguments, the LTO optimization level among them, so the link uses libLTO's default level.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.
+The dispatch backend's runnable structure follows [dgrijalva/async-dispatch](https://github.com/dgrijalva/async-dispatch)
+(Apache-2.0). Swift runtime layouts are transcribed from [swiftlang/swift](https://github.com/swiftlang/swift)
+(Apache-2.0 with Runtime Library Exception); no code is copied.
