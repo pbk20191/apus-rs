@@ -5,9 +5,9 @@ pub(crate) use apus_sys::*;
 use std::ffi::c_void;
 use std::sync::OnceLock;
 
-/// The value witness table sits one word before a metadata's address point.
+/// The value witness table, from the metadata header just before a metadata's address point.
 pub unsafe fn value_witnesses<'a>(metadata: *const c_void) -> &'a ValueWitnessTable {
-    &**(metadata as *const *const ValueWitnessTable).sub(1)
+    &*(*(metadata as *const TypeMetadataHeader).sub(1)).value_witnesses
 }
 
 pub fn is_cancelled(task: *mut c_void) -> bool {
@@ -32,9 +32,9 @@ pub fn any_metadata() -> *const c_void {
 /// Copies a Swift `String` out as UTF-8. Does not consume `s`.
 pub unsafe fn string_to_rust(s: &SwiftString) -> String {
     let array = string_utf8_c_string(s.words[0], s.words[1]);
-    // _ContiguousArrayStorage: HeapObject (16) + _ArrayBody { count, capacityAndFlags } (16), elements at 32.
-    let count = *(array.byte_add(16) as *const isize) as usize;
-    let bytes = std::slice::from_raw_parts(array.byte_add(32) as *const u8, count.saturating_sub(1));
+    let header = array as *const ContiguousArrayStorageHeader;
+    let count = (*header).count as usize;
+    let bytes = std::slice::from_raw_parts(header.add(1) as *const u8, count.saturating_sub(1));
     let out = String::from_utf8_lossy(bytes).into_owned();
     swift_release(array);
     out

@@ -378,11 +378,11 @@ impl SwiftCall<SwiftAny> {
     /// # Safety
     /// `closure_box` must be an owned `AsyncSwiftClosure` instance.
     pub unsafe fn from_raw(closure_box: *mut c_void) -> SwiftAsync {
-        // `final class AsyncSwiftClosure { let body: () async throws -> Any }`: HeapObject (16 bytes), then the
-        // thick function: function word → AsyncFunctionPointer, context word (passed as the callee's self).
-        let function = *(closure_box.byte_add(16) as *const *const AsyncFunctionPointer);
+        // The thick function's context word is passed as the callee's self.
+        let closure = &*(closure_box as *const apus_sys::AsyncClosureBox);
+        let function = closure.function as *const AsyncFunctionPointer;
         let mut lowering = ArgLowering::new(true);
-        lowering.regs.self_ = *(closure_box.byte_add(24) as *const *mut c_void);
+        lowering.regs.self_ = closure.context;
         lowering.owned.push(Owned::Object(closure_box));
         SwiftCall::build(function, lowering, None, IndirectSlot::inline(), true).throws()
     }

@@ -304,6 +304,15 @@ clear message instead of corrupting memory.
 ## Tested on
 
 macOS 27.3 (arm64, and x86_64 under Rosetta), Swift runtime 6.4.2, rustc 1.99. Other versions are untested.
-Apple platforms only. Deployment floor: macOS 14 (macOS 15 with the `macos15` feature). The test probes need macOS 14
-(`MainActor.assumeIsolated`). Binaries built by cargo get the `/usr/lib/swift` rpath from apus's build script; a binary
-linked any other way needs `-Wl,-rpath,/usr/lib/swift` itself.
+Apple platforms only. Deployment floor: macOS 14 (macOS 15 with the `macos15` feature). The build stops unless
+`MACOSX_DEPLOYMENT_TARGET` is set to the floor or later, because the floor must reach your binary, not only apus's C
+code: below macOS 12 the SDK links the Swift concurrency runtime through `@rpath`, which a dependency cannot provide,
+and the binary would fail to launch. In your project's `.cargo/config.toml`:
+
+```toml
+[env]
+MACOSX_DEPLOYMENT_TARGET = "14.0"
+```
+
+The test probes need macOS 14 (`MainActor.assumeIsolated`). This repository sets 14.0 the same way; for
+`--all-features` (which includes `macos15`) run with `MACOSX_DEPLOYMENT_TARGET=15.0`.

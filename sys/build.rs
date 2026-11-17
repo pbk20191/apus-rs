@@ -20,14 +20,27 @@ fn main() {
         return; // lib.rs stops the build with a clear message
     }
     let floor = if env::var_os("CARGO_FEATURE_MACOS15").is_some() { FLOOR_MACOS15 } else { FLOOR };
-    let target = env::var("MACOSX_DEPLOYMENT_TARGET").ok();
-    let wanted = target.as_deref().and_then(parse);
-    if let (Some(value), Some(wanted)) = (target.as_deref(), wanted) {
-        if floor == FLOOR_MACOS15 && wanted < FLOOR_MACOS15 {
-            panic!("apus-sys: the macos15 feature needs MACOSX_DEPLOYMENT_TARGET >= 15.0, but it is {value}");
+    let minimum = if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        // The floor must reach the final binary, not just these C objects: rustc links for macOS 11 unless told
+        // otherwise, and below macOS 12 the SDK points the binary at an @rpath copy of the Swift runtime that a
+        // dependency cannot add an rpath for, so it would fail to launch.
+        let target = env::var("MACOSX_DEPLOYMENT_TARGET").ok();
+        match target.as_deref().map(|value| (value, parse(value))) {
+            Some((_, Some(wanted))) if wanted >= floor => wanted,
+            Some((value, _)) => panic!(
+                "apus-sys: MACOSX_DEPLOYMENT_TARGET is {value}, below the floor {}.{}{}",
+                floor.0,
+                floor.1,
+                if floor == FLOOR_MACOS15 { " of the macos15 feature" } else { "" }
+            ),
+            None => panic!(
+                "apus-sys: set MACOSX_DEPLOYMENT_TARGET to {}.{} or later (for example in .cargo/config.toml: [env] MACOSX_DEPLOYMENT_TARGET = \"{}.{}\")",
+                floor.0, floor.1, floor.0, floor.1
+            ),
         }
-    }
-    let minimum = wanted.filter(|w| *w > floor).unwrap_or(floor);
+    } else {
+        floor
+    };
 
     let include = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("include");
     cc::Build::new()
@@ -43,7 +56,5 @@ fn main() {
     println!("cargo:rustc-link-search=native=/usr/lib/swift");
     println!("cargo:rustc-link-lib=dylib=swiftCore");
     println!("cargo:rustc-link-lib=dylib=swift_Concurrency");
-    // A link argument reaches only this crate's own targets (its tests); apus sets its own.
-    println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
     println!("cargo:include={}", include.display());
 }

@@ -58,6 +58,19 @@ typedef struct { const void *metadata; size_t state; } MetadataResponse;
 // include/swift/Runtime/Metadata.h: TypeNamePair
 typedef struct { const char *data; size_t length; } TypeNamePair;
 
+// stdlib/public/SwiftShims/swift/shims/HeapObject.h: HeapObject (metadata, inline reference counts)
+typedef struct { const void *metadata; uintptr_t refcounts; } HeapObject;
+_Static_assert(sizeof(HeapObject) == 16, "HeapObject layout");
+
+// include/swift/ABI/Metadata.h: TypeMetadataHeader, the word just before a metadata's address point.
+typedef struct ValueWitnessTable ValueWitnessTable;
+typedef struct { const ValueWitnessTable *value_witnesses; } TypeMetadataHeader;
+
+// stdlib/public/core/ContiguousArrayBuffer.swift, ArrayBody.swift: the header of a _ContiguousArrayStorage; the
+// elements follow it (no padding for elements aligned to 16 bytes or less).
+typedef struct { HeapObject header; intptr_t count; uintptr_t capacity_and_flags; } ContiguousArrayStorageHeader;
+_Static_assert(sizeof(ContiguousArrayStorageHeader) == 32, "ContiguousArrayStorageHeader layout");
+
 // A Swift String value: two words, frozen layout (stdlib/public/core/StringObject.swift).
 typedef struct { uint64_t words[2]; } SwiftString;
 
@@ -72,6 +85,10 @@ typedef struct { size_t flags; void *parent; SerialExecutorRef executor; } Initi
 
 // lib/IRGen: AsyncFunctionPointer = { relative offset to the code, callee context size }.
 typedef struct { int32_t function; uint32_t expected_context_size; } AsyncFunctionPointer;
+
+// `final class AsyncSwiftClosure { let body: () async throws -> Any }` (the README recipe): the object header, then the
+// thick function: the async function pointer and its context.
+typedef struct { HeapObject header; const AsyncFunctionPointer *function; void *context; } AsyncClosureBox;
 
 // One call shape for every Swift function apus calls by symbol: Rust fills the argument registers, the callee reads
 // the ones its signature uses (integer argument registers: 8 on arm64, 6 on x86_64). Results: up to four integer or
@@ -108,9 +125,8 @@ typedef APUS_SWIFTCALL void *ValueWitnessInitializeWithCopy(void *dest, void *sr
 typedef APUS_SWIFTCALL void *ValueWitnessInitializeWithTake(void *dest, void *src, const void *metadata) APUS_DIRECT;
 typedef APUS_SWIFTCALL unsigned ValueWitnessGetEnumTag(const void *value, const void *metadata) APUS_DIRECT;
 
-// ValueWitnessTable, followed for enums by the enum witnesses (EnumValueWitnessTable). It sits one word before a
-// metadata's address point.
-typedef struct {
+// ValueWitnessTable, followed for enums by the enum witnesses (EnumValueWitnessTable). TypeMetadataHeader points at it.
+struct ValueWitnessTable {
   const void *initialize_buffer_with_copy_of_buffer;
   ValueWitnessDestroy *destroy;
   ValueWitnessInitializeWithCopy *initialize_with_copy;
@@ -124,7 +140,7 @@ typedef struct {
   uint32_t flags;                  // low 8 bits: alignment mask
   uint32_t extra_inhabitant_count;
   ValueWitnessGetEnumTag *get_enum_tag;   // EnumValueWitnessTable only
-} ValueWitnessTable;
+};
 
 // ---- swiftCore: C-convention runtime functions (include/swift/Runtime/HeapObject.h, Casting.h, Error.h) ----
 

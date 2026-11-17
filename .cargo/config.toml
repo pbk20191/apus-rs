@@ -1,0 +1,3 @@
+[env]
+# The deployment floor apus-sys requires (15.0 for --features macos15 / --all-features: set it in the shell).
+MACOSX_DEPLOYMENT_TARGET = "14.0"

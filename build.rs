@@ -7,9 +7,6 @@ fn main() {
     if env::var_os("CARGO_FEATURE_SWIFT").is_none() {
         return;
     }
-    // apus-sys links the Swift runtime; a link argument does not reach dependents, so the rpath is set here.
-    println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
-
     if env::var_os("CARGO_FEATURE_TEST_PROBE").is_some() {
         let out = PathBuf::from(env::var("OUT_DIR").unwrap());
         let arch = match env::var("CARGO_CFG_TARGET_ARCH").unwrap().as_str() {
