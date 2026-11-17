@@ -102,6 +102,12 @@ pub fn typed_throws(declaration: &str) -> Result<bool, Error> {
     }
 }
 
+/// Whether the declaration is `nonisolated(nonsending)`: apus passes the caller's isolation as a hidden first argument.
+/// Only the declaration can say so; the symbol is the same as a plain async function's.
+pub fn nonsending(declaration: &str) -> Result<bool, Error> {
+    Ok(parse::parse(declaration).map_err(Error)?.nonsending)
+}
+
 #[cfg(test)]
 mod isolation_tests {
     use super::{isolation, Isolation};

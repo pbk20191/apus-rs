@@ -162,8 +162,9 @@ static (extension in _Concurrency where Success == Never, Failure == Never)
     _Concurrency.Task<Success, Failure>.sleep(nanoseconds: UInt64) async throws
 ```
 
+- Isolation: `isolated` parameters, `@MainActor`, `nonisolated`, `nonisolated(nonsending)`, `(actor)`, `throws(E)`.
 - Not supported yet: function-typed parameters, operators, initializers, subscripts, setters, non-ASCII names,
-  isolation and ownership attributes, more than one generic enclosing type. A declaration that cannot be mangled
+  ownership attributes, more than one generic enclosing type. A declaration that cannot be mangled
   is a compile error; for anything unsupported, pass the symbol itself with `#[symbol]`.
 
 The mangler (`mangle/`) ports the Swift compiler's identifier, substitution and generic-signature rules and is
@@ -319,6 +320,31 @@ MACOSX_DEPLOYMENT_TARGET = "14.0"
 The test probes need macOS 14 (`MainActor.assumeIsolated`). This repository sets 14.0 the same way. Tests:
 `cargo test --workspace --features dispatch,test-probe,stream` (add `macos15` with `MACOSX_DEPLOYMENT_TARGET=15.0`);
 `scripts/check-xlto.sh` checks the `xlto` build.
+
+## Isolation and actors
+
+- **`isolated` parameters (`#isolation`)**: declare the parameter in Rust as `apus::swift::Isolation` and pass
+  `Isolation::current()`. It is decided when the call runs: the main actor when the call runs in a main task
+  (`spawn_on_main`, `run_main`), nil in a plain task and in a child Task (`.child()`, `join!`), like Swift's `async let`.
+  It never names another actor.
+- **Actor and `@MainActor` sync members**: a sync method or getter of an `(actor)` type, or a declaration marked
+  `@MainActor`, is declared `async fn` in Rust; apus hops to the executor (`Actor.unownedExecutor`, so custom executors
+  work), calls, and hops back. Declared `fn`, it is a compile error. `nonisolated` members are called directly.
+  ```rust
+  apus::swift! {
+      #[swift_linked = "MyApp.Store(actor).count: Int { get }"]
+      pub async fn count(self: &SwiftObject) -> i64;
+      #[swift_linked = "@MainActor MyApp.refreshUI() -> Bool"]
+      pub async fn refresh_ui() -> bool;
+  }
+  ```
+- **Typed throws**: only a generic or associated error type (`throws(E)`): pass an `ErrorSlot::of(E's type)` after the
+  generic arguments and declare no `throws` in Rust; a thrown error is `CallError::Typed(SwiftValue)`. A concrete error
+  type is refused: whether its error comes back in registers or through a slot depends on its layout.
+- **`nonisolated(nonsending)`**: write it in the declaration; apus passes the caller's isolation as the hidden first
+  argument. **The symbol is the same as a plain async function's**: a declaration without the attribute calls such a
+  function with its arguments shifted, and nothing can detect it.
+- `SwiftStream` uses `next(isolation:)` on macOS 15 and later.
 
 ## Objective-C objects (`objc2` feature)
 

@@ -131,7 +131,15 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         Some((apus_mangle::Isolation::MainActor, d)) => Some(("Main", d)),
         _ => None,
     };
+    let nonsending = match (how.to_string().as_str(), &declaration_text) {
+        ("declared", Some(declaration)) => apus_mangle::nonsending(declaration).unwrap_or(false),
+        _ => false,
+    };
+    if nonsending && asyncness.to_string() != "async" {
+        return item_compile_error("a `nonisolated(nonsending)` function is async: declare it `async fn`");
+    }
     let kind = match (asyncness.to_string().as_str(), hop) {
+        ("async", None) if nonsending => "nonsending".to_string(),
         ("async", Some((target, _))) => format!("hop {target}"),
         ("sync", Some((_, d))) => {
             return item_compile_error(&format!(

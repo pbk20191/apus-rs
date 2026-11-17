@@ -139,6 +139,7 @@ const DECLARATIONS: &[&str] = &[
     "@MainActor Probe.onMainThread() -> Bool",
     "Probe.genericTyped<E: Error>(_: Bool, _: E) async throws(E) -> Int",
     "Probe.anyTyped() throws(any Error) -> Int",
+    "nonisolated(nonsending) Probe.inherits(_: Int) async -> Int",
 ];
 
 fn compiled_symbols() -> HashSet<String> {

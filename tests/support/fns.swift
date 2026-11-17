@@ -248,3 +248,11 @@ public struct TypedFailing: AsyncSequence {
     public func makeAsyncIterator() -> Iterator { Iterator(count: count) }
 }
 @inline(never) public func failingTypedStream(after n: Int) -> TypedFailing { TypedFailing(count: n) }
+
+// nonisolated(nonsending): a hidden isolation argument comes first (tests/swift_isolation.rs).
+@inline(never) nonisolated(nonsending) public func inherits(_ x: Int) async -> Int { x + 1 }
+// (`#isolation === MainActor.shared` directly crashes swiftc 6.4.2.)
+@inline(never) nonisolated(nonsending) public func inheritsMain() async -> Bool {
+    let isolation = #isolation
+    return isolation.map { $0 === MainActor.shared } ?? false
+}

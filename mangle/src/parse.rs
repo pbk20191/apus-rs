@@ -348,9 +348,12 @@ impl<'a> Parser<'a> {
         // Isolation attributes: they change no symbol, only how apus calls the declaration.
         let mut main_actor = false;
         let mut nonisolated = false;
+        let mut nonsending = false;
         loop {
             if self.eat("@MainActor") {
                 main_actor = true;
+            } else if self.eat("nonisolated(nonsending)") {
+                nonsending = true;
             } else if self.eat_keyword("nonisolated") {
                 nonisolated = true;
             } else {
@@ -505,6 +508,7 @@ impl<'a> Parser<'a> {
             is_static,
             main_actor,
             nonisolated,
+            nonsending,
             generic_params,
             requirements,
             signature,

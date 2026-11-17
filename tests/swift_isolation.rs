@@ -31,6 +31,11 @@ apus::swift! {
     #[swift_linked = "Probe.Custom(actor).onOwnQueue() -> Bool"]
     async fn on_own_queue(self: &SwiftObject) -> bool;
 
+    #[swift_linked = "nonisolated(nonsending) Probe.inherits(_: Int) async -> Int"]
+    async fn inherits(x: i64) -> i64;
+    #[swift_linked = "nonisolated(nonsending) Probe.inheritsMain() async -> Bool"]
+    async fn inherits_main() -> bool;
+
     #[swift_linked = "Probe.makeBoom(code: Int) -> Boom(struct)"]
     fn make_boom(code: i64) -> SwiftValue;
     #[swift_linked = "Probe.errorCode<E: Error>(_: E) -> Int"]
@@ -39,6 +44,15 @@ apus::swift! {
     async fn generic_typed(fail: bool, error: &SwiftValue, ty: SwiftType, error_witness: WitnessTable, slot: ErrorSlot) -> i64;
     #[swift_linked = "Probe.genericTypedSync<E: Error>(_: Bool, _: E) throws(E) -> Int"]
     fn generic_typed_sync(fail: bool, error: &SwiftValue, ty: SwiftType, error_witness: WitnessTable, slot: ErrorSlot) -> i64;
+}
+
+/// A `nonisolated(nonsending)` function gets the caller's isolation as a hidden first argument; its own arguments are
+/// not shifted.
+fn nonsending_functions() -> Result<(), Failed> {
+    let plain = block(spawn(async { (inherits(41).await.unwrap(), inherits_main().await.unwrap()) })).unwrap();
+    check(plain == (42, false), format!("plain task: {plain:?}"))?;
+    let main = block(spawn_on_main(async { (inherits(41).await.unwrap(), inherits_main().await.unwrap()) })).unwrap();
+    check(main == (42, true), format!("main task: {main:?}"))
 }
 
 static ERROR: SwiftProtocol = SwiftProtocol::new("$ss5ErrorMp");
@@ -108,5 +122,6 @@ fn main() {
         Trial::test("isolated_parameter", isolated_parameter),
         Trial::test("isolated_sync_members", isolated_sync_members),
         Trial::test("typed_throws_generic", typed_throws_generic),
+        Trial::test("nonsending_functions", nonsending_functions),
     ]);
 }

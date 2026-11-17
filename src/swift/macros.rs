@@ -102,6 +102,16 @@ macro_rules! __swift_item {
             call
         }
     };
+    (runtime $how:ident nonsending [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] $spec:literal) => {
+        $(#[$doc])*
+        $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
+            static FUNCTION: $crate::swift::SwiftAsyncFn = $crate::swift::SwiftAsyncFn::new($crate::__swift_symbol!($how $spec));
+            let call = FUNCTION.call_declared(($crate::swift::Isolation::current(), $($arg,)*), $crate::__swift_result_type!($how $spec));
+            $(let call = $crate::swift::SwiftReceiver::bind($this, call);)?
+            $(let call = $crate::__swift_throws!($throws, call);)?
+            call
+        }
+    };
     (linked $how:ident async [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] $spec:literal) => {
         $(#[$doc])*
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
@@ -111,6 +121,20 @@ macro_rules! __swift_item {
             }
             let function = unsafe { $crate::swift::SwiftAsyncFn::from_pointer(&POINTER) };
             let call = function.call_declared(($($arg,)*), $crate::__swift_result_type!($how $spec));
+            $(let call = $crate::swift::SwiftReceiver::bind($this, call);)?
+            $(let call = $crate::__swift_throws!($throws, call);)?
+            call
+        }
+    };
+    (linked $how:ident nonsending [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] $spec:literal) => {
+        $(#[$doc])*
+        $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
+            extern "C" {
+                #[link_name = $crate::__swift_async_pointer!($how $spec)]
+                static POINTER: $crate::swift::AsyncFunctionPointer;
+            }
+            let function = unsafe { $crate::swift::SwiftAsyncFn::from_pointer(&POINTER) };
+            let call = function.call_declared(($crate::swift::Isolation::current(), $($arg,)*), $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::SwiftReceiver::bind($this, call);)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call

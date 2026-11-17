@@ -99,6 +99,9 @@ pub struct Decl {
     pub main_actor: bool,
     /// `nonisolated` before the declaration (an actor member callable from anywhere).
     pub nonisolated: bool,
+    /// `nonisolated(nonsending)`: an async function that runs on its caller's isolation, passed as a hidden first
+    /// argument. The symbol does not show it.
+    pub nonsending: bool,
     /// The declaration's own generic parameters.
     pub generic_params: usize,
     /// The declaration's own requirements (inline constraints and its `where` clause).

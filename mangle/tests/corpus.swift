@@ -112,3 +112,4 @@ public actor Tally { var n = 0; public func bump(by k: Int) -> Int { n }; public
 @MainActor public func onMainThread() -> Bool { true }
 public func genericTyped<E: Error>(_ fail: Bool, _ error: E) async throws(E) -> Int { 0 }
 public func anyTyped() throws(any Error) -> Int { 0 }
+@inline(never) nonisolated(nonsending) public func inherits(_ x: Int) async -> Int { x + 1 }
