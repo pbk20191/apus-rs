@@ -15,6 +15,8 @@ extern "C" {
     static COUNTDOWN: u8;
     #[link_name = apus::mangle!("Probe.failingStream(after: Int) -> AsyncThrowingStream<String, any Error>")]
     static FAILING_STREAM: u8;
+    #[link_name = apus::mangle!("Probe.failingTypedStream(after: Int) -> TypedFailing(struct)")]
+    static FAILING_TYPED_STREAM: u8;
     #[link_name = apus::mangle!("Probe.ticks(_: Int) -> Ticks(struct)")]
     static TICKS: u8;
     #[link_name = apus::mangle!("Probe.endless(tag: Int) -> AsyncStream<Int>")]
@@ -32,6 +34,10 @@ fn countdown(from: i64) -> SwiftValue {
 fn failing_stream(after: i64) -> SwiftValue {
     s!(FAILING_STREAM).call_returning(ty("ScsySSs5Error_pG"), (after,)).invoke().unwrap()
 }
+fn failing_typed_stream(after: i64) -> SwiftValue {
+    // One word: returned in a register.
+    s!(FAILING_TYPED_STREAM).call_direct(ty("5Probe12TypedFailingV"), (after,)).invoke().unwrap()
+}
 fn ticks(n: i64) -> SwiftValue {
     s!(TICKS).call_direct(ty("5Probe5TicksV"), (n,)).invoke().unwrap() // one word: returned in a register
 }
@@ -46,6 +52,8 @@ fn in_task<T: Send + 'static>(fut: impl Future<Output = T> + Send + 'static) -> 
 fn stream_yields_elements() -> Result<(), Failed> {
     let (items, element) = in_task(async {
         let mut stream = SwiftStream::new(countdown(3)).unwrap();
+        // macOS 15 and later (the test host): elements come from next(isolation:).
+        assert!(stream.uses_isolated_next(), "next(isolation:) not used");
         let element = stream.element_type().name();
         let mut items = Vec::new();
         while let Some(item) = stream.next().await {
@@ -68,6 +76,22 @@ fn throwing_stream_ends_with_its_error() -> Result<(), Failed> {
         (a, b, error, stream.next().await.is_none())
     });
     check(matches!((&a, &b), (Some(Ok(x)), Some(Ok(y))) if x == "item0" && y == "item1"), format!("{a:?} {b:?}"))?;
+    check(error.contains("code(7)") && after, format!("error {error}, finished afterwards {after}"))
+}
+
+/// A concrete `Failure` (next(isolation:) writes a DemoError into the error slot) comes back boxed as `any Error`,
+/// as `next()` gives it.
+fn typed_failure_is_an_error_box() -> Result<(), Failed> {
+    let (a, error, after) = in_task(async {
+        let mut stream = SwiftStream::new(failing_typed_stream(1)).unwrap();
+        let a = stream.next_value::<String>().await;
+        let error = match stream.next().await {
+            Some(Err(CallError::Swift(e))) => e.description(),
+            other => format!("unexpected {other:?}"),
+        };
+        (a, error, stream.next().await.is_none())
+    });
+    check(matches!(&a, Some(Ok(x)) if x == "item0"), format!("{a:?}"))?;
     check(error.contains("code(7)") && after, format!("error {error}, finished afterwards {after}"))
 }
 
@@ -170,6 +194,7 @@ fn main() {
     let mut trials = vec![
         Trial::test("stream_yields_elements", stream_yields_elements),
         Trial::test("throwing_stream_ends_with_its_error", throwing_stream_ends_with_its_error),
+        Trial::test("typed_failure_is_an_error_box", typed_failure_is_an_error_box),
         Trial::test("custom_sequence_with_stateful_iterator", custom_sequence_with_stateful_iterator),
         Trial::test("not_an_async_sequence", not_an_async_sequence),
         Trial::test("dropping_the_stream_ends_the_sequence", dropping_the_stream_ends_the_sequence),

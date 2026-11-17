@@ -230,3 +230,21 @@ public struct Boom: Error {
     if fail { throw error }
     return 42
 }
+/// Like failingStream, with a concrete Failure: next(isolation:) writes a DemoError into the error slot.
+public struct TypedFailing: AsyncSequence {
+    public typealias Element = String
+    public typealias Failure = DemoError
+    let count: Int
+    public struct Iterator: AsyncIteratorProtocol {
+        var produced = 0
+        let count: Int
+        public mutating func next() async throws(DemoError) -> String? {
+            defer { produced += 1 }
+            if produced < count { return "item\(produced)" }
+            if produced == count { throw DemoError.code(7) }
+            return nil
+        }
+    }
+    public func makeAsyncIterator() -> Iterator { Iterator(count: count) }
+}
+@inline(never) public func failingTypedStream(after n: Int) -> TypedFailing { TypedFailing(count: n) }

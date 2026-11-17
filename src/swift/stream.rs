@@ -1,10 +1,13 @@
 //! A Swift `AsyncSequence` consumed from Rust.
 //!
 //! Works for any conforming type through the protocols' dispatch thunks: `makeAsyncIterator()` once, then
-//! `next()` per element, each a Swift call in the current Task like any other (see call.rs). The associated
-//! types (iterator, element) come from the conformances' witness tables.
+//! `next(isolation:)` (macOS 15) or `next()` per element, each a Swift call in the current Task like any other (see
+//! call.rs). The associated types (iterator, element, failure) come from the conformances' witness tables.
 
-use super::any::FromSwiftAny;
+use super::any::{FromSwiftAny, SwiftError};
+use super::func::ErrorSlot;
+use super::isolation::Isolation;
+use super::rt;
 use super::call::{CallError, SwiftCall};
 use super::func::SwiftAsyncFn;
 use super::sync::SwiftFn;
@@ -20,6 +23,9 @@ static ASYNC_ITERATOR_PROTOCOL: SwiftProtocol = SwiftProtocol::new("$sScIMp");
 static MAKE_ASYNC_ITERATOR: SwiftFn = SwiftFn::new("$sSci17makeAsyncIterator0bC0QzyFTj");
 /// `AsyncIteratorProtocol.next() async throws -> Element?` (dispatch thunk): `mutating`, result by address.
 static NEXT: SwiftAsyncFn = SwiftAsyncFn::new("$sScI4next7ElementQzSgyYaKFTj");
+/// `AsyncIteratorProtocol.next(isolation:) async throws(Failure) -> Element?` (macOS 15, dispatch thunk): the caller's
+/// isolation, then the error slot; `mutating`, result by address.
+static NEXT_ISOLATED: SwiftAsyncFn = SwiftAsyncFn::new("$sScI4next9isolation7ElementQzSgScA_pSgYi_tYa7FailureQzYKFTj");
 
 /// The iterator, mutated in place by `next()`. Only the one call in flight touches it.
 struct IteratorCell(SwiftValue);
@@ -41,6 +47,8 @@ pub struct SwiftStream {
     iterator_type: SwiftType,
     iterator_conformance: WitnessTable,
     element: SwiftType,
+    /// The iterator's `Failure` when `next(isolation:)` is used (macOS 15), else `None` (`next()`).
+    failure: Option<SwiftType>,
     in_flight: Option<SwiftCall<SwiftValue>>,
     child: bool,
     finished: bool,
@@ -56,8 +64,19 @@ impl SwiftStream {
         let Some(iterator_conformance) = iterator_type.conformance(&ASYNC_ITERATOR_PROTOCOL) else { return Err(unavailable) };
         let Some(element) = iterator_type.associated_type(iterator_conformance, "$sScITL", "$s7ElementScITl") else { return Err(unavailable) };
         // Witness method arguments: Self's metadata, then the conformance's witness table.
+        let failure = NEXT_ISOLATED
+            .is_available()
+            .then(|| iterator_type.associated_type(iterator_conformance, "$sScITL", "$s7FailureScITl"))
+            .flatten();
         let iterator = MAKE_ASYNC_ITERATOR.call_returning(iterator_type, (sequence_type, conformance)).on_consumed(sequence).invoke()?;
-        Ok(SwiftStream { iterator: Arc::new(IteratorCell(iterator)), iterator_type, iterator_conformance, element, in_flight: None, child: false, finished: false })
+        let iterator = Arc::new(IteratorCell(iterator));
+        Ok(SwiftStream { iterator, iterator_type, iterator_conformance, element, failure, in_flight: None, child: false, finished: false })
+    }
+
+    /// Whether elements come from `next(isolation:)` (macOS 15) rather than `next()`.
+    #[doc(hidden)]
+    pub fn uses_isolated_next(&self) -> bool {
+        self.failure.is_some()
     }
 
     /// The sequence's `Element` type.
@@ -91,8 +110,16 @@ impl SwiftStream {
             return Poll::Ready(None);
         }
         let (iterator, iterator_type, conformance, element, child) = (&self.iterator, self.iterator_type, self.iterator_conformance, self.element, self.child);
+        let failure = self.failure;
         let call = self.in_flight.get_or_insert_with(|| {
-            let call = NEXT.call_returning(element.optional(), (iterator_type, conformance)).throws().on_inout(iterator.0.as_ptr(), iterator.clone());
+            let call = match failure {
+                Some(failure) => {
+                    let args = (Isolation::current(), ErrorSlot::of(failure), iterator_type, conformance);
+                    NEXT_ISOLATED.call_returning(element.optional(), args)
+                }
+                None => NEXT.call_returning(element.optional(), (iterator_type, conformance)).throws(),
+            };
+            let call = call.on_inout(iterator.0.as_ptr(), iterator.clone());
             if child { call.child() } else { call }
         });
         let Poll::Ready(result) = Pin::new(call).poll(cx) else { return Poll::Pending };
@@ -106,11 +133,33 @@ impl SwiftStream {
                 }
             },
             Err(error) => {
+                // A typed error is boxed as `any Error`, as `next()` throws it.
+                let error = match (error, failure) {
+                    (CallError::Typed(value), Some(failure)) => CallError::Swift(box_error(value, failure)),
+                    (other, _) => other,
+                };
                 // A sequence that threw is over; other errors (no current task) leave it untouched.
                 self.finished = matches!(error, CallError::Swift(_));
                 Some(Err(error))
             }
         })
+    }
+}
+
+/// A thrown `Failure` as an `any Error` box: the box itself when `Failure` is `any Error`, else a new box.
+fn box_error(value: SwiftValue, failure: SwiftType) -> SwiftError {
+    let any_error = SwiftType::from_mangled_name("s5Error_p");
+    unsafe {
+        if Some(failure) == any_error {
+            let boxed = *(value.as_ptr() as *const *mut std::ffi::c_void);
+            drop(value.into_uninit()); // the box moves out; only the storage is ours
+            return SwiftError::from_raw(boxed);
+        }
+        let conformance = rt::swift_conformsToProtocol(failure.as_ptr(), &rt::ERROR_PROTOCOL as *const u8 as *const std::ffi::c_void);
+        assert!(!conformance.is_null(), "an AsyncIteratorProtocol Failure conforms to Error");
+        let boxed = rt::swift_allocError(failure.as_ptr(), conformance, value.as_ptr(), true);
+        drop(value.into_uninit()); // taken into the box
+        SwiftError::from_raw(boxed.object)
     }
 }
 

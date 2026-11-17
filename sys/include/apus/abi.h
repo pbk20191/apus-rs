@@ -112,6 +112,9 @@ _Static_assert(sizeof(ContiguousArrayStorageHeader) == 32, "ContiguousArrayStora
 // A Swift String value: two words, frozen layout (stdlib/public/core/StringObject.swift).
 typedef struct { uint64_t words[2]; } SwiftString;
 
+// include/swift/Runtime/HeapObject.h: BoxPair (a box and the address of its value)
+typedef struct { void *object; void *buffer; } BoxPair;
+
 // What `_allocateUninitializedArray` returns: the array and the address of its first element.
 typedef struct { void *array; void *elements; } ArrayAndElements;
 
@@ -207,6 +210,8 @@ extern const void *swift_getExistentialTypeMetadata(bool class_constraint_any, c
 
 extern APUS_SWIFTCALL MetadataResponse swift_getTupleTypeMetadata(size_t request, size_t flags, const void *const *elements,
                                                                   const char *labels, const void *proposed_witnesses) APUS_DIRECT;
+// include/swift/Runtime/Error.h: an `any Error` box holding a value of `type` (taken when `is_take`).
+extern APUS_SWIFTCALL BoxPair swift_allocError(const void *type, const void *error_conformance, void *value, bool is_take) APUS_DIRECT;
 extern APUS_SWIFTCALL TypeNamePair swift_getTypeName(const void *metadata, bool qualified) APUS_DIRECT;
 extern APUS_SWIFTCALL const void *swift_getTypeByMangledNameInContext(const char *name, size_t length, const void *context,
                                                                        const void *const *generic_arguments) APUS_DIRECT;
@@ -244,6 +249,8 @@ extern const uint8_t STRING_HASHABLE APUS_SYMBOL("$sSSSHsWP") APUS_DATA;
 extern const uint8_t INT_HASHABLE APUS_SYMBOL("$sSiSHsWP") APUS_DATA;
 extern const uint8_t INT32_HASHABLE APUS_SYMBOL("$ss5Int32VSHsWP") APUS_DATA;
 extern const uint8_t UINT64_HASHABLE APUS_SYMBOL("$ss6UInt64VSHsWP") APUS_DATA;
+// The Error protocol's descriptor.
+extern const uint8_t ERROR_PROTOCOL APUS_SYMBOL("$ss5ErrorMp") APUS_DATA;
 // The Actor protocol's descriptor (_Concurrency).
 extern const uint8_t ACTOR_PROTOCOL APUS_SYMBOL("$sScAMp") APUS_DATA;
 // MainActor's conformance to Actor (_Concurrency).
