@@ -64,7 +64,8 @@ fn rule_failures(decls: &[Decl]) -> Vec<String> {
         if (d.marker == "direct" || d.marker == "thunk") && (d.ret == "_Bool" || d.ret == "bool") {
             failures.push(format!("{}: Swift-CC Bool return; declare uint8_t", d.name));
         }
-        if d.marker == "thunk" && !decls.iter().any(|t| t.name == format!("apus_{}", d.name)) {
+        // The thunk's C name may carry the boundary namespace (apus_<tag>_apus_<name>).
+        if d.marker == "thunk" && !decls.iter().any(|t| t.name.ends_with(&format!("apus_{}", d.name))) {
             failures.push(format!("{0}: APUS_THUNK without apus_{0}", d.name));
         }
     }

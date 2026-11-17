@@ -18,10 +18,37 @@
 #define APUS_SWIFT_ABI_TAG "swift-6.4.2-RELEASE"
 
 // The namespace of the C<->Rust boundary symbols apus defines itself: apus-sys's version and an FNV-1a hash of it
-// (checked by sys/tests/fresh.rs). Each boundary function keeps its C name and links as apus_<tag>_<name>, so no other
-// library's symbol can clash with it.
+// (checked by sys/tests/fresh.rs). Each boundary function links as apus_<tag>_<C name>, so no other library's symbol
+// can clash with it. The C side renames the identifiers (not an asm label: under cross-language LTO an asm label stays
+// "\01_name" in the IR and would not meet Rust's "name"); bindgen sees the plain names with their link names.
 #define APUS_TAG "0_1_0_e1cf1eb8"
+#define APUS_TAG_ID 0_1_0_e1cf1eb8
+#define APUS_JOIN_(a, b, c) a##b##_##c
+#define APUS_JOIN(a, b, c) APUS_JOIN_(a, b, c)
+#define APUS_NAME(name) APUS_JOIN(apus_, APUS_TAG_ID, name)
+#ifdef APUS_BINDGEN
 #define APUS_BOUNDARY(name) __asm__("_apus_" APUS_TAG "_" #name)
+#else
+#define APUS_BOUNDARY(name)
+#define rs_entry_fn APUS_NAME(rs_entry_fn)
+#define rs_context_size APUS_NAME(rs_context_size)
+#define rs_job_metadata APUS_NAME(rs_job_metadata)
+#define rs_run_job_fn APUS_NAME(rs_run_job_fn)
+#define rs_string_from_utf8 APUS_NAME(rs_string_from_utf8)
+#define rs_call_sync APUS_NAME(rs_call_sync)
+#define apus_swift_task_isCancelled APUS_NAME(apus_swift_task_isCancelled)
+#define rs_poll APUS_NAME(rs_poll)
+#define rs_park APUS_NAME(rs_park)
+#define rs_finish APUS_NAME(rs_finish)
+#define rs_cancelled APUS_NAME(rs_cancelled)
+#define rs_is_main APUS_NAME(rs_is_main)
+#define rs_take_call APUS_NAME(rs_take_call)
+#define rs_take_child APUS_NAME(rs_take_child)
+#define rs_call_target APUS_NAME(rs_call_target)
+#define rs_set_child APUS_NAME(rs_set_child)
+#define rs_call_done APUS_NAME(rs_call_done)
+#define rs_job_run APUS_NAME(rs_job_run)
+#endif
 
 #ifdef APUS_BINDGEN
 #define APUS_SWIFTCALL

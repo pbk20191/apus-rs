@@ -1,5 +1,6 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// The deployment floor: macOS 14, or 15 with the `macos15` feature.
 const FLOOR: (u32, u32) = (14, 0);
@@ -10,6 +11,55 @@ fn parse(version: &str) -> Option<(u32, u32)> {
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next().map_or(Some(0), |m| m.parse().ok())?;
     Some((major, minor))
+}
+
+/// The first number after `marker` in `text`: `clang version 23.1.5` -> 23.
+fn major_after(text: &str, marker: &str) -> Option<u32> {
+    let rest = &text[text.find(marker)? + marker.len()..];
+    rest.trim_start().split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
+}
+
+fn output(program: &Path, arg: &str) -> String {
+    Command::new(program).arg(arg).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
+}
+
+/// The CPU rustc compiles for: `-C target-cpu` from RUSTFLAGS, else the target's default.
+fn rustc_target_cpu(arch: &str) -> String {
+    let flags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
+    let flags: Vec<&str> = flags.split('\x1f').collect();
+    let set = flags.iter().enumerate().find_map(|(i, flag)| {
+        let value = flag.strip_prefix("-Ctarget-cpu=").or_else(|| {
+            (*flag == "-C").then(|| flags.get(i + 1).and_then(|next| next.strip_prefix("target-cpu="))).flatten()
+        });
+        value.map(str::to_string)
+    });
+    // rustc's defaults for aarch64-apple-darwin and x86_64-apple-darwin.
+    set.unwrap_or_else(|| if arch == "aarch64" { "apple-m1".into() } else { "penryn".into() })
+}
+
+/// Cross-language LTO: the C side becomes LLVM bitcode that rustc's LLVM reads at link time, so it must come from a clang
+/// with the same LLVM major version, compiled for the same CPU (otherwise LLVM refuses to inline Rust into C).
+fn configure_xlto(build: &mut cc::Build) {
+    let compiler = build.get_compiler();
+    let clang = compiler.path().to_path_buf();
+    let rustc = PathBuf::from(env::var("RUSTC").unwrap_or_else(|_| "rustc".into()));
+    let theirs = major_after(&output(&clang, "--version"), "clang version");
+    let ours = major_after(&output(&rustc, "-vV"), "LLVM version:");
+    if theirs.is_none() || theirs != ours {
+        let target = env::var("TARGET").unwrap_or_default().replace('-', "_");
+        panic!(
+            "apus-sys: the xlto feature needs a clang with rustc's LLVM {}, but {} is LLVM {}; set CC_{target} to such a clang (for example /opt/homebrew/opt/llvm/bin/clang)",
+            ours.map_or("?".into(), |v| v.to_string()),
+            clang.display(),
+            theirs.map_or("?".into(), |v| v.to_string()),
+        );
+    }
+    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let cpu = rustc_target_cpu(&arch);
+    build.flag("-flto=full").flag(if arch == "aarch64" { format!("-mcpu={cpu}") } else { format!("-march={cpu}") });
+    let archiver = clang.with_file_name("llvm-ar");
+    assert!(archiver.exists(), "apus-sys: the xlto feature needs llvm-ar next to {}", clang.display());
+    build.archiver(archiver);
 }
 
 fn main() {
@@ -43,7 +93,12 @@ fn main() {
     };
 
     let include = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("include");
-    cc::Build::new()
+    println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
+    let mut build = cc::Build::new();
+    if env::var_os("CARGO_FEATURE_XLTO").is_some() {
+        configure_xlto(&mut build);
+    }
+    build
         .file("csrc/funclets.c")
         .file("csrc/thunks.c")
         .include(&include)

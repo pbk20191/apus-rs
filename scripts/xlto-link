@@ -1,0 +1,14 @@
+#!/bin/bash
+# Linker for cross-language LTO builds of apus (feature xlto) on macOS: rustc's -Clinker points here.
+# rustc passes ELF-style -plugin-opt arguments even on macOS; neither Apple's ld nor ld64.lld takes them, so they are
+# dropped. The link itself is Apple's ld (it reads the current SDK's .tbd files, which ld64.lld cannot) with the
+# libLTO of the LLVM that matches rustc's. APUS_LLVM: that LLVM's prefix (default: Homebrew's).
+LLVM="${APUS_LLVM:-/opt/homebrew/opt/llvm}"
+args=()
+for a in "$@"; do
+  case "$a" in
+    -plugin-opt=*|-Wl,-plugin-opt=*) ;;
+    *) args+=("$a") ;;
+  esac
+done
+exec "$LLVM/bin/clang" -fuse-ld=/usr/bin/ld "-Wl,-lto_library,$LLVM/lib/libLTO.dylib" "${args[@]}"

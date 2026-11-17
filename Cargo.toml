@@ -11,6 +11,8 @@ default = ["swift"]
 swift = ["dep:apus-sys"]
 # Raises the deployment floor to macOS 15 (see sys/README.md).
 macos15 = ["swift", "apus-sys/macos15"]
+# Compiles the C side as LLVM bitcode for cross-language LTO with Rust (README: Cross-language LTO).
+xlto = ["swift", "apus-sys/xlto"]
 dispatch = []
 test-probe = ["swift"]
 # `impl futures_core::Stream for SwiftStream`

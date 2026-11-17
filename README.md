@@ -23,6 +23,7 @@ apus = { path = "…", default-features = false, features = ["dispatch"] }
 | `dispatch` | `apus::dispatch`: `async-task` runnables on GCD queues via [`dispatch2`](https://crates.io/crates/dispatch2) (QoS, main queue, serial queues) |
 | `stream` | `impl futures_core::Stream for SwiftStream` |
 | `macos15` | raises the deployment floor from macOS 14 to 15: macOS 15 runtime functions become required instead of looked up at run time |
+| `xlto` | compiles apus's C side as LLVM bitcode for cross-language LTO (see below) |
 | `test-probe` | test-only Swift probes (needs `swiftc`) |
 
 ## API
@@ -314,5 +315,37 @@ and the binary would fail to launch. In your project's `.cargo/config.toml`:
 MACOSX_DEPLOYMENT_TARGET = "14.0"
 ```
 
-The test probes need macOS 14 (`MainActor.assumeIsolated`). This repository sets 14.0 the same way; for
-`--all-features` (which includes `macos15`) run with `MACOSX_DEPLOYMENT_TARGET=15.0`.
+The test probes need macOS 14 (`MainActor.assumeIsolated`). This repository sets 14.0 the same way. Tests:
+`cargo test --workspace --features dispatch,test-probe,stream` (add `macos15` with `MACOSX_DEPLOYMENT_TARGET=15.0`);
+`scripts/check-xlto.sh` checks the `xlto` build.
+
+## Boundary symbols and cross-language LTO
+
+apus's C code (the funclets) and its Rust code call each other directly by name. Those names live in their own
+namespace, `apus_<version>_<hash>_…` (`APUS_TAG` in `sys/include/apus/abi.h`), so they cannot clash with another
+library's symbols, and the C ones are compiled with hidden visibility, so they are never exported. The Rust-defined
+ones are exported in an unstripped binary (stable Rust cannot hide them), under that namespace.
+
+Because the calls are direct, LTO can inline across the boundary. With the `xlto` feature apus-sys compiles its C as
+LLVM bitcode; link your binary with rustc's linker-plugin LTO and the C and Rust sides are optimized as one unit: the
+funclets inline the Rust callbacks, Rust inlines the C helpers, and the boundary symbols become local. It needs an LLVM
+whose major version matches rustc's (`rustc -vV`), for example Homebrew's `llvm`. In your project:
+
+```toml
+# .cargo/config.toml
+[env]
+MACOSX_DEPLOYMENT_TARGET = "14.0"
+CC_aarch64_apple_darwin = "/opt/homebrew/opt/llvm/bin/clang"
+
+[target.aarch64-apple-darwin]
+# scripts/xlto-link from this repository: drops the ELF-style -plugin-opt arguments rustc passes on macOS and links
+# with Apple's ld and that LLVM's libLTO (ld64.lld cannot read the current SDK's .tbd files).
+linker = "path/to/apus/scripts/xlto-link"
+rustflags = ["-Clinker-plugin-lto"]
+
+[profile.release]
+lto = "fat"
+```
+
+The C side is compiled for the CPU rustc targets (`-C target-cpu`, default `apple-m1`); LLVM does not inline a Rust
+function into C compiled for a lesser CPU. A clang with another LLVM version stops the build with a message.

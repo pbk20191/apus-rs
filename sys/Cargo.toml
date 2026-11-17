@@ -10,6 +10,8 @@ publish = false
 [features]
 # Raises the deployment floor to macOS 15: macOS 15 declarations become required.
 macos15 = []
+# Compiles the C side as LLVM bitcode for cross-language LTO: needs a clang with rustc's LLVM major version.
+xlto = []
 
 [build-dependencies]
 cc = "1"

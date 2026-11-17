@@ -43,6 +43,9 @@ fn bindings(decls: &[Decl]) -> String {
         .generate()
         .expect("bindgen failed on include/apus/abi.h")
         .to_string()
+        // Boundary link names without bindgen's "\u{1}" (verbatim) escape: Rust's IR names them "apus_…" like the C side
+        // does, so cross-language LTO joins them; the Mach-O name gets its "_" as usual.
+        .replace("\"\\u{1}_apus_", "\"apus_")
 }
 
 /// Our own C functions (funclets and thunks) are not runtime symbols.
@@ -92,8 +95,13 @@ fn expected_tag() -> String {
 
 fn header_tag() -> String {
     let text = std::fs::read_to_string(ast::header()).unwrap();
-    let line = text.lines().find(|l| l.starts_with("#define APUS_TAG ")).expect("abi.h defines APUS_TAG");
-    line.trim_start_matches("#define APUS_TAG ").trim().trim_matches('"').to_string()
+    let define = |name: &str| {
+        let line = text.lines().find(|l| l.starts_with(&format!("#define {name} "))).unwrap_or_else(|| panic!("abi.h defines {name}"));
+        line[format!("#define {name} ").len()..].trim().trim_matches('"').to_string()
+    };
+    let (tag, id) = (define("APUS_TAG"), define("APUS_TAG_ID"));
+    assert_eq!(tag, id, "APUS_TAG and APUS_TAG_ID must agree");
+    tag
 }
 
 /// The link-name prefix, and the link name of every boundary function Rust implements (declared without a marker).
@@ -101,8 +109,8 @@ fn boundary(decls: &[Decl]) -> String {
     let prefix = format!("apus_{}_", header_tag());
     let mut out = format!("/// The link-name prefix of the C<->Rust boundary symbols apus defines.\npub const BOUNDARY_PREFIX: &str = {prefix:?};\n\n");
     out.push_str("/// The link name of a boundary function Rust implements, for `#[export_name = …]`.\n#[macro_export]\nmacro_rules! boundary_name {\n");
-    for d in decls.iter().filter(|d| d.kind == Kind::Function && d.marker.is_empty() && d.link_name.starts_with(&prefix)) {
-        writeln!(out, "    ({}) => {{ {:?} }};", d.name, d.link_name).unwrap();
+    for d in decls.iter().filter(|d| d.kind == Kind::Function && d.marker.is_empty() && d.name.starts_with(&prefix)) {
+        writeln!(out, "    ({}) => {{ {:?} }};", &d.name[prefix.len()..], d.name).unwrap();
     }
     out.push_str("}\n");
     out
