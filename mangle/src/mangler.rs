@@ -567,6 +567,39 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
             m.ty(&canonical(ty, &same_types))?;
             m.push("vg");
         }
+        Signature::Case(payload) => {
+            // The case as a function: `(Enum.Type) -> Enum`, or `(Enum.Type) -> (Payload) -> Enum`, in the enum's
+            // generic signature; then the tag symbol's `WC`.
+            let path: Vec<(String, Kind)> = decl.context.clone();
+            let args = (0..decl.context_params).map(|index| Ty::Param(GenericParam { depth: 0, index })).collect();
+            let this = Ty::Nominal { module: decl.module.clone(), path, args };
+            m.push("y");
+            if payload.is_empty() {
+                m.ty(&this)?;
+            } else {
+                let function = FunctionTy {
+                    params: payload.clone(),
+                    result: this.clone(),
+                    is_async: false,
+                    throws: false,
+                    sendable: false,
+                    main_actor: false,
+                    escaping: true,
+                };
+                m.function(&function, false)?;
+            }
+            m.ty(&this)?;
+            m.push("m");
+            if decl.context_params > 0 {
+                if decl.context_params > 1 {
+                    m.push("r");
+                    m.push(&index(decl.context_params - 1));
+                }
+                m.push("l");
+            }
+            m.push("FWC");
+            return Ok(m.buffer);
+        }
         Signature::Function { params, result, is_async, throws, typed_error } => {
             // Argument labels: nothing without parameters, `y` when none is labeled, else one entry each.
             if params.iter().any(|p| p.label.is_some()) {
@@ -647,6 +680,7 @@ pub fn result_type(decl: &Decl) -> Result<Option<String>, String> {
     let ty = match &decl.signature {
         Signature::Function { result, .. } => canonical(result, &same_types),
         Signature::Getter(ty) => canonical(ty, &same_types),
+        Signature::Case(_) => return Err("an enum case has no result type".into()),
     };
     if !is_concrete(&ty) {
         return Ok(None);

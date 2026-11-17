@@ -86,6 +86,7 @@ impl Declaration {
         let sync = match &decl.signature {
             ast::Signature::Getter(_) => true,
             ast::Signature::Function { is_async, .. } => !is_async,
+            ast::Signature::Case(_) => return Isolation::None,
         };
         let actor_member = !decl.is_static && decl.context.last().is_some_and(|(_, kind)| *kind == ast::Kind::Actor);
         match () {
@@ -107,6 +108,9 @@ impl Declaration {
 
     /// See [`check_callable`].
     pub fn check_callable(&self) -> Result<(), Error> {
+        if let ast::Signature::Case(_) = &self.0.signature {
+            return Err(Error("an enum case is not callable: `mangle!` gives its tag symbol, for `SwiftEnumCase`".into()));
+        }
         if let ast::Signature::Function { params, .. } = &self.0.signature {
             if params.iter().any(|p| p.isolated && !matches!(p.ty, ast::Ty::Optional(_))) {
                 return Err(Error("only `isolated (any Actor)?` parameters are supported: apus passes nil where the call is not on the main actor".into()));
@@ -124,7 +128,7 @@ impl Declaration {
     pub fn formal_count(&self) -> usize {
         match &self.0.signature {
             ast::Signature::Function { params, .. } => params.len(),
-            ast::Signature::Getter(_) => 0,
+            ast::Signature::Getter(_) | ast::Signature::Case(_) => 0,
         }
     }
 

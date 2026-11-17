@@ -395,7 +395,11 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        let is_static = self.eat_keyword("static");
+        let is_case = self.eat_keyword("case");
+        if is_case && (main_actor || nonisolated || nonsending) {
+            return Err("an enum case takes no isolation attributes".into());
+        }
+        let is_static = !is_case && self.eat_keyword("static");
 
         // `(extension in Module [where …])`: its `where` clause is parsed once the generic parameters are known.
         let mut extension: Option<(String, Option<usize>)> = None;
@@ -482,7 +486,36 @@ impl<'a> Parser<'a> {
             None => None,
         };
 
-        let signature = if self.eat("(") {
+        let signature = if is_case {
+            if extension.is_some() || generic_params > 0 || context.last().is_none_or(|(_, kind)| *kind != Kind::Enum) {
+                return Err("expected `case Module.Type(enum).name[(payload…)]`".into());
+            }
+            if context_is_constrained {
+                return Err("cases of an enum with constrained generic parameters are not supported".into());
+            }
+            // The payload's labels are not part of the symbol.
+            let mut payload = Vec::new();
+            if self.eat("(") {
+                while !self.eat(")") {
+                    if !payload.is_empty() {
+                        self.expect(",")?;
+                    }
+                    let start = self.position;
+                    if !(self.identifier().is_ok() && self.eat(":")) {
+                        self.position = start;
+                    }
+                    // A payload is stored: a function in it escapes.
+                    payload.push(match self.ty()? {
+                        Ty::Function(mut function) => {
+                            function.escaping = true;
+                            Ty::Function(function)
+                        }
+                        ty => ty,
+                    });
+                }
+            }
+            Signature::Case(payload)
+        } else if self.eat("(") {
             let mut params = Vec::new();
             while !self.eat(")") {
                 if !params.is_empty() {

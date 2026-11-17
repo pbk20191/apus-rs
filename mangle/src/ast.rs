@@ -90,6 +90,8 @@ pub enum Signature {
     /// `typed_error`: `throws(E)` with an error type other than `any Error`.
     Function { params: Vec<Param>, result: Ty, is_async: bool, throws: bool, typed_error: Option<Ty> },
     Getter(Ty),
+    /// `case Module.Enum(enum).name(payload…)`: an enum case, mangled to its tag symbol (`…WC`).
+    Case(Vec<Ty>),
 }
 
 /// `(extension in Module where …)`: the declaration lives in an extension that needs its own mangling

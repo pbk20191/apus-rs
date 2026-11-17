@@ -150,17 +150,41 @@ const DECLARATIONS: &[&str] = &[
     "Probe.applyLabeled(count: Int, transform: (Double) -> Double) -> Double",
 ];
 
+/// Enum cases: each mangles to the tag symbol a library-evolution module exports for it.
+const ENUM_CASES: &[&str] = &[
+    "case Cases.Shape(enum).none",
+    "case Cases.Shape(enum).circle(Double)",
+    "case Cases.Shape(enum).rect(Double, Double)",
+    "case Cases.Shape(enum).group([Shape(enum)])",
+    "case Cases.Labeled(enum).io(code: Int32, path: String)",
+    "case Cases.Labeled(enum).unit",
+    "case Cases.Wrap(enum)<T>.one(T)",
+    "case Cases.Wrap(enum)<T>.nothing",
+    "case Cases.Pair(enum)<A, B>.both(A, B)",
+    "case Cases.Pair(enum)<A, B>.left(A)",
+    "case Cases.Outer(struct).Inner(enum).x",
+    "case Cases.Outer(struct).Inner(enum).y(Int)",
+    "case Cases.Fn(enum).call((Int) -> String)",
+];
+
 fn compiled_symbols() -> HashSet<String> {
+    symbols_of("corpus.swift", "Probe", &[])
+}
+
+fn symbols_of(file: &str, module: &str, flags: &[&str]) -> HashSet<String> {
     let dir = std::env::temp_dir().join(format!("apus-mangle-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let lib = dir.join("libcorpus.dylib");
-    let source = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/corpus.swift");
+    let lib = dir.join(format!("lib{module}.dylib"));
+    let source = format!("{}/tests/{file}", env!("CARGO_MANIFEST_DIR"));
     let status = Command::new("xcrun")
-        .args(["swiftc", "-parse-as-library", "-emit-library", "-module-name", "Probe", source, "-o"])
+        .args(["swiftc", "-parse-as-library", "-emit-library", "-module-name", module])
+        .args(flags)
+        .arg(&source)
+        .arg("-o")
         .arg(&lib)
         .status()
         .expect("xcrun swiftc");
-    assert!(status.success(), "swiftc failed on corpus.swift");
+    assert!(status.success(), "swiftc failed on {file}");
     let out = Command::new("nm").arg("-gU").arg(&lib).output().expect("nm");
     String::from_utf8(out.stdout)
         .unwrap()
@@ -168,6 +192,20 @@ fn compiled_symbols() -> HashSet<String> {
         .filter_map(|l| l.split_whitespace().last())
         .map(|s| s.trim_start_matches('_').to_string())
         .collect()
+}
+
+#[test]
+fn enum_cases_mangle_to_their_tag_symbols() {
+    let symbols = symbols_of("corpus_enums.swift", "Cases", &["-enable-library-evolution"]);
+    let mut failures = Vec::new();
+    for decl in ENUM_CASES {
+        match mangle(decl) {
+            Ok(symbol) if symbols.contains(&symbol) => {}
+            Ok(symbol) => failures.push(format!("{decl}\n    mangled to {symbol}, which swiftc did not emit")),
+            Err(error) => failures.push(format!("{decl}\n    error: {error}")),
+        }
+    }
+    assert!(failures.is_empty(), "{} of {} cases wrong:\n{}", failures.len(), ENUM_CASES.len(), failures.join("\n"));
 }
 
 #[test]
@@ -206,6 +244,11 @@ fn framework_symbols() {
         )
         .unwrap(),
         "$sScTss5NeverORszABRs_rlE5sleep11nanosecondsys6UInt64V_tYaKFZ"
+    );
+    // A case of a resilient standard library enum (listed in the SDK's libswiftCore.tbd).
+    assert_eq!(
+        mangle("case Swift.DecodingError(enum).dataCorrupted(DecodingError(enum).Context(struct))").unwrap(),
+        "$ss13DecodingErrorO13dataCorruptedyA2B7ContextVcABmFWC"
     );
 }
 
