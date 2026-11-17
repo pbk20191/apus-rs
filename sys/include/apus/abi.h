@@ -186,6 +186,8 @@ typedef struct { const void *function; void *indirect; SerialExecutorRef executo
 // class-bound.
 #define EXISTENTIAL_WITNESS_TABLES_MASK 0x00FFFFFFu
 #define EXISTENTIAL_ANY_CLASS_CONSTRAINT 0x80000000u
+// Nonzero for a special protocol (`any Error`: a single-word box, not an opaque container).
+#define EXISTENTIAL_SPECIAL_PROTOCOL_MASK 0x3F000000u
 // ValueWitnessFlags::IsNonInline: the value does not fit an existential's inline buffer; the buffer holds a box and
 // the value follows the box's HeapObject header, aligned.
 #define VALUE_WITNESS_IS_NON_INLINE 0x00020000u
@@ -224,6 +226,7 @@ extern void swift_release(void *object) APUS_C;
 extern void swift_errorRelease(void *error) APUS_C;
 extern void *swift_allocObject(const void *metadata, size_t size, size_t alignment_mask) APUS_C;
 extern void swift_deallocObject(void *object, size_t size, size_t alignment_mask) APUS_C;
+extern bool swift_isUniquelyReferenced_nonNull_native(const void *object) APUS_C;
 extern void swift_bridgeObjectRelease(void *object) APUS_C;
 // Any class reference (AnyObject): a native Swift object, or an Objective-C one (NSObject subclasses included), which
 // swift_retain/swift_release must not touch.

@@ -16,7 +16,7 @@ use std::ptr::NonNull;
 use std::sync::OnceLock;
 
 /// Integer argument registers of the platform's Swift calling convention.
-const INT_REGISTERS: usize = if cfg!(target_arch = "aarch64") { 8 } else { 6 };
+pub(crate) const INT_REGISTERS: usize = if cfg!(target_arch = "aarch64") { 8 } else { 6 };
 const FLOAT_REGISTERS: usize = 8;
 
 /// A Swift async function that can be called from a Swift-backend task.

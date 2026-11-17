@@ -141,7 +141,7 @@ pub fn formal_count(declaration: &str) -> Result<usize, Error> {
 /// Per formal parameter, the shape a closure passed for it must have, or `None` for a parameter that is not a
 /// function type: `a`/`s` (async or sync), then `t` (throws) and `m` (`@MainActor`) when declared, then the
 /// parameters and the result in parentheses and after them, each `i` (passed by address: a generic parameter,
-/// `Any`, `any P`), `d` (in registers: standard scalars, `String`, class references), `?` (the Rust types decide),
+/// `Any`), `d` (in registers: standard scalars, `String`, class references, `any Error`), `?` (the Rust types decide),
 /// and `-` for a `Void` result: `"a(di)d"`.
 pub fn closure_shapes(declaration: &str) -> Result<Vec<Option<String>>, Error> {
     let decl = parse::parse(declaration).map_err(Error)?;
@@ -171,7 +171,11 @@ fn closure_shape(function: &ast::FunctionTy) -> Result<String, String> {
         const DIRECT: [&str; 13] =
             ["Int", "UInt", "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64", "Double", "Float", "Bool"];
         Ok(match ty {
-            Ty::Param(_) | Ty::Member(..) | Ty::Any | Ty::Existential(_) => 'i',
+            Ty::Param(_) | Ty::Member(..) | Ty::Any => 'i',
+            // `any Error` is a single box reference; another `any P` is a container by address unless P is
+            // class-bound, which the declaration does not show.
+            Ty::Existential(protocol) if protocol.module == "Swift" && protocol.name == "Error" => 'd',
+            Ty::Existential(_) => '?',
             Ty::AnyObject => 'd',
             Ty::Nominal { module, path, args } if module == "Swift" && path.len() == 1 && args.is_empty()
                 && (DIRECT.contains(&path[0].0.as_str()) || path[0].0 == "String") => 'd',
@@ -274,6 +278,14 @@ pub fn generic_plan(declaration: &str) -> Result<Option<GenericPlan>, Error> {
 #[cfg(test)]
 mod isolation_tests {
     use super::{isolation, Isolation};
+
+    #[test]
+    fn closure_shapes_follow_the_declared_convention() {
+        let shapes =
+            super::closure_shapes("M.f(_: (Int, Any) async throws -> String, _: (any Error) -> Void, _: (any P) -> Any, _: Int)").unwrap();
+        // `any Error` is one box pointer in a register; `any P` may be class-bound (registers) or not (address).
+        assert_eq!(shapes, vec![Some("at(di)d".into()), Some("s(d)-".into()), Some("s(?)i".into()), None]);
+    }
 
     #[test]
     fn sync_members_of_actors_and_the_main_actor_need_a_hop() {

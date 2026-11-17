@@ -403,7 +403,7 @@ impl<R> SwiftCall<R> {
     /// the witness table follow the arguments.
     pub fn on_opened(mut self, opened: &super::value::Opened) -> Self {
         let call = self.configure();
-        if call.next_int + 2 > call.regs.get_mut().gpr.len() {
+        if call.next_int + 2 > super::func::INT_REGISTERS {
             self.invalid.get_or_insert(CallError::InvalidArgument("too many integer arguments for the argument registers"));
             return self;
         }
@@ -412,6 +412,7 @@ impl<R> SwiftCall<R> {
         regs.gpr[call.next_int] = opened.ty().as_ptr() as u64;
         regs.gpr[call.next_int + 1] = opened.witness().0 as u64;
         call.next_int += 2;
+        call.owned.push(Owned::Shared(opened.keep_alive()));
         self
     }
 

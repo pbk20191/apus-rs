@@ -121,6 +121,7 @@ impl<R> SwiftSyncCall<R> {
         self.lowering.regs.self_ = opened.value();
         self.lowering.int(opened.ty().as_ptr() as u64);
         self.lowering.int(opened.witness().0 as u64);
+        self.lowering.owned.push(Owned::Shared(opened.keep_alive())); // `.hop()` runs the call later
         self
     }
 

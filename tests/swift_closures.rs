@@ -119,6 +119,15 @@ fn kept_by_swift() -> Result<(), Failed> {
     check(dropped.load(SeqCst), "not dropped after Swift let go")
 }
 
+/// Marking a closure `@MainActor` after Swift already holds it would change it under Swift: refused.
+fn main_actor_only_before_sharing() -> Result<(), Failed> {
+    let f = SwiftClosure::new_sync(|| 1i64);
+    keep(&f).unwrap();
+    let marked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(f.on_main_actor())));
+    drop_kept().unwrap();
+    check(marked.is_err(), "marked while Swift held it")
+}
+
 /// A closure whose shape does not match the declared function type is refused before the call.
 fn mismatched_shape() -> Result<(), Failed> {
     let sync = SwiftClosure::new_sync(|x: i64| x);
@@ -137,5 +146,6 @@ fn main() {
         Trial::test("cancellation", cancellation),
         Trial::test("kept_by_swift", kept_by_swift),
         Trial::test("mismatched_shape", mismatched_shape),
+        Trial::test("main_actor_only_before_sharing", main_actor_only_before_sharing),
     ]);
 }

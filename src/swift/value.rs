@@ -319,9 +319,13 @@ pub struct Opened {
     value: *mut c_void,
     ty: SwiftType,
     witness: WitnessTable,
-    /// The existential it was opened from (a copy), which owns the value.
-    _container: SwiftValue,
+    /// The existential it was opened from (a copy), which owns the value; calls on it hold it too.
+    container: std::sync::Arc<KeepAlive>,
 }
+
+/// A value a call only keeps alive (never touches), so sharing it across threads is fine.
+pub(crate) struct KeepAlive(#[allow(dead_code)] SwiftValue);
+unsafe impl Sync for KeepAlive {}
 
 unsafe impl Send for Opened {}
 unsafe impl Sync for Opened {}
@@ -339,6 +343,10 @@ impl Opened {
     pub(crate) fn witness(&self) -> WitnessTable {
         self.witness
     }
+
+    pub(crate) fn keep_alive(&self) -> std::sync::Arc<KeepAlive> {
+        self.container.clone()
+    }
 }
 
 impl SwiftValue {
@@ -353,7 +361,8 @@ impl SwiftValue {
             }
             let flags = *(metadata.byte_add(std::mem::size_of::<usize>()) as *const u32);
             let opaque = flags & rt::EXISTENTIAL_ANY_CLASS_CONSTRAINT != 0;
-            if !opaque || flags & rt::EXISTENTIAL_WITNESS_TABLES_MASK != 1 {
+            let special = flags & rt::EXISTENTIAL_SPECIAL_PROTOCOL_MASK != 0;
+            if !opaque || special || flags & rt::EXISTENTIAL_WITNESS_TABLES_MASK != 1 {
                 return None;
             }
             // A copy keeps the value alive: inline values are copied, a box is shared.
@@ -369,7 +378,7 @@ impl SwiftValue {
             } else {
                 container.as_ptr()
             };
-            Some(Opened { value, ty, witness, _container: container })
+            Some(Opened { value, ty, witness, container: std::sync::Arc::new(KeepAlive(container)) })
         }
     }
 }

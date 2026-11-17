@@ -5,7 +5,7 @@ mod common;
 #[path = "common/probe.rs"]
 mod probe;
 
-use apus::swift::{spawn, Opened, SwiftValue};
+use apus::swift::{spawn, DirectValue, Opened, SwiftValue};
 use common::{block, check, Failed, Trial};
 
 apus::swift! {
@@ -19,6 +19,8 @@ apus::swift! {
     fn label(self: &Opened) -> String;
     #[swift_linked = "Res.Shape(protocol).grown(by: Double) async -> Double"]
     async fn grown(self: &Opened, factor: f64) -> f64;
+    #[swift_linked = "Probe.makeAnyError() -> any Error"]
+    fn make_any_error() -> DirectValue;
 }
 
 fn opened_values() -> Result<(), Failed> {
@@ -30,9 +32,25 @@ fn opened_values() -> Result<(), Failed> {
     check(area(&p).unwrap() == 15.0 && label(&p).unwrap() == "polygon", "boxed value")?;
     let grown = block(spawn(async move { (grown(&s, 2.0).await.unwrap(), grown(&p, 2.0).await.unwrap()) })).unwrap();
     check(grown == (36.0, 30.0), format!("async requirement {grown:?}"))?;
-    check(SwiftValue::new(1i64).open().is_none(), "an Int is not an existential")
+    check(SwiftValue::new(1i64).open().is_none(), "an Int is not an existential")?;
+    // `any Error` is a one-word box, not an opaque container.
+    let error = make_any_error().unwrap().0;
+    check(error.open().is_none(), format!("{} opened", error.ty().name()))
+}
+
+/// A call keeps its opened receiver alive: here the temporary `Opened` (and its box) is gone before the call runs.
+fn temporary_receiver() -> Result<(), Failed> {
+    let result = block(spawn(async {
+        let call = grown(&make_polygon().unwrap().open().unwrap(), 2.0);
+        let garbage: Vec<Vec<u8>> = (0..256).map(|_| vec![0xff; 56]).collect();
+        let result = call.await;
+        drop(garbage);
+        result
+    }))
+    .unwrap();
+    check(matches!(result, Ok(r) if r == 30.0), format!("{result:?}"))
 }
 
 fn main() {
-    common::run(vec![Trial::test("opened_values", opened_values)]);
+    common::run(vec![Trial::test("opened_values", opened_values), Trial::test("temporary_receiver", temporary_receiver)]);
 }

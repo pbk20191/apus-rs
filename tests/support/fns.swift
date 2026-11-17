@@ -314,3 +314,4 @@ nonisolated(unsafe) var keptClosure: (@Sendable () -> Int)?
 @inline(never) public func callKept() -> Int { keptClosure?() ?? -1 }
 @inline(never) public func dropKept() { keptClosure = nil }
 @inline(never) public func applySyncGeneric<T>(_ x: T, _ f: (T) -> T) -> T { f(x) }
+@inline(never) public func makeAnyError() -> any Error { StructError(code: 1, detail: "x") }

@@ -404,11 +404,16 @@ impl SwiftClosure {
     }
 
     /// Marks the closure `@MainActor`: an async one runs on the main actor (Swift's caller does not hop for it), and
-    /// it matches only a `@MainActor` function type.
+    /// it matches only a `@MainActor` function type. Panics once the closure has been passed to Swift and Swift
+    /// kept it: the change would reach Swift's copy while it may be running.
     pub fn on_main_actor(mut self) -> SwiftClosure {
+        let context = self.context.as_ptr();
+        assert!(
+            unsafe { rt::swift_isUniquelyReferenced_nonNull_native(context.cast()) },
+            "apus: on_main_actor on a closure Swift already holds"
+        );
         self.shape.main_actor = true;
         unsafe {
-            let context = self.context.as_ptr();
             (*context).flags |= rt::CLOSURE_MAIN_ACTOR;
             (*((*context).payload as *mut Payload)).main = true;
         }
