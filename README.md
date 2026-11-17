@@ -321,6 +321,25 @@ The test probes need macOS 14 (`MainActor.assumeIsolated`). This repository sets
 `cargo test --workspace --features dispatch,test-probe,stream` (add `macos15` with `MACOSX_DEPLOYMENT_TARGET=15.0`);
 `scripts/check-xlto.sh` checks the `xlto` build.
 
+## The process's main
+
+`run_main(future)` drives the main run loop until `future` is done and returns its output. `async_main(future)` is
+Swift's async `@main` instead: it hands the future to Swift's own `_runAsyncMain` (exported since Swift 5.5), which
+starts it as the main task on the main actor, drains the main queue its own way, and exits the process when it is
+done (code 1 on `Err`, 101 on a panic). It never returns.
+
+```rust
+fn main() {
+    apus::swift::async_main(async {
+        // Swift and Rust async code on the main actor
+        Ok::<(), String>(())
+    })
+}
+```
+
+A SwiftUI app whose `App` type is written in Swift starts with `App.main()`:
+`static (extension in SwiftUI) SwiftUI.App(protocol).main()` (pass the type's metadata and its `App` conformance).
+
 ## Isolation and actors
 
 - **`isolated` parameters (`#isolation`)**: only `isolated (any Actor)?` (apus passes nil off the main actor). Declare

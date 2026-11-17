@@ -144,17 +144,29 @@ extern "C" fn rs_cancelled(rust: *mut c_void) {
 }
 
 /// Creates the Swift Task. `on_finish` runs when the Task completes (after any children).
-pub(crate) fn create(options: SpawnOptions, future: BoxFuture, on_finish: Box<dyn FnOnce() + Send>) -> *mut c_void {
-    let task = Arc::new(Task {
+/// The Rust side of a task, before any Swift Task runs it.
+fn new_task(main: bool, future: BoxFuture, on_finish: Box<dyn FnOnce() + Send>) -> Arc<Task> {
+    Arc::new(Task {
         future: Mutex::new(Some(future)),
         state: AtomicU8::new(IDLE),
         continuation: AtomicPtr::default(),
-        main: options.main,
+        main,
         cancelled: AtomicBool::new(false),
         cancel_wakers: Mutex::new(Vec::new()),
         on_finish: Mutex::new(Some(on_finish)),
         calls: Mutex::new(Vec::new()),
-    });
+    })
+}
+
+/// Runs `future` as Swift's async main (see `swift::async_main`). Never returns.
+pub(crate) fn run_async_main(future: BoxFuture) -> ! {
+    let task = new_task(true, future, Box::new(|| {}));
+    unsafe { apus_sys::apus_run_async_main(Arc::into_raw(task) as *mut c_void) };
+    unreachable!("_runAsyncMain returned")
+}
+
+pub(crate) fn create(options: SpawnOptions, future: BoxFuture, on_finish: Box<dyn FnOnce() + Send>) -> *mut c_void {
+    let task = new_task(options.main, future, on_finish);
     let mut flags = options.priority.raw() as usize | rt::CREATE_ENQUEUE_JOB as usize | rt::CREATE_IS_TASK_FUNCTION_CONSUMED as usize;
     if options.copy_task_locals {
         flags |= rt::CREATE_COPY_TASK_LOCALS as usize;

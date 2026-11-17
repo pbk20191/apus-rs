@@ -230,7 +230,7 @@ static APUS_SWIFTASYNCCALL void step(APUS_ASYNC_CONTEXT AsyncContext *ctx) {
 }
 
 // AsyncGenericClosureEntryPoint: (indirect result, context, closure context). The result type is (): nothing to write.
-static APUS_SWIFTASYNCCALL void entry(void *indirect_result, APUS_ASYNC_CONTEXT AsyncContext *ctx, APUS_SWIFT_CONTEXT void *rust) {
+static APUS_SWIFTASYNCCALL void start(APUS_ASYNC_CONTEXT AsyncContext *ctx, void *rust) {
   RsTaskContext *c = (RsTaskContext *)ctx;
   c->rust = rust;
   c->current_call = NULL;
@@ -240,7 +240,30 @@ static APUS_SWIFTASYNCCALL void entry(void *indirect_result, APUS_ASYNC_CONTEXT 
   return step(ctx);
 }
 
+static APUS_SWIFTASYNCCALL void entry(void *indirect_result, APUS_ASYNC_CONTEXT AsyncContext *ctx, APUS_SWIFT_CONTEXT void *rust) {
+  return start(ctx, rust);
+}
+
 const void *rs_entry_fn(void) { return (const void *)entry; }
+
+// ---- async main: a Rust task as the `() async throws -> ()` closure `_runAsyncMain` awaits ----
+// The caller allocates our context (expected_context_size) and sets its parent and resume function; `finish`
+// returns through them with no error, after which `_runAsyncMain` exits the process. It runs once per process, so
+// the task rides in a global and the closure has no context object.
+static void *async_main_rust;
+static AsyncFunctionPointer async_main_function;
+
+static APUS_SWIFTASYNCCALL void async_main_entry(APUS_ASYNC_CONTEXT AsyncContext *ctx, APUS_SWIFT_CONTEXT void *closure_context) {
+  return start(ctx, async_main_rust);
+}
+
+void apus_run_async_main(void *rust) {
+  async_main_rust = rust;
+  async_main_function.function = (int32_t)((intptr_t)async_main_entry - (intptr_t)&async_main_function.function);
+  async_main_function.expected_context_size = sizeof(RsTaskContext);
+  run_async_main(&async_main_function, NULL);
+  __builtin_unreachable();
+}
 size_t rs_context_size(void) { return sizeof(RsTaskContext); }
 
 // ---- plain Jobs (timers): the runtime hands them to dispatch, which calls the metadata's VTableInvoke ----

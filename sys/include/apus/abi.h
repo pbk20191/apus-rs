@@ -38,6 +38,7 @@
 #define apus_actor_unowned_executor APUS_NAME(apus_actor_unowned_executor)
 #define apus_error_domain APUS_NAME(apus_error_domain)
 #define apus_error_code APUS_NAME(apus_error_code)
+#define apus_run_async_main APUS_NAME(apus_run_async_main)
 #define rs_context_size APUS_NAME(rs_context_size)
 #define rs_job_metadata APUS_NAME(rs_job_metadata)
 #define rs_run_job_fn APUS_NAME(rs_run_job_fn)
@@ -284,6 +285,9 @@ void rs_string_from_utf8(const uint8_t *start, intptr_t count, SwiftString *out)
 // Fills regs->isolation's two registers: MainActor (MainActor.shared and its Actor witness table) when `main_actor`,
 // else nil. Nothing when regs->isolation is -1.
 void apus_fill_isolation(CallRegs *regs, bool main_actor) APUS_BOUNDARY(apus_fill_isolation) APUS_C;
+// Runs the Rust task `rust` (task.rs) as Swift's async main through `_runAsyncMain`: on the main actor, then the
+// main queue is drained and the process exits when the task is done. Never returns. Call it once, on the main thread.
+void apus_run_async_main(void *rust) APUS_BOUNDARY(apus_run_async_main) APUS_C;
 // kind: 0 = integer results, 1 = floating-point results, 2 = indirect result at `indirect`
 void rs_call_sync(const void *function, const CallRegs *regs, void *indirect, RetRegs *ret, int kind) APUS_BOUNDARY(rs_call_sync) APUS_C;
 
@@ -393,6 +397,10 @@ extern APUS_SWIFTASYNCCALL void swift_taskGroup_waitAll(void *result, APUS_ASYNC
                                                         void *body_error, ThrowingContinuation *resume,
                                                         AsyncContext *call_context) APUS_ASYNC;
 extern APUS_SWIFTCALL void swift_job_run(void *job, SerialExecutorRef executor) APUS_INTERNAL;
+// `_runAsyncMain(_: @escaping () async throws -> ())` (_Concurrency, since Swift 5.5): what `@main` with an async
+// `main()` was compiled to. The closure is thick: its async function pointer and its context.
+extern APUS_SWIFTCALL void run_async_main(const AsyncFunctionPointer *function, void *context)
+    APUS_SYMBOL("$ss13_runAsyncMainyyyyYaKcF") APUS_INTERNAL;
 // MainActor's metadata accessor and the `MainActor.shared` getter (static: self is the metadata).
 extern APUS_SWIFTCALL MetadataResponse main_actor_metadata(size_t request) APUS_SYMBOL("$sScMMa") APUS_INTERNAL;
 extern APUS_SWIFTCALL void *main_actor_shared(APUS_SWIFT_CONTEXT const void *metadata) APUS_SYMBOL("$sScM6sharedScMvgZ") APUS_INTERNAL;

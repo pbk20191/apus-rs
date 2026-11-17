@@ -95,3 +95,56 @@ where
     let inner = task::spawn_with(SpawnOptions { main: true, ..SpawnOptions::default() }, false, MainOnly(future));
     join::unwrap_main_only(inner, |m: MainOnly<F::Output>| m.0)
 }
+
+/// What [`async_main`]'s future may produce: `()`, or a `Result` whose error ends the process with code 1.
+pub trait MainResult {
+    #[doc(hidden)]
+    fn report(self);
+}
+
+impl MainResult for () {
+    fn report(self) {}
+}
+
+impl<E: std::fmt::Debug> MainResult for Result<(), E> {
+    fn report(self) {
+        if let Err(error) = self {
+            eprintln!("Error: {error:?}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Runs `future` as the process's main, the way Swift runs an async `@main`: Swift's own `_runAsyncMain` starts it as
+/// a main task (on the main actor), drains the main queue, and exits the process with code 0 when it is done. An
+/// `Err` exits with code 1, a panic with 101. Never returns; call it on the main thread, once, instead of
+/// [`run_main`](crate::run_main).
+pub fn async_main<F>(future: F) -> !
+where
+    F: std::future::Future + 'static,
+    F::Output: MainResult,
+{
+    assert!(crate::is_main_thread(), "async_main must be called on the main thread");
+    selfcheck::ensure();
+    struct MainOnly<T>(T);
+    // SAFETY: the task runs on the main actor only, so the future stays on the main thread.
+    unsafe impl<T> Send for MainOnly<T> {}
+    impl<F: std::future::Future> std::future::Future for MainOnly<F>
+    where
+        F::Output: MainResult,
+    {
+        type Output = ();
+        fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<()> {
+            let inner = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| inner.poll(cx))) {
+                Ok(std::task::Poll::Ready(output)) => {
+                    output.report();
+                    std::task::Poll::Ready(())
+                }
+                Ok(std::task::Poll::Pending) => std::task::Poll::Pending,
+                Err(_) => std::process::exit(101), // the panic message is already printed
+            }
+        }
+    }
+    task::run_async_main(Box::pin(MainOnly(future)))
+}
