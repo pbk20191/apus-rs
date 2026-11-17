@@ -55,4 +55,5 @@ pub const REQUIRED_SYMBOLS: &[&str] = &[
 
 /// Runtime symbols of newer OS releases: (symbol, (major, minor) of the macOS that introduced it).
 pub const OPTIONAL_SYMBOLS: &[(&str, (u32, u32))] = &[
+    ("swift_task_getPreferredTaskExecutor", (15, 0)),
 ];

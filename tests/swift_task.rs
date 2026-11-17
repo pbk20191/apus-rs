@@ -218,9 +218,15 @@ fn sleep_wakes_latest_waker() -> Result<(), Failed> {
     check(common::latest_waker_woken(sleep(Duration::from_millis(30))), "the waker from the latest poll was never woken")
 }
 
+/// macOS 15 runtime functions are looked up at run time (or linked with `macos15`); the test host runs macOS 15+.
+fn preferred_executor_is_optional() -> Result<(), Failed> {
+    check(apus_sys::optional::swift_task_getPreferredTaskExecutor().is_some(), "macOS 15+ runtime")
+}
+
 fn main() {
     common::run(vec![
         Trial::test("sleep_wakes_latest_waker", sleep_wakes_latest_waker),
+        Trial::test("preferred_executor_is_optional", preferred_executor_is_optional),
         Trial::test("abort_with_panicking_drop", abort_with_panicking_drop),
         Trial::test("task_is_swift_task", task_is_swift_task),
         Trial::test("utility_priority_seen_by_swift", utility_priority_seen_by_swift),

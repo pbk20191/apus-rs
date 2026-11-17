@@ -30,9 +30,16 @@ pub(crate) fn ensure() {
 }
 
 fn structural() -> Result<(), String> {
+    // With `macos15` the macOS 15 symbols are required too (they are linked, not looked up).
+    #[cfg(feature = "macos15")]
+    let optional: &[(&str, (u32, u32))] = rt::OPTIONAL_SYMBOLS;
+    #[cfg(not(feature = "macos15"))]
+    let optional: &[(&str, (u32, u32))] = &[];
     let missing: Vec<_> = rt::REQUIRED_SYMBOLS
         .iter()
-        .filter(|name| unsafe { dlsym(RTLD_DEFAULT, CString::new(**name).unwrap().as_ptr()) }.is_null())
+        .copied()
+        .chain(optional.iter().map(|(name, _)| *name))
+        .filter(|name| unsafe { dlsym(RTLD_DEFAULT, CString::new(*name).unwrap().as_ptr()) }.is_null())
         .collect();
     if !missing.is_empty() {
         return Err(format!("runtime symbols not found: {missing:?}"));

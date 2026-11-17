@@ -18,6 +18,21 @@ pub const METADATA_KIND_TUPLE: u32 = 769;
 pub const METADATA_KIND_STRUCT: u32 = 512;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
+pub struct TaskExecutorRef {
+    pub identity: *const ::std::os::raw::c_void,
+    pub implementation: usize,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of TaskExecutorRef"][::std::mem::size_of::<TaskExecutorRef>() - 16usize];
+    ["Alignment of TaskExecutorRef"][::std::mem::align_of::<TaskExecutorRef>() - 8usize];
+    ["Offset of field: TaskExecutorRef::identity"]
+        [::std::mem::offset_of!(TaskExecutorRef, identity) - 0usize];
+    ["Offset of field: TaskExecutorRef::implementation"]
+        [::std::mem::offset_of!(TaskExecutorRef, implementation) - 8usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub struct SerialExecutorRef {
     pub identity: *const ::std::os::raw::c_void,
     pub implementation: usize,

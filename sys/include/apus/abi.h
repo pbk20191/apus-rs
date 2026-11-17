@@ -36,8 +36,14 @@
 #define APUS_ASYNC APUS_MARK("async")
 #define APUS_INTERNAL APUS_MARK("internal")
 #define APUS_DATA APUS_MARK("data")
+// Introduced in macOS `v`: weakly linked below that floor. Rust reaches it through apus_sys::optional (a run-time
+// lookup), or directly with the `macos15` feature. Kept out of bindings.rs by the generator, not by APUS_BINDGEN.
+#define APUS_AVAILABLE(v) __attribute__((availability(macos, introduced = v), weak_import)) APUS_MARK("available:" #v)
 
 // ---- values and records ----
+
+// include/swift/ABI/Executor.h: TaskExecutorRef (macOS 15)
+typedef struct { const void *identity; uintptr_t implementation; } TaskExecutorRef;
 
 // include/swift/ABI/Executor.h: SerialExecutorRef
 typedef struct { const void *identity; uintptr_t implementation; } SerialExecutorRef;
@@ -186,6 +192,9 @@ extern APUS_SWIFTCALL void *swift_task_getCurrent(void) APUS_DIRECT;
 extern APUS_SWIFTCALL size_t swift_task_currentPriority(void *task) APUS_DIRECT;
 extern APUS_SWIFTCALL size_t swift_task_escalate(void *task, size_t priority) APUS_DIRECT;
 extern APUS_SWIFTCALL void swift_task_enqueueGlobalWithDelay(unsigned long long delay_ns, void *job) APUS_DIRECT;
+
+// macOS 15 (Swift 6.0): task executor preference (SE-0417).
+extern APUS_SWIFTCALL TaskExecutorRef swift_task_getPreferredTaskExecutor(void) APUS_DIRECT APUS_AVAILABLE(15.0);
 
 // ---- funclets: C functions in sys/csrc that Rust calls ----
 

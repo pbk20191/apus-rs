@@ -17,8 +17,13 @@ fn header_lines(clang: &str) -> String {
     )
 }
 
-fn bindings() -> String {
-    bindgen::Builder::default()
+fn bindings(decls: &[Decl]) -> String {
+    // macOS 15 declarations stay out of the always-linked bindings: optional.rs and bindings_macos15.rs carry them.
+    let optional = decls.iter().filter(|d| d.available.is_some()).fold(String::new(), |all, d| {
+        if all.is_empty() { format!("^{}$", d.name) } else { format!("{all}|^{}$", d.name) }
+    });
+    let builder = if optional.is_empty() { bindgen::Builder::default() } else { bindgen::Builder::default().blocklist_function(optional) };
+    builder
         .header(ast::header().to_str().unwrap())
         .clang_args(["-xc", "-DAPUS_BINDGEN", &format!("-I{}", ast::include_dir().display())])
         .allowlist_file(".*/include/apus/.*")
@@ -49,12 +54,88 @@ fn symbols(decls: &[Decl]) -> String {
     out
 }
 
-fn optional(_decls: &[Decl]) -> String {
-    String::new()
+/// The Rust spelling of a C type the header uses in an optional declaration.
+fn rust_type(c: &str) -> String {
+    match c {
+        "void" => "()".into(),
+        "void *" => "*mut c_void".into(),
+        "const void *" => "*const c_void".into(),
+        "size_t" => "usize".into(),
+        "intptr_t" => "isize".into(),
+        "uint8_t" => "u8".into(),
+        "uint32_t" => "u32".into(),
+        "uint64_t" => "u64".into(),
+        "bool" => "bool".into(),
+        name if name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') => name.into(),
+        other => panic!("fresh.rs: add a Rust spelling for the C type `{other}`"),
+    }
 }
 
-fn bindings_macos15(_decls: &[Decl]) -> String {
-    String::new()
+fn optional_decls(decls: &[Decl]) -> Vec<&Decl> {
+    let found: Vec<&Decl> = decls.iter().filter(|d| d.available.is_some()).collect();
+    for d in &found {
+        assert!(d.kind == Kind::Function && (d.marker == "direct" || d.marker == "c"), "{}: only APUS_DIRECT/APUS_C functions can be optional yet", d.name);
+    }
+    found
+}
+
+fn signature(d: &Decl) -> (String, String) {
+    let params = d.params.iter().enumerate().map(|(i, t)| format!("a{i}: {}", rust_type(t))).collect::<Vec<_>>().join(", ");
+    let ret = if d.ret == "void" { String::new() } else { format!(" -> {}", rust_type(&d.ret)) };
+    (params, ret)
+}
+
+fn optional(decls: &[Decl]) -> String {
+    let mut out = String::from("#[allow(unused_imports)]\nuse std::ffi::c_void;\n");
+    let found = optional_decls(decls);
+    if !found.is_empty() {
+        out.push_str("#[cfg(not(feature = \"macos15\"))]\nextern \"C\" {\n    fn dlsym(handle: *mut c_void, symbol: *const std::ffi::c_char) -> *mut c_void;\n}\n#[cfg(not(feature = \"macos15\"))]\nconst RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;\n");
+    }
+    for d in found {
+        let (_, ret) = signature(d);
+        let types = d.params.iter().map(|t| rust_type(t)).collect::<Vec<_>>().join(", ");
+        let pointer = format!("unsafe extern \"C\" fn({types}){ret}");
+        let version = d.available.as_deref().unwrap();
+        write!(
+            out,
+            r#"
+/// `{name}` (macOS {version}+): `None` on an older OS. With the `macos15` feature it is linked and always present.
+pub fn {name}() -> Option<{pointer}> {{
+    #[cfg(feature = "macos15")]
+    {{
+        Some(super::{name})
+    }}
+    #[cfg(not(feature = "macos15"))]
+    {{
+        static ADDRESS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        let address = *ADDRESS.get_or_init(|| unsafe {{ dlsym(RTLD_DEFAULT, c"{link}".as_ptr()) }} as usize);
+        (address != 0).then(|| unsafe {{ std::mem::transmute::<usize, {pointer}>(address) }})
+    }}
+}}
+"#,
+            name = d.name,
+            link = d.link_name,
+        )
+        .unwrap();
+    }
+    out
+}
+
+fn bindings_macos15(decls: &[Decl]) -> String {
+    let found = optional_decls(decls);
+    if found.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("extern \"C\" {\n");
+    for d in found {
+        let (params, ret) = signature(d);
+        if d.link_name != d.name {
+            writeln!(out, "    #[link_name = {:?}]", d.link_name).unwrap();
+        }
+        writeln!(out, "    pub fn {}({params}){ret};", d.name).unwrap();
+    }
+    out.push_str("}\n");
+    out
 }
 
 fn main() {
@@ -62,7 +143,7 @@ fn main() {
     let decls = ast::declarations(&[]);
     let top = header_lines(&clang);
     let files = [
-        ("bindings.rs", format!("{top}{}", bindings())),
+        ("bindings.rs", format!("{top}{}", bindings(&decls))),
         ("symbols.rs", format!("{top}{}", symbols(&decls))),
         ("optional.rs", format!("{top}{}", optional(&decls))),
         ("bindings_macos15.rs", format!("{top}{}", bindings_macos15(&decls))),
