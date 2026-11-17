@@ -55,6 +55,8 @@ pub enum CallError {
     NotAnActor,
     /// A typed-throws callee (`throws(E)`) threw: its error, of the `ErrorSlot`'s type.
     Typed(SwiftValue),
+    /// An automatic generic argument's type does not conform to a protocol the function requires; not called.
+    NotConforming { ty: String, protocol: &'static str },
 }
 
 impl fmt::Debug for CallError {
@@ -65,6 +67,7 @@ impl fmt::Debug for CallError {
             CallError::Unavailable(symbol) => write!(f, "Unavailable({symbol})"),
             CallError::NotAnActor => f.write_str("NotAnActor"),
             CallError::Typed(value) => write!(f, "Typed({value:?})"),
+            CallError::NotConforming { ty, protocol } => write!(f, "NotConforming({ty}, {protocol})"),
             CallError::InvalidArgument(why) => write!(f, "InvalidArgument({why})"),
         }
     }
@@ -79,6 +82,7 @@ impl fmt::Display for CallError {
             CallError::InvalidArgument(why) => write!(f, "invalid argument: {why}"),
             CallError::NotAnActor => f.write_str("the object is not an actor"),
             CallError::Typed(value) => write!(f, "Swift error: {}", value.description()),
+            CallError::NotConforming { ty, protocol } => write!(f, "{ty} does not conform to the required protocol {protocol}"),
         }
     }
 }
@@ -357,7 +361,7 @@ impl<R: SwiftRet> SwiftCall<R> {
         slot: IndirectSlot,
         indirect: bool,
     ) -> SwiftCall<R> {
-        let invalid = unavailable.or(lowering.error.take().map(CallError::InvalidArgument));
+        let invalid = unavailable.or(lowering.failure.take()).or(lowering.error.take().map(CallError::InvalidArgument));
         SwiftCall { shared: CallShared::new::<R>(function, lowering, slot, indirect), invalid, registered: false, result: PhantomData }
     }
 }

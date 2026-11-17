@@ -109,6 +109,11 @@ impl SwiftProtocol {
         SwiftProtocol { symbol: descriptor_symbol, descriptor: OnceLock::new() }
     }
 
+    /// The descriptor's symbol (`$sSHMp` for Hashable).
+    pub fn descriptor_symbol(&self) -> &'static str {
+        self.symbol
+    }
+
     fn descriptor(&self) -> Option<*const c_void> {
         let address = *self.descriptor.get_or_init(|| lookup(self.symbol));
         (address != 0).then_some(address as *const c_void)

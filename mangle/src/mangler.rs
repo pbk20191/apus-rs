@@ -415,7 +415,7 @@ impl Mangler {
 
 /// Canonical requirement order: by subject (generic parameters, then their associated types), conformances
 /// before same-type requirements, protocols by module and name.
-fn sorted_requirements(requirements: &[Requirement]) -> Vec<Requirement> {
+pub(crate) fn sorted_requirements(requirements: &[Requirement]) -> Vec<Requirement> {
     let mut sorted = requirements.to_vec();
     sorted.sort_by_key(|requirement| {
         let (subject, kind, protocol) = match requirement {
@@ -489,6 +489,14 @@ fn all_same_types(decl: &Decl) -> SameTypes {
 /// requirements are, after an empty parameter count (`rl`).
 fn contextual_signature_end(decl: &Decl, inside_constrained_extension: bool) -> &'static str {
     if decl.context_params == 1 && !decl.context_is_constrained && !inside_constrained_extension { "l" } else { "rl" }
+}
+
+/// A protocol's descriptor symbol (`$sSHMp` for Hashable).
+pub(crate) fn protocol_descriptor(protocol: &Protocol) -> Result<String, String> {
+    let mut m = Mangler { buffer: "$s".into(), ..Default::default() };
+    m.protocol(protocol)?;
+    m.push("Mp");
+    Ok(m.buffer)
 }
 
 pub fn mangle(decl: &Decl) -> Result<String, String> {

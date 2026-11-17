@@ -5,6 +5,7 @@ pub(crate) mod call;
 mod current;
 mod func;
 mod isolation;
+mod generic;
 mod join;
 mod macros;
 pub(crate) mod rt;
@@ -23,6 +24,8 @@ pub use stream::SwiftStream;
 pub use sync::{HopTo, SwiftFn, SwiftSyncCall};
 pub use value::{IntoSwift, SwiftProtocol, SwiftType, SwiftValue, WitnessTable};
 pub use isolation::Isolation;
+#[doc(hidden)]
+pub use generic::{__generic_args, __type_of, GenericArgs, HasSwiftType};
 pub use func::{ErrorSlot, ArgLowering, DirectValue, SwiftArg, SwiftArgs, SwiftAsyncFn, SwiftObject, SwiftReceiver, SwiftRet};
 pub use current::{cancelled, current_task, is_cancelled, priority, Cancelled, TaskRef};
 pub use join::{JoinHandle, MainOnlyHandle};

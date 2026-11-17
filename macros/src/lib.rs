@@ -129,11 +129,6 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             return item_compile_error(&format!("`{declaration}`: {error}"));
         }
         match apus_mangle::typed_throws(declaration) {
-            Ok(true) if !rust_error_slot => {
-                return item_compile_error(&format!(
-                    "`{declaration}` has typed throws: pass an `ErrorSlot` argument after its generic arguments, where the callee writes its error"
-                ))
-            }
             Ok(false) if rust_error_slot => {
                 return item_compile_error(&format!("`{declaration}` has no typed throws: it takes no `ErrorSlot`"))
             }
@@ -142,9 +137,49 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
                     "`{declaration}` has typed throws: declare it without `throws` and pass an `ErrorSlot` after its generic arguments; its error comes back as `CallError::Typed`"
                 ))
             }
-            Ok(_) => {}
+            Ok(_) => {} // a typed-throws slot is passed explicitly, or filled automatically (checked below)
             Err(error) => return item_compile_error(&format!("`{declaration}`: {error}")),
         }
+    }
+    // Automatic generic arguments: the Rust signature lists exactly the Swift declaration's formal parameters.
+    let rust_args = rust_argument_names(tail);
+    let mut generic = TokenStream::new();
+    let mut automatic = false;
+    if let ("declared", Some(declaration)) = (how.to_string().as_str(), &declaration_text) {
+        let formal = apus_mangle::formal_count(declaration).unwrap_or(usize::MAX);
+        let explicit_slot = rust_error_slot;
+        match apus_mangle::generic_plan(declaration) {
+            Ok(Some(plan)) if rust_args.len() == plan.formal_count && !explicit_slot => {
+                if nonsending_declared(declaration) {
+                    return item_compile_error(&format!("`{declaration}`: automatic generic arguments with nonisolated(nonsending): pass them explicitly"));
+                }
+                // The argument identifiers themselves (not text): they must resolve to the function's own parameters.
+                let name = |i: usize| TokenTree::Ident(rust_args[i].clone());
+                let bracket = |tokens: Vec<TokenTree>| TokenTree::Group(Group::new(Delimiter::Bracket, tokens.into_iter().collect()));
+                let metadata = plan.metadata_from.iter().map(|&i| name(i)).collect();
+                let witnesses = plan
+                    .witnesses
+                    .iter()
+                    .map(|(i, p)| {
+                        let pair = vec![name(*i), TokenTree::Literal(Literal::string(p))];
+                        TokenTree::Group(Group::new(Delimiter::Parenthesis, pair.into_iter().collect()))
+                    })
+                    .collect();
+                let slot = plan.error_slot_from.map(name).into_iter().collect();
+                let result = plan.result_from.map(name).into_iter().collect();
+                let auto = TokenTree::Ident(proc_macro::Ident::new("auto", proc_macro::Span::call_site()));
+                generic = [auto, bracket(metadata), bracket(witnesses), bracket(slot), bracket(result)].into_iter().collect();
+                automatic = true;
+            }
+            Err(error) if rust_args.len() == formal => return item_compile_error(&format!("`{declaration}`: {error}")),
+            _ => {}
+        }
+    }
+    if automatic_slot_missing(&declaration_text, how, rust_error_slot, automatic) {
+        let declaration = declaration_text.clone().unwrap_or_default();
+        return item_compile_error(&format!(
+            "`{declaration}` has typed throws: pass an `ErrorSlot` argument after its generic arguments, where the callee writes its error"
+        ));
     }
     let hop = match isolation {
         Some((apus_mangle::Isolation::Actor, d)) => Some(("SelfActor", d)),
@@ -172,9 +207,45 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     // Built from the token trees themselves: `$crate` in `path` does not survive a trip through text.
     let mut body: Vec<TokenTree> = vec![TokenTree::Ident(binding.clone()), TokenTree::Ident(how.clone())];
     body.extend(kind.parse::<TokenStream>().expect("kind tokens"));
-    body.extend(tail.iter().cloned());
+    let (spec, before) = tail.split_last().expect("a declaration");
+    body.extend(before.iter().cloned());
+    body.push(TokenTree::Group(Group::new(Delimiter::Bracket, generic)));
+    body.push(spec.clone());
     let mut out: Vec<TokenTree> = path.to_vec();
     out.push(TokenTree::Punct(Punct::new('!', Spacing::Alone)));
     out.push(TokenTree::Group(Group::new(Delimiter::Brace, body.into_iter().collect())));
     out.into_iter().collect()
+}
+
+/// The Rust signature's argument names: identifiers followed by a single `:` in its argument group (the fourth
+/// bracket group: docs, visibility, receiver, arguments).
+fn rust_argument_names(tail: &[TokenTree]) -> Vec<proc_macro::Ident> {
+    let groups: Vec<&Group> = tail.iter().filter_map(|t| match t {
+        TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket => Some(g),
+        _ => None,
+    }).collect();
+    let Some(args) = groups.get(3) else { return Vec::new() };
+    let tokens: Vec<TokenTree> = flatten(args.stream());
+    let mut names = Vec::new();
+    for (i, token) in tokens.iter().enumerate() {
+        let TokenTree::Ident(ident) = token else { continue };
+        let colon = |t: Option<&TokenTree>| matches!(t, Some(TokenTree::Punct(p)) if p.as_char() == ':');
+        let at_start = i == 0 || matches!(&tokens[i - 1], TokenTree::Punct(p) if p.as_char() == ',');
+        if at_start && colon(tokens.get(i + 1)) && !colon(tokens.get(i + 2)) {
+            names.push(ident.clone());
+        }
+    }
+    names
+}
+
+fn nonsending_declared(declaration: &str) -> bool {
+    apus_mangle::nonsending(declaration).unwrap_or(false)
+}
+
+/// A typed-throws declaration whose error slot is neither passed nor filled automatically.
+fn automatic_slot_missing(declaration: &Option<String>, how: &proc_macro::Ident, explicit: bool, automatic: bool) -> bool {
+    match (how.to_string().as_str(), declaration) {
+        ("declared", Some(d)) => apus_mangle::typed_throws(d).unwrap_or(false) && !explicit && !automatic,
+        _ => false,
+    }
 }

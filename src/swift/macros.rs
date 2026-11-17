@@ -92,17 +92,17 @@ macro_rules! __swift_fn {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __swift_item {
-    (runtime $how:ident async [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] $spec:literal) => {
+    (runtime $how:ident async [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
             static FUNCTION: $crate::swift::SwiftAsyncFn = $crate::swift::SwiftAsyncFn::new($crate::__swift_symbol!($how $spec));
-            let call = FUNCTION.call_declared(($($arg,)*), $crate::__swift_result_type!($how $spec));
+            let call = $crate::__swift_call!(FUNCTION [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::SwiftReceiver::bind($this, call);)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call
         }
     };
-    (runtime $how:ident nonsending [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] $spec:literal) => {
+    (runtime $how:ident nonsending [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
             static FUNCTION: $crate::swift::SwiftAsyncFn = $crate::swift::SwiftAsyncFn::new($crate::__swift_symbol!($how $spec));
@@ -112,7 +112,7 @@ macro_rules! __swift_item {
             call
         }
     };
-    (linked $how:ident async [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] $spec:literal) => {
+    (linked $how:ident async [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
             extern "C" {
@@ -120,13 +120,13 @@ macro_rules! __swift_item {
                 static POINTER: $crate::swift::AsyncFunctionPointer;
             }
             let function = unsafe { $crate::swift::SwiftAsyncFn::from_pointer(&POINTER) };
-            let call = function.call_declared(($($arg,)*), $crate::__swift_result_type!($how $spec));
+            let call = $crate::__swift_call!(function [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::SwiftReceiver::bind($this, call);)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call
         }
     };
-    (linked $how:ident nonsending [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] $spec:literal) => {
+    (linked $how:ident nonsending [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
             extern "C" {
@@ -140,17 +140,17 @@ macro_rules! __swift_item {
             call
         }
     };
-    (runtime $how:ident sync [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] $spec:literal) => {
+    (runtime $how:ident sync [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
             static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::new($crate::__swift_symbol!($how $spec));
-            let call = FUNCTION.call_declared(($($arg,)*), $crate::__swift_result_type!($how $spec));
+            let call = $crate::__swift_call!(FUNCTION [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::SwiftReceiver::bind_sync($this, call);)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call.invoke()
         }
     };
-    (linked $how:ident sync [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] $spec:literal) => {
+    (linked $how:ident sync [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
             extern "C" {
@@ -159,23 +159,23 @@ macro_rules! __swift_item {
             }
             let entry = unsafe { &ENTRY as *const u8 as *const ::core::ffi::c_void };
             let function = unsafe { $crate::swift::SwiftFn::from_address(entry) };
-            let call = function.call_declared(($($arg,)*), $crate::__swift_result_type!($how $spec));
+            let call = $crate::__swift_call!(function [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::SwiftReceiver::bind_sync($this, call);)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call.invoke()
         }
     };
-    (runtime $how:ident hop $target:ident [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] $spec:literal) => {
+    (runtime $how:ident hop $target:ident [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
             static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::new($crate::__swift_symbol!($how $spec));
-            let call = FUNCTION.call_declared(($($arg,)*), $crate::__swift_result_type!($how $spec));
+            let call = $crate::__swift_call!(FUNCTION [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::SwiftReceiver::bind_sync($this, call);)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call.hop($crate::swift::HopTo::$target)
         }
     };
-    (linked $how:ident hop $target:ident [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] $spec:literal) => {
+    (linked $how:ident hop $target:ident [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
             extern "C" {
@@ -184,11 +184,51 @@ macro_rules! __swift_item {
             }
             let entry = unsafe { &ENTRY as *const u8 as *const ::core::ffi::c_void };
             let function = unsafe { $crate::swift::SwiftFn::from_address(entry) };
-            let call = function.call_declared(($($arg,)*), $crate::__swift_result_type!($how $spec));
+            let call = $crate::__swift_call!(function [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::SwiftReceiver::bind_sync($this, call);)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call.hop($crate::swift::HopTo::$target)
         }
+    };
+}
+
+/// The argument tuple: the formal arguments, then the generic arguments `swift!` fills itself (`auto`: the formal
+/// arguments giving each generic parameter's type, the (argument, protocol descriptor) pairs of the witness tables in
+/// canonical order, and the argument giving a typed-throws error type).
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __swift_args {
+    ([$($arg:ident),*] []) => { ($($arg,)*) };
+    ([$($arg:ident),*] [auto [$($m:ident)*] [$(($w:ident $p:literal))*] [$($slot:ident)?] [$($result:ident)?]]) => {
+        ($($arg,)* $crate::swift::__generic_args(
+            &[$($crate::swift::__type_of(&$m)),*],
+            &[$(($crate::swift::__type_of(&$w), {
+                static PROTOCOL: $crate::swift::SwiftProtocol = $crate::swift::SwiftProtocol::new($p);
+                &PROTOCOL
+            })),*],
+            {
+                #[allow(unused_mut)]
+                let mut slot = ::core::option::Option::None;
+                $(slot = ::core::option::Option::Some($crate::swift::__type_of(&$slot));)?
+                slot
+            },
+        ),)
+    };
+}
+
+/// Prepares the call: with the declared result type, or, when the result is exactly a generic parameter filled
+/// automatically, with that parameter's type taken from its argument.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __swift_call {
+    ($function:ident [$($arg:ident),*] [auto $m:tt $w:tt $slot:tt [$result:ident]] $declared:expr) => {
+        $function.call_returning(
+            $crate::swift::__type_of(&$result),
+            $crate::__swift_args!([$($arg),*] [auto $m $w $slot [$result]]),
+        )
+    };
+    ($function:ident [$($arg:ident),*] [$($generic:tt)*] $declared:expr) => {
+        $function.call_declared($crate::__swift_args!([$($arg),*] [$($generic)*]), $declared)
     };
 }
 

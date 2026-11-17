@@ -115,6 +115,8 @@ pub struct ArgLowering {
     pub(crate) error: Option<&'static str>,
     /// The error slot of a typed-throws call (`ErrorSlot`): written only when the callee throws.
     pub(crate) typed_error: Option<UninitValue>,
+    /// A reason not to make the call at all, found while lowering (the first one wins).
+    pub(crate) failure: Option<CallError>,
 }
 
 impl ArgLowering {
@@ -127,7 +129,13 @@ impl ArgLowering {
             owned: Vec::new(),
             error: None,
             typed_error: None,
+            failure: None,
         }
+    }
+
+    /// Records why the call must not be made; it is reported instead of running it.
+    pub(crate) fn fail(&mut self, error: CallError) {
+        self.failure.get_or_insert(error);
     }
 
     /// The error slot of a typed-throws call: storage for an error of `ty`, passed by address.

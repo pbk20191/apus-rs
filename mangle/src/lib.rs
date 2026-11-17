@@ -120,6 +120,87 @@ pub fn nonsending(declaration: &str) -> Result<bool, Error> {
     Ok(parse::parse(declaration).map_err(Error)?.nonsending)
 }
 
+/// The number of formal parameters of a function declaration (0 for a getter).
+pub fn formal_count(declaration: &str) -> Result<usize, Error> {
+    Ok(match parse::parse(declaration).map_err(Error)?.signature {
+        ast::Signature::Function { params, .. } => params.len(),
+        ast::Signature::Getter(_) => 0,
+    })
+}
+
+/// How `swift!` fills a generic function's generic arguments itself (see [`generic_plan`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GenericPlan {
+    /// The declaration's formal parameters (what a Rust signature lists in automatic mode).
+    pub formal_count: usize,
+    /// Per generic parameter, in order: the formal parameter whose value gives its type metadata.
+    pub metadata_from: Vec<usize>,
+    /// Witness tables in the ABI's canonical requirement order: (formal parameter giving the type, protocol descriptor).
+    pub witnesses: Vec<(usize, String)>,
+    /// Typed throws of a generic error type: the formal parameter giving that type.
+    pub error_slot_from: Option<usize>,
+    /// A result whose type is exactly a generic parameter: the formal parameter giving that type.
+    pub result_from: Option<usize>,
+}
+
+/// The generic arguments a call to `declaration` needs and where their values come from, or `None` when it is not
+/// generic. Errors name what automatic arguments cannot handle; such a declaration takes them explicitly.
+pub fn generic_plan(declaration: &str) -> Result<Option<GenericPlan>, Error> {
+    use ast::{GenericParam, Requirement, Subject, Ty};
+    let decl = parse::parse(declaration).map_err(Error)?;
+    let explicit = |why: String| Err(Error(format!("{why}: pass the generic arguments explicitly (type metadata, then witness tables)")));
+    let ast::Signature::Function { params, typed_error, result, .. } = &decl.signature else { return Ok(None) };
+    // A member of a generic type gets its type's generic arguments through `self` / `Self`: nothing to fill unless
+    // it has generic parameters of its own.
+    if decl.generic_params == 0 {
+        return Ok(None);
+    }
+    if decl.context_params > 0 {
+        return explicit("generic members of generic types".into());
+    }
+    let mut metadata_from = Vec::new();
+    for index in 0..decl.generic_params {
+        let param = GenericParam { depth: 0, index };
+        match params.iter().position(|p| !p.inout && !p.variadic && p.ty == Ty::Param(param)) {
+            Some(formal) => metadata_from.push(formal),
+            None => return explicit(format!("generic parameter {} is not the type of one of its parameters", index + 1)),
+        }
+    }
+    // Marker protocols take no witness table.
+    let marker = |p: &ast::Protocol| p.module == "Swift" && matches!(p.name.as_str(), "Sendable" | "SendableMetatype" | "Copyable" | "Escapable" | "BitwiseCopyable");
+    let mut witnesses = Vec::new();
+    let mut conformances_per_param = vec![0usize; decl.generic_params];
+    for requirement in mangler::sorted_requirements(&decl.requirements) {
+        match requirement {
+            Requirement::Conforms(_, ref protocol) if marker(protocol) => {}
+            Requirement::Conforms(Subject::Param(param), protocol) => {
+                conformances_per_param[param.index] += 1;
+                if conformances_per_param[param.index] > 1 {
+                    // The canonical signature drops a conformance another one implies; only the explicit form is sure.
+                    return explicit(format!("generic parameter {} has more than one protocol requirement", param.index + 1));
+                }
+                if protocol.module == "__C" {
+                    return explicit("Objective-C protocol requirements (they take no witness table)".into());
+                }
+                witnesses.push((metadata_from[param.index], mangler::protocol_descriptor(&protocol).map_err(Error)?));
+            }
+            Requirement::Conforms(Subject::Member(..), _) => return explicit("requirements on associated types".into()),
+            Requirement::SameType(Subject::Param(_), _) => return explicit("generic parameters fixed to a type".into()),
+            Requirement::SameType(Subject::Member(..), _) => {}
+        }
+    }
+    let error_slot_from = match typed_error {
+        Some(Ty::Param(param)) => Some(metadata_from[param.index]),
+        Some(_) => return explicit("typed throws of an associated type".into()),
+        None => None,
+    };
+    let result_from = match result {
+        Ty::Param(param) => Some(metadata_from[param.index]),
+        _ => None,
+    };
+    Ok(Some(GenericPlan { formal_count: params.len(), metadata_from, witnesses, error_slot_from, result_from }))
+}
+
 #[cfg(test)]
 mod isolation_tests {
     use super::{isolation, Isolation};
@@ -135,6 +216,36 @@ mod isolation_tests {
         assert_eq!(of("@MainActor M.onMain() -> Bool"), Isolation::MainActor);
         assert_eq!(of("@MainActor M.onMain() async -> Bool"), Isolation::None);
         assert_eq!(of("M.Counter(class).bump(by: Int) -> Int"), Isolation::None);
+    }
+
+    #[test]
+    fn generic_plan_gives_metadata_sources_and_witness_order() {
+        use super::generic_plan;
+        assert!(generic_plan("M.f(_: Int) -> Int").unwrap().is_none(), "not generic");
+        assert!(generic_plan("M.Box(struct)<T>.get() -> T").unwrap().is_none(), "the type's arguments come with self");
+        let plan = generic_plan("M.describeIt<T: CustomStringConvertible>(_: T, times: Int) async throws -> String").unwrap().unwrap();
+        assert_eq!(plan.formal_count, 2);
+        assert_eq!(plan.metadata_from, vec![0]);
+        assert_eq!(plan.witnesses, vec![(0, "$ss23CustomStringConvertibleMp".to_string())]);
+        assert_eq!(plan.error_slot_from, None);
+        // Canonical order: by parameter. Marker protocols take no witness table.
+        let plan = generic_plan("M.two<A: Hashable, B: Equatable & Sendable>(_: B, _: A) -> Int").unwrap().unwrap();
+        assert_eq!(plan.metadata_from, vec![1, 0]);
+        assert_eq!(plan.witnesses, vec![(1, "$sSHMp".into()), (0, "$sSQMp".into())]);
+        let plan = generic_plan("M.g<E: Error>(_: Bool, _: E) async throws(E) -> Int").unwrap().unwrap();
+        assert_eq!(plan.error_slot_from, Some(1));
+        assert_eq!(plan.witnesses, vec![(1, "$ss5ErrorMp".into())]);
+        // Unsupported for automatic arguments: the message points at passing them explicitly.
+        for declaration in [
+            "M.make<T>() -> T",
+            "M.join<C: Collection>(_: C) -> Int where C.Element: Hashable",
+            "M.Box(struct)<T>.map<U>(_: U) -> U",
+            // Two conformances of one parameter: Swift drops one implied by the other (Hashable implies Equatable).
+            "M.h<T: Equatable & Hashable>(_: T) -> Int",
+        ] {
+            let error = generic_plan(declaration).unwrap_err().to_string();
+            assert!(error.contains("explicitly"), "{declaration}: {error}");
+        }
     }
 
     #[test]

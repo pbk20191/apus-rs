@@ -140,6 +140,9 @@ impl<R: SwiftRet> SwiftSyncCall<R> {
             return Err(error);
         }
         let function = self.function.ok_or(CallError::Unavailable(self.symbol))?;
+        if let Some(failure) = self.lowering.failure.take() {
+            return Err(failure);
+        }
         if let Some(why) = self.lowering.error {
             return Err(CallError::InvalidArgument(why));
         }
