@@ -36,3 +36,8 @@ xcrun swiftc -O -parse-as-library -module-name Cal -emit-ir callers.swift -o cal
 - Typed throws: `RetRegs.error` is a flag; the error is the result registers (concrete) or a slot the caller provides
   (generic).
 - `SwiftStream` can use `next(isolation:)` where present (an optional macOS 15 symbol) and keep `next()` otherwise.
+
+5. `nonisolated(nonsending)` (Swift 6.2) async functions take a hidden isolation argument (two words) **before** their
+   own arguments: `inherits(_ x: Int)` is `(ctx, isolation.0, isolation.1, x)`, while a plain async function is
+   `(ctx, x)`. The mangled name does not show the difference (`$s2NS8inheritsyS2iYaF` vs `$s2NS5plainyS2iYaF`), so
+   only the declaration can say which one a symbol is (`nonsending.swift`).
