@@ -72,20 +72,83 @@ pub enum Isolation {
     MainActor,
 }
 
+/// A declaration parsed once, for a caller that asks several of the questions below about it (`swift!`).
+pub struct Declaration(ast::Decl);
+
+impl Declaration {
+    pub fn parse(declaration: &str) -> Result<Self, Error> {
+        parse::parse(declaration).map(Declaration).map_err(Error)
+    }
+
+    /// See [`isolation`].
+    pub fn isolation(&self) -> Isolation {
+        let decl = &self.0;
+        let sync = match &decl.signature {
+            ast::Signature::Getter(_) => true,
+            ast::Signature::Function { is_async, .. } => !is_async,
+        };
+        let actor_member = !decl.is_static && decl.context.last().is_some_and(|(_, kind)| *kind == ast::Kind::Actor);
+        match () {
+            _ if !sync || decl.nonisolated => Isolation::None,
+            _ if decl.main_actor => Isolation::MainActor,
+            _ if actor_member => Isolation::Actor,
+            _ => Isolation::None,
+        }
+    }
+
+    /// See [`typed_throws`].
+    pub fn typed_throws(&self) -> Result<bool, Error> {
+        match &self.0.signature {
+            ast::Signature::Function { typed_error: Some(ast::Ty::Param(_) | ast::Ty::Member(..)), .. } => Ok(true),
+            ast::Signature::Function { typed_error: Some(_), .. } => Err(Error(CONCRETE_TYPED_THROWS.into())),
+            _ => Ok(false),
+        }
+    }
+
+    /// See [`check_callable`].
+    pub fn check_callable(&self) -> Result<(), Error> {
+        if let ast::Signature::Function { params, .. } = &self.0.signature {
+            if params.iter().any(|p| p.isolated && !matches!(p.ty, ast::Ty::Optional(_))) {
+                return Err(Error("only `isolated (any Actor)?` parameters are supported: apus passes nil where the call is not on the main actor".into()));
+            }
+        }
+        Ok(())
+    }
+
+    /// See [`nonsending`].
+    pub fn nonsending(&self) -> bool {
+        self.0.nonsending
+    }
+
+    /// See [`formal_count`].
+    pub fn formal_count(&self) -> usize {
+        match &self.0.signature {
+            ast::Signature::Function { params, .. } => params.len(),
+            ast::Signature::Getter(_) => 0,
+        }
+    }
+
+    /// See [`closure_shapes`].
+    pub fn closure_shapes(&self) -> Result<Vec<Option<String>>, Error> {
+        let ast::Signature::Function { params, .. } = &self.0.signature else { return Ok(Vec::new()) };
+        params
+            .iter()
+            .map(|param| match &param.ty {
+                ast::Ty::Function(function) => closure_shape(function).map(Some).map_err(Error),
+                _ => Ok(None),
+            })
+            .collect()
+    }
+
+    /// See [`generic_plan`].
+    pub fn generic_plan(&self) -> Result<Option<GenericPlan>, Error> {
+        generic_plan_of(&self.0)
+    }
+}
+
 /// The isolation a call to `declaration` needs (see [`Isolation`]).
 pub fn isolation(declaration: &str) -> Result<Isolation, Error> {
-    let decl = parse::parse(declaration).map_err(Error)?;
-    let sync = match &decl.signature {
-        ast::Signature::Getter(_) => true,
-        ast::Signature::Function { is_async, .. } => !is_async,
-    };
-    let actor_member = !decl.is_static && decl.context.last().is_some_and(|(_, kind)| *kind == ast::Kind::Actor);
-    Ok(match () {
-        _ if !sync || decl.nonisolated => Isolation::None,
-        _ if decl.main_actor => Isolation::MainActor,
-        _ if actor_member => Isolation::Actor,
-        _ => Isolation::None,
-    })
+    Ok(Declaration::parse(declaration)?.isolation())
 }
 
 const CONCRETE_TYPED_THROWS: &str =
@@ -95,30 +158,19 @@ const CONCRETE_TYPED_THROWS: &str =
 /// associated error type is accepted: a concrete one comes back in registers or through a slot depending on its
 /// layout, which the declaration does not tell.
 pub fn typed_throws(declaration: &str) -> Result<bool, Error> {
-    let decl = parse::parse(declaration).map_err(Error)?;
-    match &decl.signature {
-        ast::Signature::Function { typed_error: Some(ast::Ty::Param(_) | ast::Ty::Member(..)), .. } => Ok(true),
-        ast::Signature::Function { typed_error: Some(_), .. } => Err(Error(CONCRETE_TYPED_THROWS.into())),
-        _ => Ok(false),
-    }
+    Declaration::parse(declaration)?.typed_throws()
 }
 
 /// Refuses declarations apus would call with the wrong arguments: an `isolated` parameter of a type other than
 /// `(any Actor)?` (apus passes nil outside the main actor, which a non-optional actor parameter cannot hold).
 pub fn check_callable(declaration: &str) -> Result<(), Error> {
-    let decl = parse::parse(declaration).map_err(Error)?;
-    if let ast::Signature::Function { params, .. } = &decl.signature {
-        if params.iter().any(|p| p.isolated && !matches!(p.ty, ast::Ty::Optional(_))) {
-            return Err(Error("only `isolated (any Actor)?` parameters are supported: apus passes nil where the call is not on the main actor".into()));
-        }
-    }
-    Ok(())
+    Declaration::parse(declaration)?.check_callable()
 }
 
 /// Whether the declaration is `nonisolated(nonsending)`: apus passes the caller's isolation as a hidden first argument.
 /// Only the declaration can say so; the symbol is the same as a plain async function's.
 pub fn nonsending(declaration: &str) -> Result<bool, Error> {
-    Ok(parse::parse(declaration).map_err(Error)?.nonsending)
+    Ok(Declaration::parse(declaration)?.nonsending())
 }
 
 /// The symbol apus calls for `declaration`: the mangled name, or for a protocol requirement its dispatch thunk
@@ -132,10 +184,7 @@ pub fn call_symbol(declaration: &str) -> Result<String, Error> {
 
 /// The number of formal parameters of a function declaration (0 for a getter).
 pub fn formal_count(declaration: &str) -> Result<usize, Error> {
-    Ok(match parse::parse(declaration).map_err(Error)?.signature {
-        ast::Signature::Function { params, .. } => params.len(),
-        ast::Signature::Getter(_) => 0,
-    })
+    Ok(Declaration::parse(declaration)?.formal_count())
 }
 
 /// Per formal parameter, the shape a closure passed for it must have, or `None` for a parameter that is not a
@@ -144,15 +193,7 @@ pub fn formal_count(declaration: &str) -> Result<usize, Error> {
 /// `Any`), `d` (in registers: standard scalars, `String`, class references, `any Error`), `?` (the Rust types decide),
 /// and `-` for a `Void` result: `"a(di)d"`.
 pub fn closure_shapes(declaration: &str) -> Result<Vec<Option<String>>, Error> {
-    let decl = parse::parse(declaration).map_err(Error)?;
-    let ast::Signature::Function { params, .. } = &decl.signature else { return Ok(Vec::new()) };
-    params
-        .iter()
-        .map(|param| match &param.ty {
-            ast::Ty::Function(function) => closure_shape(function).map(Some).map_err(Error),
-            _ => Ok(None),
-        })
-        .collect()
+    Declaration::parse(declaration)?.closure_shapes()
 }
 
 fn closure_shape(function: &ast::FunctionTy) -> Result<String, String> {
@@ -220,8 +261,11 @@ pub struct GenericPlan {
 /// The generic arguments a call to `declaration` needs and where their values come from, or `None` when it is not
 /// generic. Errors name what automatic arguments cannot handle; such a declaration takes them explicitly.
 pub fn generic_plan(declaration: &str) -> Result<Option<GenericPlan>, Error> {
+    Declaration::parse(declaration)?.generic_plan()
+}
+
+fn generic_plan_of(decl: &ast::Decl) -> Result<Option<GenericPlan>, Error> {
     use ast::{GenericParam, Requirement, Subject, Ty};
-    let decl = parse::parse(declaration).map_err(Error)?;
     let explicit = |why: String| Err(Error(format!("{why}: pass the generic arguments explicitly (type metadata, then witness tables)")));
     let ast::Signature::Function { params, typed_error, result, .. } = &decl.signature else { return Ok(None) };
     // A member of a generic type gets its type's generic arguments through `self` / `Self`: nothing to fill unless

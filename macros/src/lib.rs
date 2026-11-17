@@ -105,16 +105,16 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         return item_compile_error("__swift_route: expected `binding how async|sync …`");
     };
     let declaration = tail.last().and_then(|t| flatten(t.clone().into()).first().and_then(string_literal));
-    let declaration_text = declaration.clone();
-    // The Rust signature's `throws`: a bracket group holding just that word.
-    let rust_throws = tail.iter().any(|t| matches!(t, TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket && g.stream().to_string() == "throws"));
-    let isolation = match (how.to_string().as_str(), declaration) {
-        ("declared", Some(declaration)) => match apus_mangle::isolation(&declaration) {
-            Ok(isolation) => Some((isolation, declaration)),
+    // A declared call's declaration, parsed once for every question below.
+    let declared = match (how.to_string().as_str(), declaration) {
+        ("declared", Some(declaration)) => match apus_mangle::Declaration::parse(&declaration) {
+            Ok(parsed) => Some((declaration, parsed)),
             Err(error) => return item_compile_error(&format!("cannot mangle `{declaration}`: {error}")),
         },
         _ => None,
     };
+    // The Rust signature's `throws`: a bracket group holding just that word.
+    let rust_throws = tail.iter().any(|t| matches!(t, TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket && g.stream().to_string() == "throws"));
     // The Rust signature's `ErrorSlot` argument (an identifier anywhere in its groups).
     fn mentions(stream: TokenStream, name: &str) -> bool {
         stream.into_iter().any(|t| match t {
@@ -124,11 +124,11 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         })
     }
     let rust_error_slot = tail.iter().any(|t| matches!(t, TokenTree::Group(g) if mentions(g.stream(), "ErrorSlot")));
-    if let ("declared", Some(declaration)) = (how.to_string().as_str(), &declaration_text) {
-        if let Err(error) = apus_mangle::check_callable(declaration) {
+    if let Some((declaration, parsed)) = &declared {
+        if let Err(error) = parsed.check_callable() {
             return item_compile_error(&format!("`{declaration}`: {error}"));
         }
-        match apus_mangle::typed_throws(declaration) {
+        match parsed.typed_throws() {
             Ok(false) if rust_error_slot => {
                 return item_compile_error(&format!("`{declaration}` has no typed throws: it takes no `ErrorSlot`"))
             }
@@ -145,12 +145,12 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     let rust_args = rust_argument_names(tail);
     let mut generic = TokenStream::new();
     let mut automatic = false;
-    if let ("declared", Some(declaration)) = (how.to_string().as_str(), &declaration_text) {
-        let formal = apus_mangle::formal_count(declaration).unwrap_or(usize::MAX);
+    if let Some((declaration, parsed)) = &declared {
+        let formal = parsed.formal_count();
         let explicit_slot = rust_error_slot;
-        match apus_mangle::generic_plan(declaration) {
+        match parsed.generic_plan() {
             Ok(Some(plan)) if rust_args.len() == plan.formal_count && !explicit_slot => {
-                if nonsending_declared(declaration) {
+                if parsed.nonsending() {
                     return item_compile_error(&format!("`{declaration}`: automatic generic arguments with nonisolated(nonsending): pass them explicitly"));
                 }
                 // The argument identifiers themselves (not text): they must resolve to the function's own parameters.
@@ -176,8 +176,8 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         }
     }
     // Function-typed parameters: the shape the closure argument must have, checked when the call is made.
-    if let ("declared", Some(declaration)) = (how.to_string().as_str(), &declaration_text) {
-        match apus_mangle::closure_shapes(declaration) {
+    if let Some((declaration, parsed)) = &declared {
+        match parsed.closure_shapes() {
             Ok(shapes) if shapes.iter().any(Option::is_some) => {
                 if rust_args.len() < shapes.len() {
                     return item_compile_error(&format!("`{declaration}`: the Rust signature lists fewer arguments than the declaration"));
@@ -200,21 +200,20 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             Err(error) => return item_compile_error(&format!("`{declaration}`: {error}")),
         }
     }
-    if automatic_slot_missing(&declaration_text, how, rust_error_slot, automatic) {
-        let declaration = declaration_text.clone().unwrap_or_default();
-        return item_compile_error(&format!(
-            "`{declaration}` has typed throws: pass an `ErrorSlot` argument after its generic arguments, where the callee writes its error"
-        ));
+    // A typed-throws declaration whose error slot is neither passed nor filled automatically.
+    if let Some((declaration, parsed)) = &declared {
+        if parsed.typed_throws().unwrap_or(false) && !rust_error_slot && !automatic {
+            return item_compile_error(&format!(
+                "`{declaration}` has typed throws: pass an `ErrorSlot` argument after its generic arguments, where the callee writes its error"
+            ));
+        }
     }
-    let hop = match isolation {
+    let hop = match declared.as_ref().map(|(d, parsed)| (parsed.isolation(), d)) {
         Some((apus_mangle::Isolation::Actor, d)) => Some(("SelfActor", d)),
         Some((apus_mangle::Isolation::MainActor, d)) => Some(("Main", d)),
         _ => None,
     };
-    let nonsending = match (how.to_string().as_str(), &declaration_text) {
-        ("declared", Some(declaration)) => apus_mangle::nonsending(declaration).unwrap_or(false),
-        _ => false,
-    };
+    let nonsending = declared.as_ref().is_some_and(|(_, parsed)| parsed.nonsending());
     if nonsending && asyncness.to_string() != "async" {
         return item_compile_error("a `nonisolated(nonsending)` function is async: declare it `async fn`");
     }
@@ -261,18 +260,6 @@ fn rust_argument_names(tail: &[TokenTree]) -> Vec<proc_macro::Ident> {
         }
     }
     names
-}
-
-fn nonsending_declared(declaration: &str) -> bool {
-    apus_mangle::nonsending(declaration).unwrap_or(false)
-}
-
-/// A typed-throws declaration whose error slot is neither passed nor filled automatically.
-fn automatic_slot_missing(declaration: &Option<String>, how: &proc_macro::Ident, explicit: bool, automatic: bool) -> bool {
-    match (how.to_string().as_str(), declaration) {
-        ("declared", Some(d)) => apus_mangle::typed_throws(d).unwrap_or(false) && !explicit && !automatic,
-        _ => false,
-    }
 }
 
 /// Like `mangle!`, with the symbol apus calls: a protocol requirement's dispatch thunk (`…Tj`).

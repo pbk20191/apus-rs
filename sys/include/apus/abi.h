@@ -384,6 +384,9 @@ _Static_assert(sizeof(TaskFutureWaitAsyncContext) == 48, "TaskFutureWaitAsyncCon
 typedef APUS_SWIFTASYNCCALL void ThrowingContinuation(APUS_ASYNC_CONTEXT AsyncContext *, APUS_SWIFT_CONTEXT void *error) APUS_ASYNC;
 // include/swift/ABI/TaskOptions.h: TaskOptionRecord + TaskGroupTaskOptionRecord
 typedef struct { size_t flags; void *parent; void *group; } TaskGroupOption;
+// include/swift/ABI/MetadataValues.h: a TaskGroup's storage, NumWords_TaskGroup words at Alignment_TaskGroup
+// (MaximumAlignment, 16)
+typedef struct __attribute__((aligned(16))) { void *words[NUM_WORDS_TASK_GROUP]; } TaskGroupStorage;
 
 // A plain Job's metadata (timers): the runtime hands such jobs to dispatch, which calls VTableInvoke. Job header:
 // include/swift/ABI/Task.h (class Job). Shape: FullMetadata<DispatchClassMetadata> as in

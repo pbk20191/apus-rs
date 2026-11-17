@@ -245,7 +245,7 @@ impl SwiftError {
     pub fn downcast(&self, ty: SwiftType) -> Option<SwiftValue> {
         let storage = UninitValue::new(ty);
         let mut boxed = self.boxed; // the `any Error` value: one reference, not consumed (no TakeOnSuccess)
-        let any_error = SwiftType::from_mangled_name("s5Error_p")?;
+        let any_error = SwiftType::any_error()?;
         let cast = unsafe {
             rt::swift_dynamicCast(storage.ptr.as_ptr().cast(), (&mut boxed as *mut *mut c_void).cast(), any_error.as_ptr(), ty.as_ptr(), 0)
         };

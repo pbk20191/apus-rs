@@ -55,6 +55,8 @@ fn raw_bindings(decls: &[Decl]) -> String {
         .clang_args(["-xc", "-DAPUS_BINDGEN", &format!("-I{}", ast::include_dir().display())])
         .allowlist_file(".*/include/apus/.*")
         .layout_tests(true)
+        // Our own first line names the bindgen version already.
+        .disable_header_comment()
         .generate()
         .expect("bindgen failed on include/apus/abi.h")
         .to_string()

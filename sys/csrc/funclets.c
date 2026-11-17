@@ -26,7 +26,7 @@ typedef struct __attribute__((aligned(16))) {
   CallRegs *hop_regs;
   RetRegs *closure_ret;               // a Rust closure called by Swift: its results, returned at finish (else NULL)
   TaskFutureWaitAsyncContext wait;
-  void *group[NUM_WORDS_TASK_GROUP] __attribute__((aligned(16)));   // TaskGroup storage: NumWords_TaskGroup = 32 (ABI/MetadataValues.h)
+  TaskGroupStorage group;
 } RsTaskContext;
 
 typedef struct __attribute__((aligned(16))) {
@@ -68,7 +68,7 @@ static APUS_SWIFTASYNCCALL void finish(APUS_ASYNC_CONTEXT AsyncContext *ctx) {
 
 static APUS_SWIFTASYNCCALL void after_wait_all(APUS_ASYNC_CONTEXT AsyncContext *ctx, APUS_SWIFT_CONTEXT void *error) {
   RsTaskContext *c = (RsTaskContext *)ctx;
-  swift_taskGroup_destroy(c->group);
+  swift_taskGroup_destroy(&c->group);
   c->group_initialized = false;
   // The last child resumes us on the generic executor (TaskGroup.cpp): a MainActor task hops back so that it
   // completes, and its output is handed over or dropped, on the main thread.
@@ -186,10 +186,10 @@ static APUS_SWIFTASYNCCALL void child_entry(APUS_ASYNC_CONTEXT AsyncContext *ctx
 
 static void spawn_child(RsTaskContext *c, void *record) {
   if (!c->group_initialized) {
-    swift_taskGroup_initializeWithFlags(GROUP_DISCARD_RESULTS, c->group, empty_tuple_metadata());
+    swift_taskGroup_initializeWithFlags(GROUP_DISCARD_RESULTS, &c->group, empty_tuple_metadata());
     c->group_initialized = true;
   }
-  TaskGroupOption option = { OPTION_KIND_TASK_GROUP, NULL, c->group };
+  TaskGroupOption option = { OPTION_KIND_TASK_GROUP, NULL, &c->group };
   size_t flags = CREATE_IS_CHILD_TASK | CREATE_ENQUEUE_JOB | CREATE_ADD_PENDING_GROUP_TASK_UNCONDITIONALLY
                | CREATE_IS_DISCARDING_TASK | CREATE_IS_TASK_FUNCTION_CONSUMED;
   AsyncTaskAndContext child = swift_task_create_common(flags, &option, empty_tuple_metadata(), (void *)child_entry,
@@ -201,7 +201,7 @@ static APUS_SWIFTASYNCCALL void step(APUS_ASYNC_CONTEXT AsyncContext *ctx) {
   RsTaskContext *c = (RsTaskContext *)ctx;
   if (rs_poll(c->rust)) {
     if (c->group_initialized)   // structured concurrency: the parent never completes before its children
-      return swift_taskGroup_waitAll(&c->unused_result, ctx, c->group, NULL, after_wait_all, &c->wait.base);
+      return swift_taskGroup_waitAll(&c->unused_result, ctx, &c->group, NULL, after_wait_all, &c->wait.base);
     return finish(ctx);
   }
   const AsyncFunctionPointer *fn;

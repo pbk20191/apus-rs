@@ -148,7 +148,7 @@ impl SwiftStream {
 
 /// A thrown `Failure` as an `any Error` box: the box itself when `Failure` is `any Error`, else a new box.
 fn box_error(value: SwiftValue, failure: SwiftType) -> SwiftError {
-    let any_error = SwiftType::from_mangled_name("s5Error_p");
+    let any_error = SwiftType::any_error();
     unsafe {
         if Some(failure) == any_error {
             let boxed = *(value.as_ptr() as *const *mut std::ffi::c_void);

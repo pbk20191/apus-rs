@@ -26,7 +26,7 @@ fn main() {
     let out = Command::new("xcrun").args(["dyld_info", "-exports"]).arg(&exe).output().unwrap();
     assert!(out.status.success(), "dyld_info failed: {}", String::from_utf8_lossy(&out.stderr));
     let exports = String::from_utf8(out.stdout).unwrap();
-    let prefix = format!("_{}", apus::__sys::BOUNDARY_PREFIX);
+    let prefix = format!("_{}", apus_sys::BOUNDARY_PREFIX);
     // Unstripped, the Rust-defined callbacks are exported: under the namespace. Seeing one proves the list was read.
     assert!(exports.contains(&format!("{prefix}rs_poll")), "no {prefix}rs_poll in the export list:\n{exports}");
     let mut failures = Vec::new();

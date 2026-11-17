@@ -39,6 +39,12 @@ impl SwiftType {
         (!metadata.is_null()).then_some(SwiftType(metadata))
     }
 
+    /// `any Error`, resolved once.
+    pub(crate) fn any_error() -> Option<SwiftType> {
+        static ANY_ERROR: OnceLock<Option<SwiftType>> = OnceLock::new();
+        *ANY_ERROR.get_or_init(|| SwiftType::from_mangled_name("s5Error_p"))
+    }
+
     /// # Safety
     /// `metadata` must be Swift type metadata.
     pub unsafe fn from_metadata(metadata: *const c_void) -> SwiftType {
