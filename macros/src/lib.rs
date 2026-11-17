@@ -175,6 +175,31 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             _ => {}
         }
     }
+    // Function-typed parameters: the shape the closure argument must have, checked when the call is made.
+    if let ("declared", Some(declaration)) = (how.to_string().as_str(), &declaration_text) {
+        match apus_mangle::closure_shapes(declaration) {
+            Ok(shapes) if shapes.iter().any(Option::is_some) => {
+                if rust_args.len() < shapes.len() {
+                    return item_compile_error(&format!("`{declaration}`: the Rust signature lists fewer arguments than the declaration"));
+                }
+                let pairs: TokenStream = shapes
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, shape)| shape.as_ref().map(|shape| (i, shape)))
+                    .map(|(i, shape)| {
+                        let pair = vec![TokenTree::Ident(rust_args[i].clone()), TokenTree::Literal(Literal::string(shape))];
+                        TokenTree::Group(Group::new(Delimiter::Parenthesis, pair.into_iter().collect()))
+                    })
+                    .collect();
+                generic.extend([
+                    TokenTree::Ident(proc_macro::Ident::new("closures", proc_macro::Span::call_site())),
+                    TokenTree::Group(Group::new(Delimiter::Bracket, pairs)),
+                ]);
+            }
+            Ok(_) => {}
+            Err(error) => return item_compile_error(&format!("`{declaration}`: {error}")),
+        }
+    }
     if automatic_slot_missing(&declaration_text, how, rust_error_slot, automatic) {
         let declaration = declaration_text.clone().unwrap_or_default();
         return item_compile_error(&format!(

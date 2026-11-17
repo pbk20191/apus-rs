@@ -46,7 +46,8 @@ impl std::error::Error for Error {}
 /// - `(extension in Module)` marks a member declared in an extension that is mangled as one: an extension in
 ///   another module than the type's, any constrained extension (`(extension in M where Element == Int)`), and
 ///   every protocol extension. Inside it, bare names belong to the extension's module.
-/// - Not supported: function-typed parameters, operators, initializers, subscripts, setters, non-ASCII names,
+/// - Function types: `(Int, String) async throws -> String`, with `@escaping`, `@Sendable`, `@MainActor`.
+/// - Not supported: operators, initializers, subscripts, setters, non-ASCII names,
 ///   isolation and ownership attributes, more than one generic enclosing type, parameter packs.
 pub fn mangle(declaration: &str) -> Result<String, Error> {
     let decl = parse::parse(declaration).map_err(Error)?;
@@ -135,6 +136,66 @@ pub fn formal_count(declaration: &str) -> Result<usize, Error> {
         ast::Signature::Function { params, .. } => params.len(),
         ast::Signature::Getter(_) => 0,
     })
+}
+
+/// Per formal parameter, the shape a closure passed for it must have, or `None` for a parameter that is not a
+/// function type: `a`/`s` (async or sync), then `t` (throws) and `m` (`@MainActor`) when declared, then the
+/// parameters and the result in parentheses and after them, each `i` (passed by address: a generic parameter,
+/// `Any`, `any P`), `d` (in registers: standard scalars, `String`, class references), `?` (the Rust types decide),
+/// and `-` for a `Void` result: `"a(di)d"`.
+pub fn closure_shapes(declaration: &str) -> Result<Vec<Option<String>>, Error> {
+    let decl = parse::parse(declaration).map_err(Error)?;
+    let ast::Signature::Function { params, .. } = &decl.signature else { return Ok(Vec::new()) };
+    params
+        .iter()
+        .map(|param| match &param.ty {
+            ast::Ty::Function(function) => closure_shape(function).map(Some).map_err(Error),
+            _ => Ok(None),
+        })
+        .collect()
+}
+
+fn closure_shape(function: &ast::FunctionTy) -> Result<String, String> {
+    fn code(ty: &ast::Ty) -> Result<char, String> {
+        use ast::Ty;
+        fn mentions_param(ty: &Ty) -> bool {
+            match ty {
+                Ty::Param(_) | Ty::Member(..) => true,
+                Ty::Optional(wrapped) => mentions_param(wrapped),
+                Ty::Tuple(elements) => elements.iter().any(|(_, element)| mentions_param(element)),
+                Ty::Nominal { args, .. } => args.iter().any(mentions_param),
+                Ty::Function(f) => f.params.iter().any(mentions_param) || mentions_param(&f.result),
+                Ty::Any | Ty::AnyObject | Ty::Existential(_) => false,
+            }
+        }
+        const DIRECT: [&str; 13] =
+            ["Int", "UInt", "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64", "Double", "Float", "Bool"];
+        Ok(match ty {
+            Ty::Param(_) | Ty::Member(..) | Ty::Any | Ty::Existential(_) => 'i',
+            Ty::AnyObject => 'd',
+            Ty::Nominal { module, path, args } if module == "Swift" && path.len() == 1 && args.is_empty()
+                && (DIRECT.contains(&path[0].0.as_str()) || path[0].0 == "String") => 'd',
+            Ty::Nominal { path, args, .. } if args.is_empty() && matches!(path.last(), Some((_, ast::Kind::Class | ast::Kind::Actor))) => 'd',
+            ty if mentions_param(ty) => {
+                return Err("a closure parameter or result that involves a generic parameter must be the parameter itself".into())
+            }
+            _ => '?',
+        })
+    }
+    let mut shape = String::from(if function.is_async { "a" } else { "s" });
+    if function.throws {
+        shape.push('t');
+    }
+    if function.main_actor {
+        shape.push('m');
+    }
+    shape.push('(');
+    for param in &function.params {
+        shape.push(code(param)?);
+    }
+    shape.push(')');
+    shape.push(if function.result == ast::Ty::Tuple(Vec::new()) { '-' } else { code(&function.result)? });
+    Ok(shape)
 }
 
 /// How `swift!` fills a generic function's generic arguments itself (see [`generic_plan`]).

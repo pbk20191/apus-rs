@@ -199,8 +199,13 @@ macro_rules! __swift_item {
 #[macro_export]
 macro_rules! __swift_args {
     ([$($arg:ident),*] []) => { ($($arg,)*) };
-    ([$($arg:ident),*] [auto [$($m:ident)*] [$(($w:ident $p:literal))*] [$($slot:ident)?] [$($result:ident)?]]) => {
-        ($($arg,)* $crate::swift::__generic_args(
+    // Closure arguments, checked against their declared function types (`closures [(argument "shape")…]`).
+    ([$($arg:ident),*] [closures [$(($c:ident $shape:literal))*]]) => {{
+        $(let $c = $crate::swift::DeclaredClosure($c, $shape);)*
+        ($($arg,)*)
+    }};
+    ([$($arg:ident),*] [auto [$($m:ident)*] [$(($w:ident $p:literal))*] [$($slot:ident)?] [$($result:ident)?] $(closures [$(($c:ident $shape:literal))*])?]) => {{
+        let generic = $crate::swift::__generic_args(
             &[$($crate::swift::__type_of(&$m)),*],
             &[$(($crate::swift::__type_of(&$w), {
                 static PROTOCOL: $crate::swift::SwiftProtocol = $crate::swift::SwiftProtocol::new($p);
@@ -212,8 +217,10 @@ macro_rules! __swift_args {
                 $(slot = ::core::option::Option::Some($crate::swift::__type_of(&$slot));)?
                 slot
             },
-        ),)
-    };
+        );
+        $($(let $c = $crate::swift::DeclaredClosure($c, $shape);)*)?
+        ($($arg,)* generic,)
+    }};
 }
 
 /// Prepares the call: with the declared result type, or, when the result is exactly a generic parameter filled
@@ -221,10 +228,10 @@ macro_rules! __swift_args {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __swift_call {
-    ($function:ident [$($arg:ident),*] [auto $m:tt $w:tt $slot:tt [$result:ident]] $declared:expr) => {
+    ($function:ident [$($arg:ident),*] [auto $m:tt $w:tt $slot:tt [$result:ident] $($closures:tt)*] $declared:expr) => {
         $function.call_returning(
             $crate::swift::__type_of(&$result),
-            $crate::__swift_args!([$($arg),*] [auto $m $w $slot [$result]]),
+            $crate::__swift_args!([$($arg),*] [auto $m $w $slot [$result] $($closures)*]),
         )
     };
     ($function:ident [$($arg:ident),*] [$($generic:tt)*] $declared:expr) => {

@@ -24,6 +24,7 @@ typedef struct __attribute__((aligned(16))) {
   bool group_initialized;
   HopCall hop;                        // the in-flight same-Task call, when it hops to another executor
   CallRegs *hop_regs;
+  RetRegs *closure_ret;               // a Rust closure called by Swift: its results, returned at finish (else NULL)
   TaskFutureWaitAsyncContext wait;
   void *group[NUM_WORDS_TASK_GROUP] __attribute__((aligned(16)));   // TaskGroup storage: NumWords_TaskGroup = 32 (ABI/MetadataValues.h)
 } RsTaskContext;
@@ -49,10 +50,19 @@ static APUS_SWIFTASYNCCALL void resume_point(APUS_ASYNC_CONTEXT AsyncContext *co
   return step(cont->parent);                 // cont->parent is our RsTaskContext
 }
 
+// How an async function returns: its caller's continuation, with the direct results, its own context, and the error.
+typedef APUS_SWIFTASYNCCALL void ReturnContinuation(uint64_t, uint64_t, uint64_t, uint64_t, double, double, double, double,
+                                                   APUS_ASYNC_CONTEXT AsyncContext *, APUS_SWIFT_CONTEXT void *error);
+
 static APUS_SWIFTASYNCCALL void finish(APUS_ASYNC_CONTEXT AsyncContext *ctx) {
   RsTaskContext *c = (RsTaskContext *)ctx;
   swift_task_removeCancellationHandler(c->cancel_record);
   rs_finish(c->rust);
+  if (c->closure_ret) {   // a closure call returns to its Swift caller, which hops back to its own executor itself
+    RetRegs *r = c->closure_ret;
+    return ((ReturnContinuation *)c->base.resume_parent)(r->gpr[0], r->gpr[1], r->gpr[2], r->gpr[3],
+                                                        r->fpr[0], r->fpr[1], r->fpr[2], r->fpr[3], ctx, r->error);
+  }
   return ((ThrowingContinuation *)c->base.resume_parent)(&c->base, NULL);   // completeTaskAndRelease(ctx, error: nil)
 }
 
@@ -230,9 +240,10 @@ static APUS_SWIFTASYNCCALL void step(APUS_ASYNC_CONTEXT AsyncContext *ctx) {
 }
 
 // AsyncGenericClosureEntryPoint: (indirect result, context, closure context). The result type is (): nothing to write.
-static APUS_SWIFTASYNCCALL void start(APUS_ASYNC_CONTEXT AsyncContext *ctx, void *rust) {
+static APUS_SWIFTASYNCCALL void start(APUS_ASYNC_CONTEXT AsyncContext *ctx, void *rust, RetRegs *closure_ret) {
   RsTaskContext *c = (RsTaskContext *)ctx;
   c->rust = rust;
+  c->closure_ret = closure_ret;
   c->current_call = NULL;
   c->group_initialized = false;
   c->executor = rs_is_main(rust) ? swift_task_getMainExecutor() : (SerialExecutorRef){0, 0};
@@ -241,7 +252,7 @@ static APUS_SWIFTASYNCCALL void start(APUS_ASYNC_CONTEXT AsyncContext *ctx, void
 }
 
 static APUS_SWIFTASYNCCALL void entry(void *indirect_result, APUS_ASYNC_CONTEXT AsyncContext *ctx, APUS_SWIFT_CONTEXT void *rust) {
-  return start(ctx, rust);
+  return start(ctx, rust, NULL);
 }
 
 const void *rs_entry_fn(void) { return (const void *)entry; }
@@ -254,7 +265,7 @@ static void *async_main_rust;
 static AsyncFunctionPointer async_main_function;
 
 static APUS_SWIFTASYNCCALL void async_main_entry(APUS_ASYNC_CONTEXT AsyncContext *ctx, APUS_SWIFT_CONTEXT void *closure_context) {
-  return start(ctx, async_main_rust);
+  return start(ctx, async_main_rust, NULL);
 }
 
 void apus_run_async_main(void *rust) {
@@ -320,4 +331,116 @@ void rs_string_from_utf8(const uint8_t *start, intptr_t count, SwiftString *out)
   StringAndFlag s = swift_string_from_utf8_repairing(start, count);
   out->words[0] = s.words[0];
   out->words[1] = s.words[1];
+}
+
+// ---- Rust closures as Swift closure values (src/swift/closure.rs) ----
+// A closure value is (function, context). The context is a ClosureBox; Swift retains and releases it, and the last
+// release runs closure_destroy. The function receives every argument register and the context, so one entry takes any
+// signature; the Rust side reads the registers the declared function type uses.
+
+static APUS_SWIFTCALL void closure_destroy(APUS_SWIFT_CONTEXT void *object) {
+  rs_closure_drop(((ClosureBox *)object)->payload);
+  swift_deallocObject(object, sizeof(ClosureBox), _Alignof(ClosureBox) - 1);
+}
+static const BoxMetadata closure_metadata = { closure_destroy, NULL, METADATA_KIND_HEAP_LOCAL_VARIABLE,
+                                              offsetof(ClosureBox, payload), NULL };
+
+void *apus_closure_new(void *payload, uint32_t flags) {
+  ClosureBox *box = swift_allocObject(&closure_metadata.kind, sizeof(ClosureBox), _Alignof(ClosureBox) - 1);
+  box->payload = payload;
+  box->flags = flags;
+  return box;
+}
+
+#if defined(__aarch64__)
+#define ENTRY_INTS uint64_t g0, uint64_t g1, uint64_t g2, uint64_t g3, uint64_t g4, uint64_t g5, uint64_t g6, uint64_t g7
+#define SAVE_INTS(f) do { (f)->gpr[0] = g0; (f)->gpr[1] = g1; (f)->gpr[2] = g2; (f)->gpr[3] = g3; \
+                          (f)->gpr[4] = g4; (f)->gpr[5] = g5; (f)->gpr[6] = g6; (f)->gpr[7] = g7; } while (0)
+#else
+#define ENTRY_INTS uint64_t g0, uint64_t g1, uint64_t g2, uint64_t g3, uint64_t g4, uint64_t g5
+#define SAVE_INTS(f) do { (f)->gpr[0] = g0; (f)->gpr[1] = g1; (f)->gpr[2] = g2; (f)->gpr[3] = g3; \
+                          (f)->gpr[4] = g4; (f)->gpr[5] = g5; } while (0)
+#endif
+#define ENTRY_FLOATS double d0, double d1, double d2, double d3, double d4, double d5, double d6, double d7
+#define SAVE_FLOATS(f) do { (f)->fpr[0] = d0; (f)->fpr[1] = d1; (f)->fpr[2] = d2; (f)->fpr[3] = d3; \
+                            (f)->fpr[4] = d4; (f)->fpr[5] = d5; (f)->fpr[6] = d6; (f)->fpr[7] = d7; } while (0)
+
+// The callee context Swift allocates for an async call (expected_context_size): a Rust task's context, then the frame.
+typedef struct __attribute__((aligned(16))) {
+  RsTaskContext task;
+  ClosureFrame frame;
+  ClosureBox *box;
+} ClosureCallContext;
+
+// On the closure's executor: the Rust closure makes its future, and it runs as a Rust task inside the caller's Task.
+static APUS_SWIFTASYNCCALL void closure_begin(APUS_ASYNC_CONTEXT AsyncContext *ctx) {
+  ClosureCallContext *k = (ClosureCallContext *)ctx;
+  void *rust = rs_closure_start(k->box->payload, &k->frame);
+  return start(ctx, rust, &k->frame.ret);
+}
+
+// The caller does not hop for an async callee: a nonisolated closure moves to the generic executor, a @MainActor one
+// to the main executor (as compiled Swift does at the start of such a function).
+static APUS_SWIFTASYNCCALL void closure_async_entry(ENTRY_INTS, ENTRY_FLOATS, APUS_ASYNC_CONTEXT AsyncContext *ctx,
+                                                   APUS_SWIFT_CONTEXT void *context) {
+  ClosureCallContext *k = (ClosureCallContext *)ctx;
+  SAVE_INTS(&k->frame);
+  SAVE_FLOATS(&k->frame);
+  k->frame.indirect = NULL;
+  k->frame.ret = (RetRegs){0};
+  k->box = context;   // guaranteed by the caller for the whole call
+  bool main = k->box->flags & CLOSURE_MAIN_ACTOR;
+  return swift_task_switch(ctx, closure_begin, main ? swift_task_getMainExecutor() : (SerialExecutorRef){0, 0});
+}
+
+static AsyncFunctionPointer closure_async_function;
+
+const void *apus_closure_async_fn(void) {
+  // Relative to the field itself; every caller stores the same values.
+  __atomic_store_n(&closure_async_function.function,
+                   (int32_t)((intptr_t)closure_async_entry - (intptr_t)&closure_async_function.function), __ATOMIC_RELAXED);
+  __atomic_store_n(&closure_async_function.expected_context_size, (uint32_t)sizeof(ClosureCallContext), __ATOMIC_RELAXED);
+  return &closure_async_function;
+}
+
+// Sync closures: swiftcall with the context and the error register. A non-throwing caller does not expect the error
+// register to change: it is written only when the closure throws, which only a throwing declaration allows. A result
+// returned by address comes in the indirect result register (x8 / rax), which clang uses for a swift_indirect_result
+// parameter only when the function returns nothing: so it has its own entry.
+static void closure_call_sync(ClosureFrame *frame, void *context, void **error) {
+  frame->ret = (RetRegs){0};
+  rs_closure_call_sync(((ClosureBox *)context)->payload, frame);
+  if (frame->ret.error) *error = frame->ret.error;
+}
+
+static APUS_SWIFTCALL Ints4 closure_sync_ints(ENTRY_INTS, ENTRY_FLOATS, APUS_SWIFT_CONTEXT void *context,
+                                              APUS_SWIFT_ERROR void **error) {
+  ClosureFrame f = {.indirect = NULL};
+  SAVE_INTS(&f);
+  SAVE_FLOATS(&f);
+  closure_call_sync(&f, context, error);
+  return (Ints4){{f.ret.gpr[0], f.ret.gpr[1], f.ret.gpr[2], f.ret.gpr[3]}};
+}
+
+static APUS_SWIFTCALL Floats4 closure_sync_floats(ENTRY_INTS, ENTRY_FLOATS, APUS_SWIFT_CONTEXT void *context,
+                                                  APUS_SWIFT_ERROR void **error) {
+  ClosureFrame f = {.indirect = NULL};
+  SAVE_INTS(&f);
+  SAVE_FLOATS(&f);
+  closure_call_sync(&f, context, error);
+  return (Floats4){{f.ret.fpr[0], f.ret.fpr[1], f.ret.fpr[2], f.ret.fpr[3]}};
+}
+
+static APUS_SWIFTCALL void closure_sync_indirect(APUS_SWIFT_INDIRECT_RESULT void *indirect, ENTRY_INTS, ENTRY_FLOATS,
+                                                 APUS_SWIFT_CONTEXT void *context, APUS_SWIFT_ERROR void **error) {
+  ClosureFrame f = {.indirect = indirect};
+  SAVE_INTS(&f);
+  SAVE_FLOATS(&f);
+  closure_call_sync(&f, context, error);
+}
+
+// kind: as rs_call_sync's (0 integer results, 1 floating-point results, 2 indirect result).
+const void *apus_closure_sync_fn(int kind) {
+  if (kind == 2) return (const void *)closure_sync_indirect;
+  return kind == 1 ? (const void *)closure_sync_floats : (const void *)closure_sync_ints;
 }

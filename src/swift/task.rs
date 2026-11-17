@@ -165,6 +165,11 @@ pub(crate) fn run_async_main(future: BoxFuture) -> ! {
     unreachable!("_runAsyncMain returned")
 }
 
+/// The Rust task of one call of an async Rust closure by Swift: it runs inside the calling Task (funclets.c).
+pub(crate) fn closure_task(main: bool, future: BoxFuture) -> *mut c_void {
+    Arc::into_raw(new_task(main, future, Box::new(|| {}))) as *mut c_void
+}
+
 pub(crate) fn create(options: SpawnOptions, future: BoxFuture, on_finish: Box<dyn FnOnce() + Send>) -> *mut c_void {
     let task = new_task(options.main, future, on_finish);
     let mut flags = options.priority.raw() as usize | rt::CREATE_ENQUEUE_JOB as usize | rt::CREATE_IS_TASK_FUNCTION_CONSUMED as usize;

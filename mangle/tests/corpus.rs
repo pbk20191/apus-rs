@@ -140,6 +140,14 @@ const DECLARATIONS: &[&str] = &[
     "Probe.genericTyped<E: Error>(_: Bool, _: E) async throws(E) -> Int",
     "Probe.anyTyped() throws(any Error) -> Int",
     "nonisolated(nonsending) Probe.inherits(_: Int) async -> Int",
+    // function-typed parameters
+    "Probe.applyConcrete(_: (Int) async -> Int) async -> Int",
+    "Probe.applyEscaping(_: @escaping @Sendable (Int, String) async throws -> String) async throws -> String",
+    "Probe.applyGeneric<T>(_: T, _: (T) async -> T) async -> T",
+    "Probe.applySync(_: (Int) -> Int) -> Int",
+    "Probe.applyMain(_: @MainActor (Int) async -> Int) async -> Int",
+    "Probe.applyVoid(_: @escaping () async -> Void) async",
+    "Probe.applyLabeled(count: Int, transform: (Double) -> Double) -> Double",
 ];
 
 fn compiled_symbols() -> HashSet<String> {

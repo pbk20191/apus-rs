@@ -292,3 +292,25 @@ public struct StructError: Error {
 @inline(never) public func throwStruct(code: Int) throws -> Int { throw StructError(code: code, detail: "bad") }
 @inline(never) public func throwNSError(code: Int) throws -> Int { throw NSError(domain: "probe.domain", code: code) }
 @inline(never) public func structErrorCode<E: Error>(_ error: E) -> Int { (error as? StructError)?.code ?? -1 }
+
+// Rust closures as Swift closures (tests/swift_closures.rs).
+@inline(never) public func applyConcrete(_ f: (Int) async -> Int) async -> Int { await f(20) + 1 }
+@inline(never) public func applyGeneric<T>(_ x: T, _ f: (T) async -> T) async -> T { await f(x) }
+@inline(never) public func applySync(_ f: (Int) -> Int) -> Int { f(3) * 10 }
+@inline(never) public func applySyncDouble(_ f: (Double, Int) -> Double) -> Double { f(1.5, 2) }
+@inline(never) public func applyMain(_ f: @MainActor (Int) async -> Int) async -> Int { await f(1) }
+@inline(never) public func applyEscaping(_ f: @escaping @Sendable (Int, String) async throws -> String) async throws -> String {
+    async let a = f(1, "a")
+    async let b = f(2, "b")
+    return try await a + b
+}
+@inline(never) public func applyCancelled(_ f: @escaping @Sendable () async -> Bool) async -> Bool {
+    let task = Task { await f() }
+    task.cancel()
+    return await task.value
+}
+nonisolated(unsafe) var keptClosure: (@Sendable () -> Int)?
+@inline(never) public func keep(_ f: @escaping @Sendable () -> Int) { keptClosure = f }
+@inline(never) public func callKept() -> Int { keptClosure?() ?? -1 }
+@inline(never) public func dropKept() { keptClosure = nil }
+@inline(never) public func applySyncGeneric<T>(_ x: T, _ f: (T) -> T) -> T { f(x) }

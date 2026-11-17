@@ -221,6 +221,11 @@ impl SwiftError {
         SwiftError { boxed }
     }
 
+    /// Gives up ownership of the box (+1).
+    pub(crate) fn into_raw(self) -> *mut c_void {
+        std::mem::ManuallyDrop::new(self).boxed
+    }
+
     /// Runs `f` on the opened error: its value's address, dynamic type and Error conformance. For an NSError the
     /// runtime stores the object in `scratch` and the value is the address of `scratch`, so it lives only as long
     /// as this call.

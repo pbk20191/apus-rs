@@ -48,6 +48,21 @@ pub enum Ty {
     Param(GenericParam),
     /// `T.Name`: an associated type of a generic parameter.
     Member(GenericParam, String),
+    /// A closure type: `@escaping @Sendable @MainActor (A, B) async throws -> R`.
+    Function(Box<FunctionTy>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FunctionTy {
+    pub params: Vec<Ty>,
+    pub result: Ty,
+    pub is_async: bool,
+    pub throws: bool,
+    pub sendable: bool,
+    pub main_actor: bool,
+    /// `@escaping` was written. A closure type is non-escaping only as a parameter without it; anywhere else
+    /// (inside an optional, a result) it escapes.
+    pub escaping: bool,
 }
 
 pub struct Param {

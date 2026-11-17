@@ -57,6 +57,8 @@ pub enum CallError {
     Typed(SwiftValue),
     /// An automatic generic argument's type does not conform to a protocol the function requires; not called.
     NotConforming { ty: String, protocol: &'static str },
+    /// A `SwiftClosure` argument does not have the declared function type's shape; not called.
+    ClosureMismatch(String),
 }
 
 impl fmt::Debug for CallError {
@@ -69,6 +71,7 @@ impl fmt::Debug for CallError {
             CallError::Typed(value) => write!(f, "Typed({value:?})"),
             CallError::NotConforming { ty, protocol } => write!(f, "NotConforming({ty}, {protocol})"),
             CallError::InvalidArgument(why) => write!(f, "InvalidArgument({why})"),
+            CallError::ClosureMismatch(why) => write!(f, "ClosureMismatch({why})"),
         }
     }
 }
@@ -83,6 +86,7 @@ impl fmt::Display for CallError {
             CallError::NotAnActor => f.write_str("the object is not an actor"),
             CallError::Typed(value) => write!(f, "Swift error: {}", value.description()),
             CallError::NotConforming { ty, protocol } => write!(f, "{ty} does not conform to the required protocol {protocol}"),
+            CallError::ClosureMismatch(why) => write!(f, "closure does not match its declared function type: {why}"),
         }
     }
 }

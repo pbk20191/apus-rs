@@ -486,6 +486,11 @@ impl SwiftObject {
         SwiftObject(NonNull::new(object).expect("null Swift object"))
     }
 
+    /// Gives up ownership of the reference (+1).
+    pub(crate) fn into_raw(self) -> *mut c_void {
+        std::mem::ManuallyDrop::new(self).0.as_ptr()
+    }
+
     pub fn as_ptr(&self) -> *mut c_void {
         self.0.as_ptr()
     }

@@ -113,3 +113,11 @@ public actor Tally { var n = 0; public func bump(by k: Int) -> Int { n }; public
 public func genericTyped<E: Error>(_ fail: Bool, _ error: E) async throws(E) -> Int { 0 }
 public func anyTyped() throws(any Error) -> Int { 0 }
 @inline(never) nonisolated(nonsending) public func inherits(_ x: Int) async -> Int { x + 1 }
+// function-typed parameters
+public func applyConcrete(_ f: (Int) async -> Int) async -> Int { 0 }
+public func applyEscaping(_ f: @escaping @Sendable (Int, String) async throws -> String) async throws -> String { "" }
+public func applyGeneric<T>(_ x: T, _ f: (T) async -> T) async -> T { x }
+public func applySync(_ f: (Int) -> Int) -> Int { 0 }
+public func applyMain(_ f: @MainActor (Int) async -> Int) async -> Int { 0 }
+public func applyVoid(_ f: @escaping () async -> Void) async {}
+public func applyLabeled(count: Int, transform f: (Double) -> Double) -> Double { 0 }

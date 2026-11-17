@@ -159,6 +159,22 @@ impl<'a> Parser<'a> {
     }
 
     fn primary_type(&mut self) -> Parsed<Ty> {
+        let (mut escaping, mut sendable, mut main_actor) = (false, false, false);
+        loop {
+            if self.eat("@escaping") {
+                escaping = true;
+            } else if self.eat("@Sendable") {
+                sendable = true;
+            } else if self.eat("@MainActor") {
+                main_actor = true;
+            } else {
+                break;
+            }
+        }
+        let attributed = escaping || sendable || main_actor;
+        if attributed && !self.rest().trim_start().starts_with('(') {
+            return Err(self.error("expected a function type after its attributes"));
+        }
         if self.eat("[") {
             let element = self.ty()?;
             let ty = if self.eat(":") {
@@ -188,6 +204,25 @@ impl<'a> Parser<'a> {
                     self.position = checkpoint;
                 }
                 elements.push((label, self.ty()?));
+            }
+            let is_async = self.eat_keyword("async");
+            let throws = self.eat_keyword("throws");
+            if throws && self.rest().starts_with('(') {
+                return Err(self.error("typed throws in a function type is not supported"));
+            }
+            if is_async || throws || self.eat("->") {
+                if (is_async || throws) && !self.eat("->") {
+                    return Err(self.error("expected `->`"));
+                }
+                if elements.iter().any(|(label, _)| label.is_some()) {
+                    return Err("a function type's parameters take no labels".into());
+                }
+                let params = elements.into_iter().map(|(_, ty)| ty).collect();
+                let result = self.ty()?;
+                return Ok(Ty::Function(Box::new(FunctionTy { params, result, is_async, throws, sendable, main_actor, escaping })));
+            }
+            if attributed {
+                return Err(self.error("expected a function type after its attributes"));
             }
             // `(T)` is just `T`.
             if let [(None, _)] = elements.as_slice() {

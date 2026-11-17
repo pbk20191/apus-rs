@@ -2,6 +2,7 @@
 
 mod any;
 pub(crate) mod call;
+mod closure;
 mod current;
 mod func;
 mod isolation;
@@ -20,6 +21,9 @@ mod value;
 
 pub use any::{FromSwiftAny, SwiftAny, SwiftError, SwiftHashable};
 pub use call::{timeout, AsyncFunctionPointer, CallError, IndirectSlot, RetRegs, SwiftAsync, SwiftCall};
+pub use closure::{ByAddress, ClosureParam, ClosureResult, SwiftClosure};
+#[doc(hidden)]
+pub use closure::{ClosureArgs, ClosureFn, ClosureOut, DeclaredClosure, ResultKind, Shaped};
 pub use stream::SwiftStream;
 pub use sync::{HopTo, SwiftFn, SwiftSyncCall};
 pub use value::{IntoSwift, Opened, SwiftProtocol, SwiftType, SwiftValue, WitnessTable};

@@ -56,6 +56,12 @@
 #define rs_set_child APUS_NAME(rs_set_child)
 #define rs_call_done APUS_NAME(rs_call_done)
 #define rs_job_run APUS_NAME(rs_job_run)
+#define apus_closure_new APUS_NAME(apus_closure_new)
+#define apus_closure_async_fn APUS_NAME(apus_closure_async_fn)
+#define apus_closure_sync_fn APUS_NAME(apus_closure_sync_fn)
+#define rs_closure_start APUS_NAME(rs_closure_start)
+#define rs_closure_call_sync APUS_NAME(rs_closure_call_sync)
+#define rs_closure_drop APUS_NAME(rs_closure_drop)
 #endif
 
 #ifdef APUS_BINDGEN
@@ -142,6 +148,15 @@ typedef struct { HeapObject header; const AsyncFunctionPointer *function; void *
 typedef struct { uint64_t gpr[8]; double fpr[8]; void *self; int32_t isolation; } CallRegs;
 typedef struct { uint64_t gpr[4]; double fpr[4]; void *error; } RetRegs;
 
+// A call of a Rust closure from Swift (src/swift/closure.rs): the argument registers as Swift passed them, the indirect
+// result address of a sync call (an async call passes it as its first integer argument), and what to return.
+typedef struct { uint64_t gpr[8]; double fpr[8]; void *indirect; RetRegs ret; } ClosureFrame;
+
+// The context object of a Rust closure passed to Swift as a closure value: a Swift heap object (Swift retains and
+// releases it) holding the Rust closure. `flags`: CLOSURE_MAIN_ACTOR.
+typedef struct { HeapObject header; void *payload; uint32_t flags; } ClosureBox;
+#define CLOSURE_MAIN_ACTOR 1u
+
 // A synchronous call that must run on another executor (an actor's, the main actor's): the funclets hop there, call
 // `function` through rs_call_sync with `kind` and `indirect`, and hop back. `function` is NULL for every other call.
 typedef struct { const void *function; void *indirect; SerialExecutorRef executor; int32_t kind; } HopCall;
@@ -207,6 +222,8 @@ struct ValueWitnessTable {
 extern void *swift_retain(void *object) APUS_C;
 extern void swift_release(void *object) APUS_C;
 extern void swift_errorRelease(void *error) APUS_C;
+extern void *swift_allocObject(const void *metadata, size_t size, size_t alignment_mask) APUS_C;
+extern void swift_deallocObject(void *object, size_t size, size_t alignment_mask) APUS_C;
 extern void swift_bridgeObjectRelease(void *object) APUS_C;
 // Any class reference (AnyObject): a native Swift object, or an Objective-C one (NSObject subclasses included), which
 // swift_retain/swift_release must not touch.
@@ -298,6 +315,11 @@ void apus_fill_isolation(CallRegs *regs, bool main_actor) APUS_BOUNDARY(apus_fil
 // Runs the Rust task `rust` (task.rs) as Swift's async main through `_runAsyncMain`: on the main actor, then the
 // main queue is drained and the process exits when the task is done. Never returns. Call it once, on the main thread.
 void apus_run_async_main(void *rust) APUS_BOUNDARY(apus_run_async_main) APUS_C;
+// A Rust closure as a Swift closure value: its context object (+1), and the function half of the value: the async
+// function pointer, or the sync entry for a result `kind` (as rs_call_sync's).
+void *apus_closure_new(void *payload, uint32_t flags) APUS_BOUNDARY(apus_closure_new) APUS_C;
+const void *apus_closure_async_fn(void) APUS_BOUNDARY(apus_closure_async_fn) APUS_C;
+const void *apus_closure_sync_fn(int kind) APUS_BOUNDARY(apus_closure_sync_fn) APUS_C;
 // kind: 0 = integer results, 1 = floating-point results, 2 = indirect result at `indirect`
 void rs_call_sync(const void *function, const CallRegs *regs, void *indirect, RetRegs *ret, int kind) APUS_BOUNDARY(rs_call_sync) APUS_C;
 
@@ -368,6 +390,16 @@ typedef struct {
   uintptr_t kind; void *opaque; void *opaque_objc[3];                           // HeapMetadata + DispatchClassMetadata
   unsigned long vtable_type; void (*vtable_invoke)(void *, void *, uint32_t);
 } JobMetadata;
+// The heap metadata of ClosureBox, shaped like the one swiftc emits for a closure context (IRGen GenHeap.cpp,
+// FullBoxMetadata): destroy, value witnesses (none), kind, offset of the first capture, capture descriptor (none, so
+// reflection shows no captures). MetadataKind::HeapLocalVariable = 0 | NonType (ABI/MetadataKind.def).
+typedef APUS_SWIFTCALL void HeapObjectDestroyer(APUS_SWIFT_CONTEXT void *object) APUS_INTERNAL;
+typedef struct {
+  HeapObjectDestroyer *destroy; void *value_witnesses;
+  uintptr_t kind; uint32_t offset_to_first_capture; const void *capture_description;
+} BoxMetadata;
+#define METADATA_KIND_HEAP_LOCAL_VARIABLE 0x400u
+
 // MetadataKind::Job = 3 | NonType | RuntimePrivate (ABI/MetadataKind.def); dispatchSwiftObjectType.
 #define METADATA_KIND_JOB (3u | 0x400u | 0x100u)
 #define DISPATCH_SWIFT_OBJECT_TYPE 1u
@@ -434,4 +466,7 @@ void rs_call_target(void *record, const AsyncFunctionPointer **function, CallReg
 void rs_set_child(void *record, void *child_task);                             // +1 child task
 void rs_call_done(void *record);                                               // results are in the call's RetRegs
 void rs_job_run(void *job);
+void *rs_closure_start(void *payload, ClosureFrame *frame);                   // +1 Rust task that writes frame->ret
+void rs_closure_call_sync(void *payload, ClosureFrame *frame);
+void rs_closure_drop(void *payload);
 #endif

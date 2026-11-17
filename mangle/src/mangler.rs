@@ -310,6 +310,8 @@ impl Mangler {
                 self.param_index(*param);
                 Ok(())
             }
+            // Function types are mangled in full every time too.
+            Ty::Function(function) => self.function(function, false),
             Ty::Member(param, name) => {
                 let key = Key::Type(ty.clone());
                 if self.try_substitution(&key) {
@@ -381,9 +383,43 @@ impl Mangler {
     }
 
     /// ASTMangler::appendFunctionInputType
+    /// `result params [Ya] [Yb] [K] [ScMYc] (c | XE)`; `in_parameter`: the closure is a parameter, so it escapes only
+    /// with `@escaping`.
+    fn function(&mut self, function: &FunctionTy, in_parameter: bool) -> Result<(), String> {
+        if function.result == Ty::Tuple(Vec::new()) {
+            self.push("y");
+        } else {
+            self.ty(&function.result)?;
+        }
+        let params: Vec<Param> = function
+            .params
+            .iter()
+            .map(|ty| Param { label: None, ty: ty.clone(), inout: false, variadic: false, isolated: false })
+            .collect();
+        self.parameters(&params)?;
+        if function.is_async {
+            self.push("Ya");
+        }
+        if function.sendable {
+            self.push("Yb");
+        }
+        if function.throws {
+            self.push("K");
+        }
+        if function.main_actor {
+            self.nominal("_Concurrency", &[("MainActor".into(), Kind::Class)])?;
+            self.push("Yc");
+        }
+        self.push(if in_parameter && !function.escaping { "XE" } else { "c" });
+        Ok(())
+    }
+
     fn parameters(&mut self, params: &[Param]) -> Result<(), String> {
         let element = |m: &mut Mangler, p: &Param| -> Result<(), String> {
-            m.ty(&p.ty)?;
+            match &p.ty {
+                Ty::Function(function) => m.function(function, true)?,
+                ty => m.ty(ty)?,
+            }
             if p.isolated {
                 m.push("Yi");
             }
@@ -476,6 +512,11 @@ fn canonical(ty: &Ty, same_types: &SameTypes) -> Ty {
         Ty::Nominal { module, path, args } => {
             Ty::Nominal { module: module.clone(), path: path.clone(), args: args.iter().map(|arg| canonical(arg, same_types)).collect() }
         }
+        Ty::Function(function) => Ty::Function(Box::new(FunctionTy {
+            params: function.params.iter().map(|param| canonical(param, same_types)).collect(),
+            result: canonical(&function.result, same_types),
+            ..(**function).clone()
+        })),
         Ty::Any | Ty::AnyObject | Ty::Existential(_) => ty.clone(),
     }
 }
@@ -594,6 +635,7 @@ fn is_concrete(ty: &Ty) -> bool {
         Ty::Optional(wrapped) => is_concrete(wrapped),
         Ty::Tuple(elements) => elements.iter().all(|(_, element)| is_concrete(element)),
         Ty::Nominal { args, .. } => args.iter().all(is_concrete),
+        Ty::Function(function) => function.params.iter().all(is_concrete) && is_concrete(&function.result),
         Ty::Any | Ty::AnyObject | Ty::Existential(_) => true,
     }
 }

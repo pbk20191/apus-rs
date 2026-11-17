@@ -283,6 +283,37 @@ branch can win: there is no way to know in advance that another branch will wake
 
 Don't block inside tasks: the Swift cooperative pool does not grow to compensate.
 
+## Passing Rust closures to Swift
+
+A Swift parameter of function type takes a `SwiftClosure`: a Rust closure as a Swift closure value, which Swift may
+call, keep and release like any other.
+
+```rust
+use apus::swift::{ByAddress, SwiftClosure, SwiftError, SwiftValue};
+
+apus::swift! {
+    #[swift = "Shop.retry(times: Int, _: @escaping @Sendable (Int) async throws -> String) async throws -> String"]
+    async fn retry(times: i64, attempt: &SwiftClosure) throws -> String;
+    #[swift = "Shop.transform<T>(_: T, _: (T) -> T) -> T"]
+    fn transform(x: &SwiftValue, f: &SwiftClosure) -> SwiftValue;
+}
+
+let attempt = SwiftClosure::new_async(|n: i64| async move { Ok::<_, SwiftError>(format!("try {n}")) });
+let text = retry(3, &attempt).await?;
+let plus_one = SwiftClosure::new_sync(|x: ByAddress<i64>| ByAddress(x.0 + 1));   // T is passed by address
+```
+
+- Parameters: integers, `bool`, `f64`, `f32`, `String`, `SwiftObject`, and `ByAddress<T>` for a value of generic type
+  (`T` a plain value such as `i64`). Results: the same, `()`, and `Result<R, SwiftError>` for a throwing closure (an
+  `Err` rethrows a Swift error; Rust cannot create new Swift error types yet).
+- `swift!` checks each closure against its declared function type before calling (`CallError::ClosureMismatch`):
+  async or sync, `throws`, `@MainActor` (`.on_main_actor()`), and which values go by address. The convention follows
+  the declared type: `(T) -> T` passes addresses where `(Int) -> Int` passes registers, so declare the type exactly.
+- An async closure runs inside the Swift Task that calls it: its own Swift calls, `.child()` calls and cancellation
+  belong to that Task. A `@MainActor` closure moves to the main actor itself, as Swift's callers expect.
+- The closure may run many times, at once, on any thread (`Fn + Send + Sync`). A panic in it aborts the process.
+- Reflection (`Mirror`) of the closure's context shows no captures.
+
 ## How it works, and what it relies on
 
 - The Swift runtime ABI apus relies on is written once, in the C header `sys/include/apus/abi.h` of the internal
