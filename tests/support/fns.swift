@@ -157,14 +157,16 @@ nonisolated(unsafe) var endlessTerminated = Set<Int>()
 import Foundation
 
 public final class Tracked: NSObject {
-    nonisolated(unsafe) public static var deinits = 0
+    // Deinits counted per value: tests run in parallel and each uses its own value.
+    nonisolated(unsafe) static var deinits: [Int: Int] = [:]
+    static let lock = NSLock()
     public let value: Int
     public init(value: Int) { self.value = value }
-    deinit { Tracked.deinits += 1 }
+    deinit { Tracked.lock.withLock { Tracked.deinits[value, default: 0] += 1 } }
     @inline(never) public func doubled() -> Int { value * 2 }
 }
 @inline(never) public func makeTracked(_ value: Int) -> Tracked { Tracked(value: value) }
-@inline(never) public func trackedDeinits() -> Int { Tracked.deinits }
+@inline(never) public func trackedDeinits(_ value: Int) -> Int { Tracked.lock.withLock { Tracked.deinits[value, default: 0] } }
 @inline(never) public func trackedValue(_ object: Tracked) -> Int { object.value }
 @inline(never) public func className(_ object: NSObject) -> String { String(describing: type(of: object)) }
 @inline(never) public func echoObject(_ object: NSObject) -> NSObject { object }

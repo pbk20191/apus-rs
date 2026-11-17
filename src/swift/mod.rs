@@ -10,6 +10,8 @@ pub(crate) mod rt;
 mod selfcheck;
 mod stream;
 mod sync;
+#[cfg(feature = "objc2")]
+mod objc;
 mod task;
 mod timer;
 mod value;

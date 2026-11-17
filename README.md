@@ -24,6 +24,7 @@ apus = { path = "…", default-features = false, features = ["dispatch"] }
 | `stream` | `impl futures_core::Stream for SwiftStream` |
 | `macos15` | raises the deployment floor from macOS 14 to 15: macOS 15 runtime functions become required instead of looked up at run time |
 | `xlto` | compiles apus's C side as LLVM bitcode for cross-language LTO (see below) |
+| `objc2` | [`objc2`](https://crates.io/crates/objc2) objects (`Retained<T>`) as Swift class references (see below) |
 | `test-probe` | test-only Swift probes (needs `swiftc`) |
 
 ## API
@@ -318,6 +319,28 @@ MACOSX_DEPLOYMENT_TARGET = "14.0"
 The test probes need macOS 14 (`MainActor.assumeIsolated`). This repository sets 14.0 the same way. Tests:
 `cargo test --workspace --features dispatch,test-probe,stream` (add `macos15` with `MACOSX_DEPLOYMENT_TARGET=15.0`);
 `scripts/check-xlto.sh` checks the `xlto` build.
+
+## Objective-C objects (`objc2` feature)
+
+On Apple platforms every Swift class instance is an Objective-C object, so an objc2 `Retained<T>` and a `SwiftObject`
+are the same owned reference. With the `objc2` feature:
+
+- `SwiftObject::from(retained)`, `object.into_objc()` (`Retained<AnyObject>`) and `object.downcast::<NSView>()` (checks
+  the class) convert without retaining or releasing;
+- `&Retained<T>` is a class argument, `Retained<T>` / `Option<Retained<T>>` a class result (the declaration's type, not
+  checked), and `Retained<T>` a method's `self`.
+
+In a declaration, an Objective-C class is `__C.Name(class)`:
+
+```rust
+apus::swift! {
+    #[swift_linked = "MyUI.makeHostingView(title: String) -> __C.NSView(class)"]
+    pub fn make_hosting_view(title: &str) -> Retained<NSView>;
+}
+```
+
+`SwiftObject` retains and releases with `swift_unknownObjectRetain`/`Release`, so it holds NSObject-derived Swift
+classes and Objective-C objects as well as native Swift ones, with or without the feature.
 
 ## Boundary symbols and cross-language LTO
 
