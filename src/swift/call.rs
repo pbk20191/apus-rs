@@ -97,6 +97,9 @@ impl std::error::Error for CallError {}
 pub(crate) enum Owned {
     /// A class reference (AnyObject), released with swift_unknownObjectRelease.
     Object(*mut c_void),
+    /// A native heap object that is not a class instance (a closure context), released with swift_release:
+    /// swift_unknownObjectRelease would read its metadata as a class and may take it for an ObjC object.
+    Native(*mut c_void),
     /// A `String`'s owner word.
     Bridge(u64),
     /// A value passed by address; dropped with the record.
@@ -110,6 +113,7 @@ impl Drop for Owned {
         unsafe {
             match *self {
                 Owned::Object(object) => rt::swift_unknownObjectRelease(object),
+                Owned::Native(object) => rt::swift_release(object),
                 Owned::Bridge(word) => rt::swift_bridgeObjectRelease(word as *mut c_void),
                 Owned::Value(_) | Owned::Shared(_) => {} // release themselves
             }

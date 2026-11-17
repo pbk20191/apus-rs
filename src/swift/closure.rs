@@ -451,7 +451,7 @@ impl SwiftArg for &SwiftClosure {
     fn lower(&self, into: &mut ArgLowering) {
         into.int(self.function as u64);
         let context = unsafe { rt::swift_retain(self.context.as_ptr().cast()) };
-        into.owned.push(Owned::Object(context));
+        into.owned.push(Owned::Native(context));
         into.int(context as u64);
     }
 }
