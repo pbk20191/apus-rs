@@ -68,22 +68,22 @@ macro_rules! swift {
 macro_rules! __swift_fn {
     ([$binding:ident $how:ident $spec:literal] [$(#[$doc:meta])*]
      $vis:vis async fn $name:ident (self : & $receiver:ty $(, $arg:ident : $ty:ty)* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
-        $crate::__swift_item! { $binding $how async [$(#[$doc])*] [$vis] $name [this : & $receiver] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
+        $crate::__swift_route! { $crate::__swift_item ; $binding $how async [$(#[$doc])*] [$vis] $name [this : & $receiver] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
         $crate::swift! { $($rest)* }
     };
     ([$binding:ident $how:ident $spec:literal] [$(#[$doc:meta])*]
      $vis:vis async fn $name:ident ($($arg:ident : $ty:ty),* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
-        $crate::__swift_item! { $binding $how async [$(#[$doc])*] [$vis] $name [] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
+        $crate::__swift_route! { $crate::__swift_item ; $binding $how async [$(#[$doc])*] [$vis] $name [] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
         $crate::swift! { $($rest)* }
     };
     ([$binding:ident $how:ident $spec:literal] [$(#[$doc:meta])*]
      $vis:vis fn $name:ident (self : & $receiver:ty $(, $arg:ident : $ty:ty)* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
-        $crate::__swift_item! { $binding $how sync [$(#[$doc])*] [$vis] $name [this : & $receiver] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
+        $crate::__swift_route! { $crate::__swift_item ; $binding $how sync [$(#[$doc])*] [$vis] $name [this : & $receiver] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
         $crate::swift! { $($rest)* }
     };
     ([$binding:ident $how:ident $spec:literal] [$(#[$doc:meta])*]
      $vis:vis fn $name:ident ($($arg:ident : $ty:ty),* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
-        $crate::__swift_item! { $binding $how sync [$(#[$doc])*] [$vis] $name [] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
+        $crate::__swift_route! { $crate::__swift_item ; $binding $how sync [$(#[$doc])*] [$vis] $name [] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
         $crate::swift! { $($rest)* }
     };
 }
@@ -139,6 +139,31 @@ macro_rules! __swift_item {
             $(let call = $crate::swift::SwiftReceiver::bind_sync($this, call);)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call.invoke()
+        }
+    };
+    (runtime $how:ident hop $target:ident [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] $spec:literal) => {
+        $(#[$doc])*
+        $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
+            static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::new($crate::__swift_symbol!($how $spec));
+            let call = FUNCTION.call_declared(($($arg,)*), $crate::__swift_result_type!($how $spec));
+            $(let call = $crate::swift::SwiftReceiver::bind_sync($this, call);)?
+            $(let call = $crate::__swift_throws!($throws, call);)?
+            call.hop($crate::swift::HopTo::$target)
+        }
+    };
+    (linked $how:ident hop $target:ident [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] $spec:literal) => {
+        $(#[$doc])*
+        $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
+            extern "C" {
+                #[link_name = $crate::__swift_symbol!($how $spec)]
+                static ENTRY: u8;
+            }
+            let entry = unsafe { &ENTRY as *const u8 as *const ::core::ffi::c_void };
+            let function = unsafe { $crate::swift::SwiftFn::from_address(entry) };
+            let call = function.call_declared(($($arg,)*), $crate::__swift_result_type!($how $spec));
+            $(let call = $crate::swift::SwiftReceiver::bind_sync($this, call);)?
+            $(let call = $crate::__swift_throws!($throws, call);)?
+            call.hop($crate::swift::HopTo::$target)
         }
     };
 }

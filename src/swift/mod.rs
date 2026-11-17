@@ -20,7 +20,7 @@ mod value;
 pub use any::{FromSwiftAny, SwiftAny, SwiftError, SwiftHashable};
 pub use call::{timeout, AsyncFunctionPointer, CallError, IndirectSlot, RetRegs, SwiftAsync, SwiftCall};
 pub use stream::SwiftStream;
-pub use sync::{SwiftFn, SwiftSyncCall};
+pub use sync::{HopTo, SwiftFn, SwiftSyncCall};
 pub use value::{IntoSwift, SwiftProtocol, SwiftType, SwiftValue, WitnessTable};
 pub use isolation::Isolation;
 pub use func::{ArgLowering, DirectValue, SwiftArg, SwiftArgs, SwiftAsyncFn, SwiftObject, SwiftReceiver, SwiftRet};

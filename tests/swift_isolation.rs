@@ -5,7 +5,8 @@ mod common;
 #[path = "common/probe.rs"]
 mod probe;
 
-use apus::swift::{spawn, spawn_on_main, Isolation};
+use apus::is_main_thread;
+use apus::swift::{spawn, spawn_on_main, Isolation, SwiftObject};
 use common::{block, check, Failed, Trial};
 
 apus::swift! {
@@ -14,6 +15,40 @@ apus::swift! {
 
     #[swift_linked = "Probe.isolationKind(isolation: isolated (any Actor)? = #isolation) -> Int"]
     fn isolation_kind(isolation: Isolation) -> i64;
+
+    #[swift_linked = "Probe.makeTally() -> Tally(actor)"]
+    fn make_tally() -> SwiftObject;
+    #[swift_linked = "Probe.Tally(actor).bump(by: Int) -> Int"]
+    async fn bump(self: &SwiftObject, by: i64) -> i64;
+    #[swift_linked = "Probe.Tally(actor).count: Int { get }"]
+    async fn count(self: &SwiftObject) -> i64;
+    #[swift_linked = "nonisolated Probe.Tally(actor).label() -> String"]
+    fn label(self: &SwiftObject) -> String;
+    #[swift_linked = "@MainActor Probe.onMainThread() -> Bool"]
+    async fn on_main_thread() -> bool;
+    #[swift_linked = "Probe.makeCustom() -> Custom(actor)"]
+    fn make_custom() -> SwiftObject;
+    #[swift_linked = "Probe.Custom(actor).onOwnQueue() -> Bool"]
+    async fn on_own_queue(self: &SwiftObject) -> bool;
+}
+
+/// Sync members of an actor or the main actor run there (the callee traps otherwise), and the task comes back to its
+/// own executor afterwards.
+fn isolated_sync_members() -> Result<(), Failed> {
+    let tally = make_tally().unwrap();
+    let t = tally.clone();
+    let plain = block(spawn(async move { (bump(&t, 1).await.unwrap(), bump(&t, 2).await.unwrap(), count(&t).await.unwrap()) })).unwrap();
+    check(plain == (1, 3, 3), format!("plain task: {plain:?}"))?;
+    let t = tally.clone();
+    let main = block(spawn_on_main(async move { let n = bump(&t, 1).await.unwrap(); (n, is_main_thread()) })).unwrap();
+    check(main == (4, true), format!("main task, back on main: {main:?}"))?;
+    let t = tally.clone();
+    let child = block(spawn_on_main(async move { let n = bump(&t, 1).child().await.unwrap(); (n, is_main_thread()) })).unwrap();
+    check(child == (5, true), format!("child Task: {child:?}"))?;
+    check(label(&tally).unwrap() == "tally", "a nonisolated member is called directly")?;
+    check(block(spawn(async { on_main_thread().await.unwrap() })).unwrap(), "@MainActor from a plain task runs on main")?;
+    let custom = make_custom().unwrap();
+    check(block(spawn(async move { on_own_queue(&custom).await.unwrap() })).unwrap(), "a custom executor actor runs on its executor")
 }
 
 /// The isolation a call passes is where it actually runs: MainActor in a main task, nil in a plain task and in a child
@@ -34,5 +69,8 @@ fn isolated_parameter() -> Result<(), Failed> {
 }
 
 fn main() {
-    common::run(vec![Trial::test("isolated_parameter", isolated_parameter)]);
+    common::run(vec![
+        Trial::test("isolated_parameter", isolated_parameter),
+        Trial::test("isolated_sync_members", isolated_sync_members),
+    ]);
 }

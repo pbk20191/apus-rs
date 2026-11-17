@@ -115,7 +115,7 @@ impl<'a> Parser<'a> {
         let kinds = [
             ("(struct)", Kind::Struct),
             ("(class)", Kind::Class),
-            ("(actor)", Kind::Class),
+            ("(actor)", Kind::Actor),
             ("(enum)", Kind::Enum),
             ("(protocol)", Kind::Protocol),
         ];
@@ -345,6 +345,18 @@ impl<'a> Parser<'a> {
     }
 
     fn declaration(&mut self) -> Parsed<Decl> {
+        // Isolation attributes: they change no symbol, only how apus calls the declaration.
+        let mut main_actor = false;
+        let mut nonisolated = false;
+        loop {
+            if self.eat("@MainActor") {
+                main_actor = true;
+            } else if self.eat_keyword("nonisolated") {
+                nonisolated = true;
+            } else {
+                break;
+            }
+        }
         let is_static = self.eat_keyword("static");
 
         // `(extension in Module [where …])`: its `where` clause is parsed once the generic parameters are known.
@@ -480,6 +492,8 @@ impl<'a> Parser<'a> {
             extension,
             name: member.name,
             is_static,
+            main_actor,
+            nonisolated,
             generic_params,
             requirements,
             signature,

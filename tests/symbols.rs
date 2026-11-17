@@ -3,7 +3,7 @@
 use std::process::Command;
 
 /// Functions the C side defines and Rust calls.
-const C_DEFINED: [&str; 8] = [
+const C_DEFINED: [&str; 9] = [
     "rs_entry_fn",
     "rs_context_size",
     "rs_job_metadata",
@@ -12,6 +12,7 @@ const C_DEFINED: [&str; 8] = [
     "rs_call_sync",
     "apus_swift_task_isCancelled",
     "apus_fill_isolation",
+    "apus_actor_unowned_executor",
 ];
 
 fn main() {

@@ -1,6 +1,6 @@
 //! Procedural macros of `apus`. Use them through that crate.
 
-use proc_macro::{Delimiter, Literal, TokenStream, TokenTree};
+use proc_macro::{Delimiter, Group, Literal, Punct, Spacing, TokenStream, TokenTree};
 
 /// The tokens with invisible groups opened: a literal forwarded through `macro_rules!` arrives wrapped in one.
 fn flatten(input: TokenStream) -> Vec<TokenTree> {
@@ -16,6 +16,11 @@ fn flatten(input: TokenStream) -> Vec<TokenTree> {
 
 fn compile_error(message: &str) -> TokenStream {
     format!("::core::compile_error!({message:?})").parse().expect("a compile_error! invocation")
+}
+
+/// A compile error where an item is expected (`swift!` expands to items).
+fn item_compile_error(message: &str) -> TokenStream {
+    format!("::core::compile_error! {{ {message:?} }}").parse().expect("a compile_error! invocation")
 }
 
 /// The text of a plain or raw string literal token.
@@ -82,4 +87,52 @@ pub fn result_type(input: TokenStream) -> TokenStream {
         Ok(None) => "::core::option::Option::<&'static str>::None".parse().expect("an Option expression"),
         Err(error) => compile_error(&format!("cannot mangle `{declaration}`: {error}")),
     }
+}
+
+/// Picks how `swift!` calls a declaration, then expands `PATH! { binding how KIND rest… }`. Input:
+/// `PATH ; binding how async|sync rest…`, `rest` ending with the declaration. A sync declaration that must run on
+/// an actor (an actor's sync member, `@MainActor`) becomes `hop SelfActor` / `hop Main` when declared `async fn`
+/// in Rust, and a compile error when declared `fn`: Rust would call it off its actor.
+#[doc(hidden)]
+#[proc_macro]
+pub fn __swift_route(input: TokenStream) -> TokenStream {
+    let tokens: Vec<TokenTree> = input.into_iter().collect();
+    let Some(split) = tokens.iter().position(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ';')) else {
+        return item_compile_error("__swift_route: expected `PATH ; …`");
+    };
+    let (path, rest) = (&tokens[..split], &tokens[split + 1..]);
+    let [TokenTree::Ident(binding), TokenTree::Ident(how), TokenTree::Ident(asyncness), tail @ ..] = rest else {
+        return item_compile_error("__swift_route: expected `binding how async|sync …`");
+    };
+    let declaration = tail.last().and_then(|t| flatten(t.clone().into()).first().and_then(string_literal));
+    let isolation = match (how.to_string().as_str(), declaration) {
+        ("declared", Some(declaration)) => match apus_mangle::isolation(&declaration) {
+            Ok(isolation) => Some((isolation, declaration)),
+            Err(error) => return item_compile_error(&format!("cannot mangle `{declaration}`: {error}")),
+        },
+        _ => None,
+    };
+    let hop = match isolation {
+        Some((apus_mangle::Isolation::Actor, d)) => Some(("SelfActor", d)),
+        Some((apus_mangle::Isolation::MainActor, d)) => Some(("Main", d)),
+        _ => None,
+    };
+    let kind = match (asyncness.to_string().as_str(), hop) {
+        ("async", Some((target, _))) => format!("hop {target}"),
+        ("sync", Some((_, d))) => {
+            return item_compile_error(&format!(
+                "`{d}` must run on its actor: declare it `async fn`, and apus hops to the actor for the call"
+            ))
+        }
+        (other, None) => other.to_string(),
+        (other, _) => other.to_string(),
+    };
+    // Built from the token trees themselves: `$crate` in `path` does not survive a trip through text.
+    let mut body: Vec<TokenTree> = vec![TokenTree::Ident(binding.clone()), TokenTree::Ident(how.clone())];
+    body.extend(kind.parse::<TokenStream>().expect("kind tokens"));
+    body.extend(tail.iter().cloned());
+    let mut out: Vec<TokenTree> = path.to_vec();
+    out.push(TokenTree::Punct(Punct::new('!', Spacing::Alone)));
+    out.push(TokenTree::Group(Group::new(Delimiter::Brace, body.into_iter().collect())));
+    out.into_iter().collect()
 }

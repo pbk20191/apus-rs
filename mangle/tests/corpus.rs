@@ -133,6 +133,10 @@ const DECLARATIONS: &[&str] = &[
     // isolation
     "Probe.withIsolation(_: Int, isolation: isolated (any Actor)? = #isolation) async -> Int",
     "Probe.isolatedTo(_: isolated any Actor, _: Int) -> Int",
+    "Probe.Tally(actor).bump(by: Int) -> Int",
+    "Probe.Tally(actor).count: Int { get }",
+    "nonisolated Probe.Tally(actor).label() -> String",
+    "@MainActor Probe.onMainThread() -> Bool",
 ];
 
 fn compiled_symbols() -> HashSet<String> {

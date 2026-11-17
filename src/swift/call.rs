@@ -51,6 +51,8 @@ pub enum CallError {
     Unavailable(&'static str),
     /// The arguments cannot be passed (too many for the argument registers, or a string with a NUL byte).
     InvalidArgument(&'static str),
+    /// A sync member declared on an `(actor)` was called on an object that does not conform to `Actor`.
+    NotAnActor,
 }
 
 impl fmt::Debug for CallError {
@@ -59,6 +61,7 @@ impl fmt::Debug for CallError {
             CallError::Swift(e) => write!(f, "Swift({e:?})"),
             CallError::NoCurrentTask => f.write_str("NoCurrentTask"),
             CallError::Unavailable(symbol) => write!(f, "Unavailable({symbol})"),
+            CallError::NotAnActor => f.write_str("NotAnActor"),
             CallError::InvalidArgument(why) => write!(f, "InvalidArgument({why})"),
         }
     }
@@ -71,6 +74,7 @@ impl fmt::Display for CallError {
             CallError::NoCurrentTask => f.write_str("a Swift async call was awaited outside a Swift task"),
             CallError::Unavailable(symbol) => write!(f, "Swift function {symbol} is not available"),
             CallError::InvalidArgument(why) => write!(f, "invalid argument: {why}"),
+            CallError::NotAnActor => f.write_str("the object is not an actor"),
         }
     }
 }
@@ -151,6 +155,8 @@ pub(crate) struct CallShared {
     state: Mutex<CallState>,
     waker: Mutex<Option<Waker>>,
     child: AtomicPtr<c_void>, // +1 child AsyncTask when run as a child
+    /// A sync call that hops to another executor (`function` null otherwise); `indirect` is filled when it runs.
+    pub(crate) hop: apus_sys::HopCall,
     force_child: bool,
 }
 
@@ -173,6 +179,7 @@ impl CallShared {
             waker: Mutex::new(None),
             child: AtomicPtr::default(),
             force_child: false,
+            hop: apus_sys::HopCall { function: std::ptr::null(), indirect: std::ptr::null_mut(), executor: rt::SerialExecutorRef { identity: std::ptr::null(), implementation: 0 }, kind: 0 },
         });
         if indirect {
             unsafe { (*shared.regs.get()).gpr[0] = (*shared.indirect.get()).address() as u64 };
@@ -238,10 +245,19 @@ fn hand_to_child(call: Arc<CallShared>) -> *const c_void {
     record.cast()
 }
 
-unsafe fn describe_target(call: &CallShared, function: *mut *const AsyncFunctionPointer, regs: *mut *mut CallRegs, ret: *mut *mut RetRegs) {
+unsafe fn describe_target(
+    call: &CallShared,
+    function: *mut *const AsyncFunctionPointer,
+    regs: *mut *mut CallRegs,
+    ret: *mut *mut RetRegs,
+    hop: *mut apus_sys::HopCall,
+) {
     *function = call.function;
     *regs = call.regs.get();
     *ret = call.ret.get();
+    if !call.hop.function.is_null() {
+        *hop = apus_sys::HopCall { indirect: (&mut *call.indirect.get()).address(), ..call.hop };
+    }
 }
 
 #[export_name = apus_sys::boundary_name!(rs_take_call)]
@@ -251,11 +267,12 @@ extern "C" fn rs_take_call(
     regs: *mut *mut CallRegs,
     ret: *mut *mut RetRegs,
     record: *mut *const c_void,
+    hop: *mut apus_sys::HopCall,
 ) -> i32 {
     let t = unsafe { &*(rust as *const task::Task) };
     let Some(call) = take_registered(t, true) else { return 0 };
     unsafe {
-        describe_target(&call, function, regs, ret);
+        describe_target(&call, function, regs, ret, hop);
         *record = Arc::into_raw(call).cast();
     }
     1
@@ -272,8 +289,14 @@ extern "C" fn rs_take_child(rust: *mut c_void, record: *mut *const c_void) -> i3
 }
 
 #[export_name = apus_sys::boundary_name!(rs_call_target)]
-extern "C" fn rs_call_target(record: *const c_void, function: *mut *const AsyncFunctionPointer, regs: *mut *mut CallRegs, ret: *mut *mut RetRegs) {
-    unsafe { describe_target(&*(record as *const CallShared), function, regs, ret) }
+extern "C" fn rs_call_target(
+    record: *const c_void,
+    function: *mut *const AsyncFunctionPointer,
+    regs: *mut *mut CallRegs,
+    ret: *mut *mut RetRegs,
+    hop: *mut apus_sys::HopCall,
+) {
+    unsafe { describe_target(&*(record as *const CallShared), function, regs, ret, hop) }
 }
 
 /// Stores the child Task (+1) and releases the reference hand_to_child added for this call.
@@ -329,6 +352,11 @@ impl<R: SwiftRet> SwiftCall<R> {
 }
 
 impl<R> SwiftCall<R> {
+    /// Turns this call into a hopping sync call (see `SwiftSyncCall::hop`).
+    pub(crate) fn set_hop(&mut self, hop: apus_sys::HopCall) {
+        self.configure().hop = hop;
+    }
+
     fn configure(&mut self) -> &mut CallShared {
         Arc::get_mut(&mut self.shared).expect("a Swift call is configured before it is first awaited")
     }

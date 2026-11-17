@@ -108,3 +108,5 @@ public extension AsyncStream { func tag() -> Int { 0 } }
 // isolation
 public func withIsolation(_ x: Int, isolation: isolated (any Actor)? = #isolation) async -> Int { x }
 public func isolatedTo(_ actor: isolated any Actor, _ n: Int) -> Int { n }
+public actor Tally { var n = 0; public func bump(by k: Int) -> Int { n }; public var count: Int { n }; public nonisolated func label() -> String { "" } }
+@MainActor public func onMainThread() -> Bool { true }

@@ -35,6 +35,7 @@
 #if defined(APUS_SYS_BUILD) && !defined(APUS_BINDGEN)
 #define rs_entry_fn APUS_NAME(rs_entry_fn)
 #define apus_fill_isolation APUS_NAME(apus_fill_isolation)
+#define apus_actor_unowned_executor APUS_NAME(apus_actor_unowned_executor)
 #define rs_context_size APUS_NAME(rs_context_size)
 #define rs_job_metadata APUS_NAME(rs_job_metadata)
 #define rs_run_job_fn APUS_NAME(rs_run_job_fn)
@@ -135,6 +136,10 @@ typedef struct { HeapObject header; const AsyncFunctionPointer *function; void *
 typedef struct { uint64_t gpr[8]; double fpr[8]; void *self; int32_t isolation; } CallRegs;
 typedef struct { uint64_t gpr[4]; double fpr[4]; void *error; } RetRegs;
 
+// A synchronous call that must run on another executor (an actor's, the main actor's): the funclets hop there, call
+// `function` through rs_call_sync with `kind` and `indirect`, and hop back. `function` is NULL for every other call.
+typedef struct { const void *function; void *indirect; SerialExecutorRef executor; int32_t kind; } HopCall;
+
 // ---- constants (include/swift/ABI/MetadataValues.h, MetadataKind.def) ----
 
 // TaskCreateFlags: priority in bits 0-7.
@@ -192,6 +197,7 @@ extern void swift_bridgeObjectRelease(void *object) APUS_C;
 extern void *swift_unknownObjectRetain(void *object) APUS_C;
 extern void swift_unknownObjectRelease(void *object) APUS_C;
 extern const void *swift_conformsToProtocol(const void *metadata, const void *protocol) APUS_C;
+extern const void *swift_getObjectType(void *object) APUS_C;
 extern bool swift_dynamicCast(void *dest, void *src, const void *src_type, const void *target_type, size_t flags) APUS_C;
 extern void swift_getErrorValue(const void *error, void **scratch, ErrorValueResult *out) APUS_C;
 extern const void *swift_getExistentialTypeMetadata(bool class_constraint_any, const void *superclass, size_t count,
@@ -238,6 +244,8 @@ extern const uint8_t STRING_HASHABLE APUS_SYMBOL("$sSSSHsWP") APUS_DATA;
 extern const uint8_t INT_HASHABLE APUS_SYMBOL("$sSiSHsWP") APUS_DATA;
 extern const uint8_t INT32_HASHABLE APUS_SYMBOL("$ss5Int32VSHsWP") APUS_DATA;
 extern const uint8_t UINT64_HASHABLE APUS_SYMBOL("$ss6UInt64VSHsWP") APUS_DATA;
+// The Actor protocol's descriptor (_Concurrency).
+extern const uint8_t ACTOR_PROTOCOL APUS_SYMBOL("$sScAMp") APUS_DATA;
 // MainActor's conformance to Actor (_Concurrency).
 extern const uint8_t MAIN_ACTOR_ACTOR APUS_SYMBOL("$sScMScAsWP") APUS_DATA;
 
@@ -274,12 +282,19 @@ void rs_call_sync(const void *function, const CallRegs *regs, void *indirect, Re
 
 // swift_task_isCancelled: its Bool result is not extended to a full register as a C uint8_t return would be.
 uint8_t apus_swift_task_isCancelled(void *task) APUS_BOUNDARY(apus_swift_task_isCancelled) APUS_C;
+// actor_unowned_executor: self rides in swift_context.
+SerialExecutorRef apus_actor_unowned_executor(void *actor, const void *self_type, const void *actor_witness)
+    APUS_BOUNDARY(apus_actor_unowned_executor) APUS_C;
 
 #ifndef APUS_BINDGEN
 // ---- for the funclets and thunks only: not visible to Rust ----
 
 // Returns Bool: only bit 0 is defined.
 extern APUS_SWIFTCALL uint8_t swift_task_isCancelled(void *task) APUS_THUNK;
+// `Actor.unownedExecutor` through the protocol's dispatch thunk: (swiftself actor, Self metadata, Actor witness table).
+extern APUS_SWIFTCALL SerialExecutorRef actor_unowned_executor(APUS_SWIFT_CONTEXT void *actor, const void *self_type,
+                                                               const void *actor_witness)
+    APUS_SYMBOL("$sScA15unownedExecutorScevgTj") APUS_THUNK;
 
 // include/swift/ABI/Task.h: AsyncContext, TaskContinuationFunction
 typedef struct AsyncContext AsyncContext;
@@ -378,9 +393,9 @@ int rs_park(void *rust, void *continuation);                                   /
 void rs_finish(void *rust);
 void rs_cancelled(void *rust);
 bool rs_is_main(void *rust);
-int rs_take_call(void *rust, const AsyncFunctionPointer **function, CallRegs **regs, RetRegs **ret, void **record);  // 1 = run it in this Task
+int rs_take_call(void *rust, const AsyncFunctionPointer **function, CallRegs **regs, RetRegs **ret, void **record, HopCall *hop);  // 1 = run it in this Task
 int rs_take_child(void *rust, void **record);                                  // 1 = run it as a child Task
-void rs_call_target(void *record, const AsyncFunctionPointer **function, CallRegs **regs, RetRegs **ret);
+void rs_call_target(void *record, const AsyncFunctionPointer **function, CallRegs **regs, RetRegs **ret, HopCall *hop);
 void rs_set_child(void *record, void *child_task);                             // +1 child task
 void rs_call_done(void *record);                                               // results are in the call's RetRegs
 void rs_job_run(void *job);

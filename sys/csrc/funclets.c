@@ -22,6 +22,8 @@ typedef struct __attribute__((aligned(16))) {
   void *current_call;                 // call record of the in-flight same-Task Swift call
   void *call_ret;                     // RetRegs of that call
   bool group_initialized;
+  HopCall hop;                        // the in-flight same-Task call, when it hops to another executor
+  CallRegs *hop_regs;
   TaskFutureWaitAsyncContext wait;
   void *group[NUM_WORDS_TASK_GROUP] __attribute__((aligned(16)));   // TaskGroup storage: NumWords_TaskGroup = 32 (ABI/MetadataValues.h)
 } RsTaskContext;
@@ -30,6 +32,8 @@ typedef struct __attribute__((aligned(16))) {
   AsyncContext base;
   void *record;
   void *ret;                          // RetRegs of the child's call
+  HopCall hop;
+  CallRegs *hop_regs;
 } ChildContext;
 
 // Metadata for (). Not `$sytN`: that symbol is the full metadata (prefix included) and IRGen adds the
@@ -105,6 +109,16 @@ static APUS_SWIFTASYNCCALL void after_call(uint64_t r0, uint64_t r1, uint64_t r2
   return step(ctx);
 }
 
+// A hopping same-Task call: now on the target executor, call, then hop back to the Task's own executor.
+static APUS_SWIFTASYNCCALL void hop_run(APUS_ASYNC_CONTEXT AsyncContext *ctx) {
+  RsTaskContext *c = (RsTaskContext *)ctx;
+  rs_call_sync(c->hop.function, c->hop_regs, c->hop.indirect, c->call_ret, c->hop.kind);
+  void *record = c->current_call;
+  c->current_call = NULL;
+  rs_call_done(record);
+  return swift_task_switch(ctx, step, c->executor);   // the main executor, or the generic one (0, 0)
+}
+
 // ---- child Tasks: a discarding TaskGroup, like `async let` / `withDiscardingTaskGroup` ----
 static APUS_SWIFTASYNCCALL void child_after(uint64_t r0, uint64_t r1, uint64_t r2, uint64_t r3,
                                        double f0, double f1, double f2, double f3,
@@ -116,6 +130,19 @@ static APUS_SWIFTASYNCCALL void child_after(uint64_t r0, uint64_t r1, uint64_t r
   return ((ThrowingContinuation *)k->base.resume_parent)(&k->base, NULL);
 }
 
+static APUS_SWIFTASYNCCALL void child_finish(APUS_ASYNC_CONTEXT AsyncContext *ctx) {
+  ChildContext *k = (ChildContext *)ctx;
+  return ((ThrowingContinuation *)k->base.resume_parent)(&k->base, NULL);
+}
+
+// A hopping call in a child Task: call on the target executor, then back to the generic executor to finish.
+static APUS_SWIFTASYNCCALL void child_hop_run(APUS_ASYNC_CONTEXT AsyncContext *ctx) {
+  ChildContext *k = (ChildContext *)ctx;
+  rs_call_sync(k->hop.function, k->hop_regs, k->hop.indirect, k->ret, k->hop.kind);
+  rs_call_done(k->record);
+  return swift_task_switch(ctx, child_finish, (SerialExecutorRef){0, 0});
+}
+
 // AsyncVoidClosureEntryPoint: discarding children start through the runtime's non_future_adapter.
 static APUS_SWIFTASYNCCALL void child_entry(APUS_ASYNC_CONTEXT AsyncContext *ctx, APUS_SWIFT_CONTEXT void *record) {
   ChildContext *k = (ChildContext *)ctx;
@@ -123,9 +150,16 @@ static APUS_SWIFTASYNCCALL void child_entry(APUS_ASYNC_CONTEXT AsyncContext *ctx
   const AsyncFunctionPointer *fn;
   CallRegs *regs;
   RetRegs *ret;
-  rs_call_target(record, &fn, &regs, &ret);
+  HopCall hop = {0};
+  rs_call_target(record, &fn, &regs, &ret, &hop);
   apus_fill_isolation(regs, false);   // a child Task runs nonisolated, like `async let`
   k->ret = ret;
+  if (hop.function) {
+    apus_fill_isolation(regs, hop.executor.identity == swift_task_getMainExecutor().identity);
+    k->hop = hop;
+    k->hop_regs = regs;
+    return swift_task_switch(ctx, child_hop_run, hop.executor);
+  }
   AsyncContext *callee = swift_task_alloc(fn->expected_context_size);
   callee->parent = ctx;
   callee->resume_parent = (TaskContinuationFunction *)child_after;
@@ -156,7 +190,17 @@ static APUS_SWIFTASYNCCALL void step(APUS_ASYNC_CONTEXT AsyncContext *ctx) {
   CallRegs *regs;
   RetRegs *ret;
   void *record;
-  if (rs_take_call(c->rust, &fn, &regs, &ret, &record)) {
+  HopCall hop = {0};
+  if (rs_take_call(c->rust, &fn, &regs, &ret, &record, &hop)) {
+    if (hop.function) {
+      // It runs on the target executor: isolated to the main actor only when that is where it hops.
+      apus_fill_isolation(regs, hop.executor.identity == swift_task_getMainExecutor().identity);
+      c->current_call = record;
+      c->call_ret = ret;
+      c->hop = hop;
+      c->hop_regs = regs;
+      return swift_task_switch(ctx, hop_run, hop.executor);
+    }
     AsyncContext *callee = swift_task_alloc(fn->expected_context_size);
     callee->parent = ctx;
     callee->resume_parent = (TaskContinuationFunction *)after_call;

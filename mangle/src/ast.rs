@@ -4,6 +4,8 @@
 pub enum Kind {
     Struct,
     Class,
+    /// An actor: mangled as a class.
+    Actor,
     Enum,
     Protocol,
 }
@@ -12,7 +14,7 @@ impl Kind {
     pub fn operator(self) -> char {
         match self {
             Kind::Struct => 'V',
-            Kind::Class => 'C',
+            Kind::Class | Kind::Actor => 'C',
             Kind::Enum => 'O',
             Kind::Protocol => 'P',
         }
@@ -92,6 +94,10 @@ pub struct Decl {
     pub extension: Option<Extension>,
     pub name: String,
     pub is_static: bool,
+    /// `@MainActor` before the declaration.
+    pub main_actor: bool,
+    /// `nonisolated` before the declaration (an actor member callable from anywhere).
+    pub nonisolated: bool,
     /// The declaration's own generic parameters.
     pub generic_params: usize,
     /// The declaration's own requirements (inline constraints and its `where` clause).

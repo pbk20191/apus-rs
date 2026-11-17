@@ -59,3 +59,48 @@ pub fn result_type(declaration: &str) -> Result<Option<String>, Error> {
     let decl = parse::parse(declaration).map_err(Error)?;
     mangler::result_type(&decl).map_err(Error)
 }
+
+/// Where a call to a synchronous declaration must run: apus hops there first and back afterwards. An async
+/// declaration hops by itself, a `nonisolated` member needs nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Isolation {
+    None,
+    /// The `self` actor (a sync member of an `(actor)` type).
+    Actor,
+    /// The main actor (`@MainActor`).
+    MainActor,
+}
+
+/// The isolation a call to `declaration` needs (see [`Isolation`]).
+pub fn isolation(declaration: &str) -> Result<Isolation, Error> {
+    let decl = parse::parse(declaration).map_err(Error)?;
+    let sync = match &decl.signature {
+        ast::Signature::Getter(_) => true,
+        ast::Signature::Function { is_async, .. } => !is_async,
+    };
+    let actor_member = !decl.is_static && decl.context.last().is_some_and(|(_, kind)| *kind == ast::Kind::Actor);
+    Ok(match () {
+        _ if !sync || decl.nonisolated => Isolation::None,
+        _ if decl.main_actor => Isolation::MainActor,
+        _ if actor_member => Isolation::Actor,
+        _ => Isolation::None,
+    })
+}
+
+#[cfg(test)]
+mod isolation_tests {
+    use super::{isolation, Isolation};
+
+    #[test]
+    fn sync_members_of_actors_and_the_main_actor_need_a_hop() {
+        let of = |d: &str| isolation(d).unwrap();
+        assert_eq!(of("M.Tally(actor).bump(by: Int) -> Int"), Isolation::Actor);
+        assert_eq!(of("M.Tally(actor).count: Int { get }"), Isolation::Actor);
+        assert_eq!(of("M.Tally(actor).bump(by: Int) async -> Int"), Isolation::None);
+        assert_eq!(of("nonisolated M.Tally(actor).label() -> String"), Isolation::None);
+        assert_eq!(of("static M.Tally(actor).make() -> Tally(actor)"), Isolation::None);
+        assert_eq!(of("@MainActor M.onMain() -> Bool"), Isolation::MainActor);
+        assert_eq!(of("@MainActor M.onMain() async -> Bool"), Isolation::None);
+        assert_eq!(of("M.Counter(class).bump(by: Int) -> Int"), Isolation::None);
+    }
+}

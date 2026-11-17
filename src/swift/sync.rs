@@ -3,7 +3,7 @@
 //! Same argument lowering as async calls; the differences are in sys/csrc/funclets.c `rs_call_sync`: an indirect
 //! result address travels in its own register, and direct results come back as return registers.
 
-use super::call::{CallError, IndirectSlot, Owned, RetRegs};
+use super::call::{CallError, IndirectSlot, Owned, RetRegs, SwiftCall};
 use super::func::{ArgLowering, SwiftArgs, SwiftObject, SwiftRet};
 use super::value::{lookup, SwiftType, SwiftValue, UninitValue};
 use super::SwiftError;
@@ -163,3 +163,53 @@ impl<R: SwiftRet> SwiftSyncCall<R> {
     }
 }
 
+
+/// Where a hopping call runs: what `swift!` generates for the sync members of an actor or of the main actor.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub enum HopTo {
+    /// The `self` actor's executor (`Actor.unownedExecutor`).
+    SelfActor,
+    /// The main actor's executor.
+    Main,
+}
+
+impl<R: SwiftRet> SwiftSyncCall<R> {
+    /// The call as an awaitable that runs on `to`'s executor: the Task hops there, calls, and hops back to its own
+    /// executor. An object that is not an actor makes it `CallError::NotAnActor`.
+    #[doc(hidden)]
+    pub fn hop(self, to: HopTo) -> SwiftCall<R> {
+        let SwiftSyncCall { function, symbol, lowering, slot, indirect, throws, consumed, invalid, .. } = self;
+        debug_assert!(consumed.is_none(), "an actor's self is a class reference, never consumed");
+        let kind = if indirect { KIND_INDIRECT } else if R::FLOAT { KIND_FLOATS } else { KIND_INTEGERS };
+        let executor = match to {
+            HopTo::Main => Some(unsafe { super::rt::swift_task_getMainExecutor() }),
+            HopTo::SelfActor => actor_executor(lowering.regs.self_),
+        };
+        let problem = invalid
+            .or_else(|| function.is_none().then_some(CallError::Unavailable(symbol)))
+            .or_else(|| executor.is_none().then_some(CallError::NotAnActor));
+        // The sync result address is the hop's own (rs_call_sync), not the first integer argument.
+        let mut call = SwiftCall::build(std::ptr::null(), lowering, problem, slot, false);
+        if throws {
+            call = call.throws();
+        }
+        if let (Some(function), Some(executor)) = (function, executor) {
+            call.set_hop(apus_sys::HopCall { function, indirect: std::ptr::null_mut(), executor, kind });
+        }
+        call
+    }
+}
+
+/// The executor of `actor`: its `Actor` conformance's `unownedExecutor` (a default actor's own, or a custom one).
+fn actor_executor(actor: *mut c_void) -> Option<super::rt::SerialExecutorRef> {
+    use super::rt;
+    if actor.is_null() {
+        return None;
+    }
+    unsafe {
+        let ty = rt::swift_getObjectType(actor);
+        let witness = rt::swift_conformsToProtocol(ty, &rt::ACTOR_PROTOCOL as *const u8 as *const c_void);
+        (!witness.is_null()).then(|| rt::apus_actor_unowned_executor(actor, ty, witness))
+    }
+}

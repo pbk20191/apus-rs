@@ -180,3 +180,34 @@ public final class Tracked: NSObject {
     guard let isolation else { return 0 }
     return isolation === MainActor.shared ? 1 : 2
 }
+
+// Actor and @MainActor sync members (tests/swift_isolation.rs). preconditionIsolated traps off the actor.
+public actor Tally {
+    var n = 0
+    public init() {}
+    @inline(never) public func bump(by k: Int) -> Int { preconditionIsolated(); n += k; return n }
+    public var count: Int { preconditionIsolated(); return n }
+    @inline(never) public nonisolated func label() -> String { "tally" }
+}
+@inline(never) public func makeTally() -> Tally { Tally() }
+
+@MainActor @inline(never) public func onMainThread() -> Bool { MainActor.assumeIsolated { Thread.isMainThread } }
+
+public final class QueueExecutor: SerialExecutor, @unchecked Sendable {
+    let queue = DispatchQueue(label: "probe.custom")
+    public func enqueue(_ job: consuming ExecutorJob) {
+        let job = UnownedJob(job)
+        queue.async { job.runSynchronously(on: self.asUnownedSerialExecutor()) }
+    }
+    public func asUnownedSerialExecutor() -> UnownedSerialExecutor { UnownedSerialExecutor(ordinary: self) }
+}
+public actor Custom {
+    nonisolated let executor = QueueExecutor()
+    public nonisolated var unownedExecutor: UnownedSerialExecutor { executor.asUnownedSerialExecutor() }
+    public init() {}
+    @inline(never) public func onOwnQueue() -> Bool {
+        preconditionIsolated()
+        return String(cString: __dispatch_queue_get_label(nil)) == "probe.custom"
+    }
+}
+@inline(never) public func makeCustom() -> Custom { Custom() }
