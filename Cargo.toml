@@ -8,22 +8,22 @@ publish = false
 
 [features]
 default = ["swift"]
-swift = ["dep:apus-sys"]
+swift = ["dep:apus-sys", "dep:apus-macros"]
 # Raises the deployment floor to macOS 15 (see sys/README.md).
 macos15 = ["swift", "apus-sys/macos15"]
 # Compiles the C side as LLVM bitcode for cross-language LTO with Rust (README: Cross-language LTO).
 xlto = ["swift", "apus-sys/xlto"]
-dispatch = []
+dispatch = ["dep:async-task", "dep:dispatch2"]
 test-probe = ["swift"]
 # `impl futures_core::Stream for SwiftStream`
 stream = ["swift", "dep:futures-core"]
 
 [dependencies]
-async-task = "4"
+async-task = { version = "4", optional = true }
 futures-core = { version = "0.3", optional = true, default-features = false }
-apus-macros = { path = "macros" }
+apus-macros = { path = "macros", optional = true }
 apus-sys = { path = "sys", version = "=0.1.0", optional = true }
-dispatch2 = { version = "0.3.1", default-features = false, features = ["std"] }
+dispatch2 = { version = "0.3.1", default-features = false, features = ["std"], optional = true }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFRunLoop", "CFString", "CFDate"] }
 libc = "0.2"
 

@@ -7,15 +7,12 @@
 
 use super::{rt, task};
 use crate::SpawnOptions;
-use std::ffi::{c_void, CString};
+use std::ffi::CString;
 use std::sync::mpsc;
 use std::sync::Once;
 use std::time::Duration;
 
-extern "C" {
-    fn dlsym(handle: *mut c_void, symbol: *const std::ffi::c_char) -> *mut c_void;
-}
-const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
+use libc::{dlsym, RTLD_DEFAULT};
 
 const FAILED: &str = "apus: Swift runtime ABI self-check failed";
 

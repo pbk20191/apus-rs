@@ -15,6 +15,7 @@ mod runloop;
 #[cfg(feature = "swift")]
 pub mod swift;
 
+#[cfg(feature = "swift")]
 pub use apus_macros::{mangle, result_type};
 pub use common::{JoinError, Priority, SpawnOptions};
 pub use runloop::{is_main_thread, run_main};

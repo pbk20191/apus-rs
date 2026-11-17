@@ -12,10 +12,7 @@ use std::ffi::{c_void, CString};
 use std::ptr::NonNull;
 use std::sync::OnceLock;
 
-extern "C" {
-    fn dlsym(handle: *mut c_void, symbol: *const std::ffi::c_char) -> *mut c_void;
-}
-const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
+use libc::{dlsym, RTLD_DEFAULT};
 
 pub(crate) fn lookup(symbol: &str) -> usize {
     let name = CString::new(symbol).expect("symbol contains a NUL byte");

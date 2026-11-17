@@ -35,10 +35,7 @@ pub struct SwiftAsyncFn {
 unsafe impl Send for SwiftAsyncFn {}
 unsafe impl Sync for SwiftAsyncFn {}
 
-extern "C" {
-    fn dlsym(handle: *mut c_void, symbol: *const std::ffi::c_char) -> *mut c_void;
-}
-const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
+use libc::{dlsym, RTLD_DEFAULT};
 
 impl SwiftAsyncFn {
     /// A function identified by its mangled symbol name (`$s…`), resolved with `dlsym` on first use.
