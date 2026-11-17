@@ -137,6 +137,8 @@ const DECLARATIONS: &[&str] = &[
     "Probe.Tally(actor).count: Int { get }",
     "nonisolated Probe.Tally(actor).label() -> String",
     "@MainActor Probe.onMainThread() -> Bool",
+    "Probe.genericTyped<E: Error>(_: Bool, _: E) async throws(E) -> Int",
+    "Probe.anyTyped() throws(any Error) -> Int",
 ];
 
 fn compiled_symbols() -> HashSet<String> {

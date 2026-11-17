@@ -153,7 +153,10 @@ impl<R: SwiftRet> SwiftSyncCall<R> {
             if let Some(consumed) = self.consumed.take() {
                 drop(consumed.into_uninit()); // the callee destroyed the value; only the storage is ours
             }
-            let result = if self.throws && !ret.0.error.is_null() {
+            let typed_error = self.lowering.typed_error.take();
+            let result = if let (Some(slot), false) = (typed_error, ret.0.error.is_null()) {
+                Err(CallError::Typed(slot.assume_init())) // the callee threw: the slot holds its error
+            } else if self.throws && !ret.0.error.is_null() {
                 Err(CallError::Swift(SwiftError::from_raw(ret.0.error)))
             } else {
                 Ok(R::lift(&ret, &mut self.slot))

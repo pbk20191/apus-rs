@@ -6,7 +6,7 @@ mod common;
 mod probe;
 
 use apus::is_main_thread;
-use apus::swift::{spawn, spawn_on_main, Isolation, SwiftObject};
+use apus::swift::{spawn, spawn_on_main, CallError, ErrorSlot, Isolation, SwiftObject, SwiftProtocol, SwiftType, SwiftValue, WitnessTable};
 use common::{block, check, Failed, Trial};
 
 apus::swift! {
@@ -30,6 +30,41 @@ apus::swift! {
     fn make_custom() -> SwiftObject;
     #[swift_linked = "Probe.Custom(actor).onOwnQueue() -> Bool"]
     async fn on_own_queue(self: &SwiftObject) -> bool;
+
+    #[swift_linked = "Probe.makeBoom(code: Int) -> Boom(struct)"]
+    fn make_boom(code: i64) -> SwiftValue;
+    #[swift_linked = "Probe.errorCode<E: Error>(_: E) -> Int"]
+    fn error_code(error: &SwiftValue, ty: SwiftType, error_witness: WitnessTable) -> i64;
+    #[swift_linked = "Probe.genericTyped<E: Error>(_: Bool, _: E) async throws(E) -> Int"]
+    async fn generic_typed(fail: bool, error: &SwiftValue, ty: SwiftType, error_witness: WitnessTable, slot: ErrorSlot) -> i64;
+    #[swift_linked = "Probe.genericTypedSync<E: Error>(_: Bool, _: E) throws(E) -> Int"]
+    fn generic_typed_sync(fail: bool, error: &SwiftValue, ty: SwiftType, error_witness: WitnessTable, slot: ErrorSlot) -> i64;
+}
+
+static ERROR: SwiftProtocol = SwiftProtocol::new("$ss5ErrorMp");
+
+/// A generic typed error comes back through the slot the caller passes; a normal return leaves the slot alone.
+fn typed_throws_generic() -> Result<(), Failed> {
+    let boom = make_boom(7).unwrap();
+    let ty = boom.ty();
+    let witness = ty.conformance(&ERROR).expect("Boom: Error");
+    let code_of = |error: &CallError| match error {
+        CallError::Typed(value) => error_code(value, ty, witness).unwrap(),
+        other => panic!("expected a typed error, got {other:?}"),
+    };
+    let b = boom.clone();
+    let (ok, thrown) = block(spawn(async move {
+        let ok = generic_typed(false, &b, ty, witness, ErrorSlot::of(ty)).await;
+        let thrown = generic_typed(true, &b, ty, witness, ErrorSlot::of(ty)).await;
+        (ok, thrown)
+    }))
+    .unwrap();
+    check(matches!(ok, Ok(42)), format!("async return: {ok:?}"))?;
+    check(thrown.as_ref().err().map(code_of) == Some(7), format!("async throw: {thrown:?}"))?;
+    let ok = generic_typed_sync(false, &boom, ty, witness, ErrorSlot::of(ty));
+    check(matches!(ok, Ok(42)), format!("sync return: {ok:?}"))?;
+    let thrown = generic_typed_sync(true, &boom, ty, witness, ErrorSlot::of(ty));
+    check(thrown.as_ref().err().map(code_of) == Some(7), format!("sync throw: {thrown:?}"))
 }
 
 /// Sync members of an actor or the main actor run there (the callee traps otherwise), and the task comes back to its
@@ -72,5 +107,6 @@ fn main() {
     common::run(vec![
         Trial::test("isolated_parameter", isolated_parameter),
         Trial::test("isolated_sync_members", isolated_sync_members),
+        Trial::test("typed_throws_generic", typed_throws_generic),
     ]);
 }

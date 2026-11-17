@@ -464,8 +464,19 @@ impl<'a> Parser<'a> {
             }
             let is_async = self.eat_keyword("async");
             let throws = self.eat_keyword("throws");
+            // `throws(E)`; `throws(any Error)` is plain `throws`.
+            let typed_error = if throws && self.eat("(") {
+                let ty = self.ty()?;
+                self.expect(")")?;
+                match ty {
+                    Ty::Existential(ref p) if p.name == "Error" && p.module == "Swift" => None,
+                    ty => Some(ty),
+                }
+            } else {
+                None
+            };
             let result = if self.eat("->") { self.ty()? } else { Ty::Tuple(Vec::new()) };
-            Signature::Function { params, result, is_async, throws }
+            Signature::Function { params, result, is_async, throws, typed_error }
         } else if self.eat(":") {
             let ty = self.ty()?;
             self.expect("{")?;

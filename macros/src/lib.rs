@@ -105,6 +105,9 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         return item_compile_error("__swift_route: expected `binding how async|sync …`");
     };
     let declaration = tail.last().and_then(|t| flatten(t.clone().into()).first().and_then(string_literal));
+    let declaration_text = declaration.clone();
+    // The Rust signature's `throws`: a bracket group holding just that word.
+    let rust_throws = tail.iter().any(|t| matches!(t, TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket && g.stream().to_string() == "throws"));
     let isolation = match (how.to_string().as_str(), declaration) {
         ("declared", Some(declaration)) => match apus_mangle::isolation(&declaration) {
             Ok(isolation) => Some((isolation, declaration)),
@@ -112,6 +115,17 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         },
         _ => None,
     };
+    if let ("declared", Some(declaration)) = (how.to_string().as_str(), &declaration_text) {
+        match apus_mangle::typed_throws(declaration) {
+            Ok(true) if rust_throws => {
+                return item_compile_error(&format!(
+                    "`{declaration}` has typed throws: declare it without `throws` and pass an `ErrorSlot` after its generic arguments; its error comes back as `CallError::Typed`"
+                ))
+            }
+            Ok(_) => {}
+            Err(error) => return item_compile_error(&format!("`{declaration}`: {error}")),
+        }
+    }
     let hop = match isolation {
         Some((apus_mangle::Isolation::Actor, d)) => Some(("SelfActor", d)),
         Some((apus_mangle::Isolation::MainActor, d)) => Some(("Main", d)),

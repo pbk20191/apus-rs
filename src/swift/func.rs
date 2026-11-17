@@ -113,6 +113,8 @@ pub struct ArgLowering {
     floats: usize,
     pub(crate) owned: Vec<Owned>,
     pub(crate) error: Option<&'static str>,
+    /// The error slot of a typed-throws call (`ErrorSlot`): written only when the callee throws.
+    pub(crate) typed_error: Option<UninitValue>,
 }
 
 impl ArgLowering {
@@ -124,7 +126,15 @@ impl ArgLowering {
             floats: 0,
             owned: Vec::new(),
             error: None,
+            typed_error: None,
         }
+    }
+
+    /// The error slot of a typed-throws call: storage for an error of `ty`, passed by address.
+    pub(crate) fn error_slot(&mut self, ty: SwiftType) {
+        let storage = UninitValue::new(ty);
+        self.int(storage.ptr.as_ptr() as u64);
+        self.typed_error = Some(storage);
     }
 
     pub fn int(&mut self, value: u64) {
@@ -218,6 +228,23 @@ impl SwiftArg for SwiftType {
 impl SwiftArg for WitnessTable {
     fn lower(&self, into: &mut ArgLowering) {
         into.int(self.0 as u64)
+    }
+}
+
+/// Where a typed-throws function with a generic error type (`throws(E)`) writes its error: pass it after the generic
+/// arguments, with `E`'s type. A thrown error comes back as `CallError::Typed`.
+#[derive(Clone, Copy, Debug)]
+pub struct ErrorSlot(SwiftType);
+
+impl ErrorSlot {
+    pub fn of(error_type: SwiftType) -> ErrorSlot {
+        ErrorSlot(error_type)
+    }
+}
+
+impl SwiftArg for ErrorSlot {
+    fn lower(&self, into: &mut ArgLowering) {
+        into.error_slot(self.0);
     }
 }
 

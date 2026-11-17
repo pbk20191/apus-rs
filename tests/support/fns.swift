@@ -211,3 +211,22 @@ public actor Custom {
     }
 }
 @inline(never) public func makeCustom() -> Custom { Custom() }
+
+// Typed throws with a generic error type (tests/swift_isolation.rs).
+// Five words: returned by address, as apus receives a SwiftValue result.
+public struct Boom: Error {
+    public let code: Int
+    let padding: (Int, Int, Int, Int) = (0, 0, 0, 0)
+    public init(code: Int) { self.code = code }
+}
+@inline(never) public func makeBoom(code: Int) -> Boom { Boom(code: code) }
+@inline(never) public func errorCode<E: Error>(_ error: E) -> Int { (error as? Boom)?.code ?? -1 }
+@inline(never) public func genericTyped<E: Error>(_ fail: Bool, _ error: E) async throws(E) -> Int {
+    await Task.yield()
+    if fail { throw error }
+    return 42
+}
+@inline(never) public func genericTypedSync<E: Error>(_ fail: Bool, _ error: E) throws(E) -> Int {
+    if fail { throw error }
+    return 42
+}

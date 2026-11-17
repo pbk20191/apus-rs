@@ -110,3 +110,5 @@ public func withIsolation(_ x: Int, isolation: isolated (any Actor)? = #isolatio
 public func isolatedTo(_ actor: isolated any Actor, _ n: Int) -> Int { n }
 public actor Tally { var n = 0; public func bump(by k: Int) -> Int { n }; public var count: Int { n }; public nonisolated func label() -> String { "" } }
 @MainActor public func onMainThread() -> Bool { true }
+public func genericTyped<E: Error>(_ fail: Bool, _ error: E) async throws(E) -> Int { 0 }
+public func anyTyped() throws(any Error) -> Int { 0 }

@@ -72,7 +72,8 @@ pub enum Requirement {
 }
 
 pub enum Signature {
-    Function { params: Vec<Param>, result: Ty, is_async: bool, throws: bool },
+    /// `typed_error`: `throws(E)` with an error type other than `any Error`.
+    Function { params: Vec<Param>, result: Ty, is_async: bool, throws: bool, typed_error: Option<Ty> },
     Getter(Ty),
 }
 

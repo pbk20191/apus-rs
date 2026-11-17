@@ -518,7 +518,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
             m.ty(&canonical(ty, &same_types))?;
             m.push("vg");
         }
-        Signature::Function { params, result, is_async, throws } => {
+        Signature::Function { params, result, is_async, throws, typed_error } => {
             // Argument labels: nothing without parameters, `y` when none is labeled, else one entry each.
             if params.iter().any(|p| p.label.is_some()) {
                 for param in params {
@@ -544,8 +544,13 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
             if *is_async {
                 m.push("Ya");
             }
-            if *throws {
-                m.push("K");
+            match typed_error {
+                Some(error) => {
+                    m.ty(&canonical(error, &same_types))?;
+                    m.push("YK");
+                }
+                None if *throws => m.push("K"),
+                None => {}
             }
             if decl.generic_params > 0 {
                 for requirement in sorted_requirements(&decl.requirements) {

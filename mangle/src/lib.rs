@@ -87,6 +87,21 @@ pub fn isolation(declaration: &str) -> Result<Isolation, Error> {
     })
 }
 
+/// Whether the declaration has typed throws (`throws(E)`), which apus calls with an error slot. Only a generic or
+/// associated error type is accepted: a concrete one comes back in registers or through a slot depending on its
+/// layout, which the declaration does not tell.
+pub fn typed_throws(declaration: &str) -> Result<bool, Error> {
+    let decl = parse::parse(declaration).map_err(Error)?;
+    match &decl.signature {
+        ast::Signature::Function { typed_error: Some(ast::Ty::Param(_) | ast::Ty::Member(..)), .. } => Ok(true),
+        ast::Signature::Function { typed_error: Some(_), .. } => Err(Error(
+            "concrete typed throws is not supported yet: its error may come back in registers or through a slot depending on layout"
+                .into(),
+        )),
+        _ => Ok(false),
+    }
+}
+
 #[cfg(test)]
 mod isolation_tests {
     use super::{isolation, Isolation};
@@ -102,5 +117,14 @@ mod isolation_tests {
         assert_eq!(of("@MainActor M.onMain() -> Bool"), Isolation::MainActor);
         assert_eq!(of("@MainActor M.onMain() async -> Bool"), Isolation::None);
         assert_eq!(of("M.Counter(class).bump(by: Int) -> Int"), Isolation::None);
+    }
+
+    #[test]
+    fn only_generic_typed_errors_are_callable() {
+        use super::typed_throws;
+        assert_eq!(typed_throws("M.f<E: Error>(_: E) async throws(E) -> Int").unwrap(), true);
+        assert_eq!(typed_throws("M.f() throws(any Error) -> Int").unwrap(), false);
+        assert_eq!(typed_throws("M.f() throws -> Int").unwrap(), false);
+        assert!(typed_throws("M.f() throws(Boom(struct)) -> Int").unwrap_err().to_string().contains("concrete typed throws"));
     }
 }

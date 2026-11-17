@@ -53,6 +53,8 @@ pub enum CallError {
     InvalidArgument(&'static str),
     /// A sync member declared on an `(actor)` was called on an object that does not conform to `Actor`.
     NotAnActor,
+    /// A typed-throws callee (`throws(E)`) threw: its error, of the `ErrorSlot`'s type.
+    Typed(SwiftValue),
 }
 
 impl fmt::Debug for CallError {
@@ -62,6 +64,7 @@ impl fmt::Debug for CallError {
             CallError::NoCurrentTask => f.write_str("NoCurrentTask"),
             CallError::Unavailable(symbol) => write!(f, "Unavailable({symbol})"),
             CallError::NotAnActor => f.write_str("NotAnActor"),
+            CallError::Typed(value) => write!(f, "Typed({value:?})"),
             CallError::InvalidArgument(why) => write!(f, "InvalidArgument({why})"),
         }
     }
@@ -75,6 +78,7 @@ impl fmt::Display for CallError {
             CallError::Unavailable(symbol) => write!(f, "Swift function {symbol} is not available"),
             CallError::InvalidArgument(why) => write!(f, "invalid argument: {why}"),
             CallError::NotAnActor => f.write_str("the object is not an actor"),
+            CallError::Typed(value) => write!(f, "Swift error: {}", value.description()),
         }
     }
 }
@@ -147,6 +151,8 @@ pub(crate) struct CallShared {
     regs: UnsafeCell<CallRegs>,
     ret: UnsafeCell<RetRegs>,
     indirect: UnsafeCell<IndirectSlot>,
+    /// A typed-throws call's error slot (`ErrorSlot`).
+    typed_error: UnsafeCell<Option<UninitValue>>,
     /// Whether the callee is `throws`: only then is the error register meaningful.
     throws: bool,
     owned: Vec<Owned>,
@@ -166,12 +172,14 @@ unsafe impl Sync for CallShared {}
 impl CallShared {
     /// `indirect`: the callee writes its result through the slot's address, passed as first integer argument
     /// (`lowering` reserved that register).
-    fn new<R: SwiftRet>(function: *const AsyncFunctionPointer, lowering: ArgLowering, slot: IndirectSlot, indirect: bool) -> Arc<CallShared> {
+    fn new<R: SwiftRet>(function: *const AsyncFunctionPointer, mut lowering: ArgLowering, slot: IndirectSlot, indirect: bool) -> Arc<CallShared> {
+        let typed_error = lowering.typed_error.take();
         let shared = Arc::new(CallShared {
             function,
             regs: UnsafeCell::new(lowering.regs),
             ret: UnsafeCell::new(RetRegs::new()),
             indirect: UnsafeCell::new(slot),
+            typed_error: UnsafeCell::new(typed_error),
             throws: false,
             owned: lowering.owned,
             discard: discard_as::<R>,
@@ -190,6 +198,9 @@ impl CallShared {
     /// Takes the finished call's result. Call exactly once, after `Done`.
     unsafe fn take_result<R: SwiftRet>(&self) -> Result<R, CallError> {
         let ret = &*self.ret.get();
+        if let (Some(slot), false) = ((*self.typed_error.get()).take(), ret.0.error.is_null()) {
+            return Err(CallError::Typed(slot.assume_init())); // the callee threw: the slot holds its error
+        }
         if self.throws && !ret.0.error.is_null() {
             return Err(CallError::Swift(SwiftError::from_raw(ret.0.error)));
         }
