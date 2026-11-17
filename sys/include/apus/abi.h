@@ -34,6 +34,7 @@
 // Only apus's own C (built with APUS_SYS_BUILD) renames: another C file including this header keeps its names.
 #if defined(APUS_SYS_BUILD) && !defined(APUS_BINDGEN)
 #define rs_entry_fn APUS_NAME(rs_entry_fn)
+#define apus_fill_isolation APUS_NAME(apus_fill_isolation)
 #define rs_context_size APUS_NAME(rs_context_size)
 #define rs_job_metadata APUS_NAME(rs_job_metadata)
 #define rs_run_job_fn APUS_NAME(rs_run_job_fn)
@@ -129,7 +130,9 @@ typedef struct { HeapObject header; const AsyncFunctionPointer *function; void *
 // One call shape for every Swift function apus calls by symbol: Rust fills the argument registers, the callee reads
 // the ones its signature uses (integer argument registers: 8 on arm64, 6 on x86_64). Results: up to four integer or
 // four floating-point registers, and the error the callee threw (src/swift/call.rs, sync.rs).
-typedef struct { uint64_t gpr[8]; double fpr[8]; void *self; } CallRegs;
+// `isolation`: the first of two integer registers that carry an `isolated (any Actor)?` argument, filled when the call
+// runs (apus_fill_isolation), or -1.
+typedef struct { uint64_t gpr[8]; double fpr[8]; void *self; int32_t isolation; } CallRegs;
 typedef struct { uint64_t gpr[4]; double fpr[4]; void *error; } RetRegs;
 
 // ---- constants (include/swift/ABI/MetadataValues.h, MetadataKind.def) ----
@@ -235,6 +238,8 @@ extern const uint8_t STRING_HASHABLE APUS_SYMBOL("$sSSSHsWP") APUS_DATA;
 extern const uint8_t INT_HASHABLE APUS_SYMBOL("$sSiSHsWP") APUS_DATA;
 extern const uint8_t INT32_HASHABLE APUS_SYMBOL("$ss5Int32VSHsWP") APUS_DATA;
 extern const uint8_t UINT64_HASHABLE APUS_SYMBOL("$ss6UInt64VSHsWP") APUS_DATA;
+// MainActor's conformance to Actor (_Concurrency).
+extern const uint8_t MAIN_ACTOR_ACTOR APUS_SYMBOL("$sScMScAsWP") APUS_DATA;
 
 // ---- swift_Concurrency (include/swift/Runtime/Concurrency.h) ----
 
@@ -259,6 +264,9 @@ size_t rs_context_size(void) APUS_BOUNDARY(rs_context_size) APUS_C;
 const void *rs_job_metadata(void) APUS_BOUNDARY(rs_job_metadata) APUS_C;
 const void *rs_run_job_fn(void) APUS_BOUNDARY(rs_run_job_fn) APUS_C;
 void rs_string_from_utf8(const uint8_t *start, intptr_t count, SwiftString *out) APUS_BOUNDARY(rs_string_from_utf8) APUS_C;
+// Fills regs->isolation's two registers: MainActor (MainActor.shared and its Actor witness table) when `main_actor`,
+// else nil. Nothing when regs->isolation is -1.
+void apus_fill_isolation(CallRegs *regs, bool main_actor) APUS_BOUNDARY(apus_fill_isolation) APUS_C;
 // kind: 0 = integer results, 1 = floating-point results, 2 = indirect result at `indirect`
 void rs_call_sync(const void *function, const CallRegs *regs, void *indirect, RetRegs *ret, int kind) APUS_BOUNDARY(rs_call_sync) APUS_C;
 
@@ -353,6 +361,9 @@ extern APUS_SWIFTASYNCCALL void swift_taskGroup_waitAll(void *result, APUS_ASYNC
                                                         void *body_error, ThrowingContinuation *resume,
                                                         AsyncContext *call_context) APUS_ASYNC;
 extern APUS_SWIFTCALL void swift_job_run(void *job, SerialExecutorRef executor) APUS_INTERNAL;
+// MainActor's metadata accessor and the `MainActor.shared` getter (static: self is the metadata).
+extern APUS_SWIFTCALL MetadataResponse main_actor_metadata(size_t request) APUS_SYMBOL("$sScMMa") APUS_INTERNAL;
+extern APUS_SWIFTCALL void *main_actor_shared(APUS_SWIFT_CONTEXT const void *metadata) APUS_SYMBOL("$sScM6sharedScMvgZ") APUS_INTERNAL;
 
 // `String._fromUTF8Repairing(_: UnsafeBufferPointer<UInt8>) -> (result: String, repairsMade: Bool)`: copies the bytes
 // (any length, NUL bytes included). Three result registers, which only a swiftcall declaration can receive; Rust

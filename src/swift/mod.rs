@@ -4,6 +4,7 @@ mod any;
 pub(crate) mod call;
 mod current;
 mod func;
+mod isolation;
 mod join;
 mod macros;
 pub(crate) mod rt;
@@ -21,6 +22,7 @@ pub use call::{timeout, AsyncFunctionPointer, CallError, IndirectSlot, RetRegs, 
 pub use stream::SwiftStream;
 pub use sync::{SwiftFn, SwiftSyncCall};
 pub use value::{IntoSwift, SwiftProtocol, SwiftType, SwiftValue, WitnessTable};
+pub use isolation::Isolation;
 pub use func::{ArgLowering, DirectValue, SwiftArg, SwiftArgs, SwiftAsyncFn, SwiftObject, SwiftReceiver, SwiftRet};
 pub use current::{cancelled, current_task, is_cancelled, priority, Cancelled, TaskRef};
 pub use join::{JoinHandle, MainOnlyHandle};

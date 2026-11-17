@@ -119,7 +119,7 @@ impl ArgLowering {
     /// `indirect_result`: the first integer register is reserved for the result address.
     pub(crate) fn new(indirect_result: bool) -> ArgLowering {
         ArgLowering {
-            regs: CallRegs { gpr: [0; 8], fpr: [0.0; 8], self_: std::ptr::null_mut() },
+            regs: CallRegs { gpr: [0; 8], fpr: [0.0; 8], self_: std::ptr::null_mut(), isolation: -1 },
             ints: indirect_result as usize,
             floats: 0,
             owned: Vec::new(),
@@ -134,6 +134,16 @@ impl ArgLowering {
         }
         self.regs.gpr[self.ints] = value;
         self.ints += 1;
+    }
+
+    /// An `isolated (any Actor)?` argument: two integer registers the call fills when it runs.
+    pub(crate) fn isolation(&mut self) {
+        let first = self.ints;
+        self.int(0);
+        self.int(0);
+        if self.error.is_none() {
+            self.regs.isolation = first as i32;
+        }
     }
 
     pub fn float(&mut self, value: f64) {

@@ -62,6 +62,22 @@ static APUS_SWIFTASYNCCALL void after_wait_all(APUS_ASYNC_CONTEXT AsyncContext *
   return finish(ctx);
 }
 
+// MainActor.shared: a singleton, looked up once (a race only computes the same object twice).
+static void *main_actor(void) {
+  static void *shared;
+  void *known = __atomic_load_n(&shared, __ATOMIC_ACQUIRE);
+  if (known) return known;
+  known = main_actor_shared(main_actor_metadata(0).metadata);   // +1, kept for good
+  __atomic_store_n(&shared, known, __ATOMIC_RELEASE);
+  return known;
+}
+
+void apus_fill_isolation(CallRegs *regs, bool main_isolated) {
+  if (regs->isolation < 0) return;
+  regs->gpr[regs->isolation] = main_isolated ? (uint64_t)main_actor() : 0;
+  regs->gpr[regs->isolation + 1] = main_isolated ? (uint64_t)&MAIN_ACTOR_ACTOR : 0;
+}
+
 static GenericAsyncFn *code_of(const AsyncFunctionPointer *fn) {
   return (GenericAsyncFn *)((const char *)&fn->function + fn->function);
 }
@@ -108,6 +124,7 @@ static APUS_SWIFTASYNCCALL void child_entry(APUS_ASYNC_CONTEXT AsyncContext *ctx
   CallRegs *regs;
   RetRegs *ret;
   rs_call_target(record, &fn, &regs, &ret);
+  apus_fill_isolation(regs, false);   // a child Task runs nonisolated, like `async let`
   k->ret = ret;
   AsyncContext *callee = swift_task_alloc(fn->expected_context_size);
   callee->parent = ctx;
@@ -145,6 +162,7 @@ static APUS_SWIFTASYNCCALL void step(APUS_ASYNC_CONTEXT AsyncContext *ctx) {
     callee->resume_parent = (TaskContinuationFunction *)after_call;
     c->current_call = record;
     c->call_ret = ret;
+    apus_fill_isolation(regs, c->executor.identity != NULL);   // the main task runs on the main actor
     return CALL_GENERIC(code_of(fn), regs, callee);
   }
   while (rs_take_child(c->rust, &record)) spawn_child(c, record);

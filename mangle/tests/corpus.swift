@@ -104,3 +104,7 @@ public extension Sequence where Element == String { func joinedTwice() -> String
 public extension Task where Success == Never, Failure == Never { static func nap(_ n: UInt64) async throws {} }
 public extension Task { func poke() {} }
 public extension AsyncStream { func tag() -> Int { 0 } }
+
+// isolation
+public func withIsolation(_ x: Int, isolation: isolated (any Actor)? = #isolation) async -> Int { x }
+public func isolatedTo(_ actor: isolated any Actor, _ n: Int) -> Int { n }

@@ -53,6 +53,8 @@ pub struct Param {
     pub ty: Ty,
     pub inout: bool,
     pub variadic: bool,
+    /// `isolated`: the parameter is the function's actor isolation.
+    pub isolated: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

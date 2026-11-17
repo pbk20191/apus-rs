@@ -441,9 +441,14 @@ impl<'a> Parser<'a> {
                 let label = if self.eat_keyword("_") { None } else { Some(self.identifier()?) };
                 self.expect(":")?;
                 let inout = self.eat_keyword("inout");
+                let isolated = self.eat_keyword("isolated");
                 let ty = self.ty()?;
                 let variadic = self.eat("...");
-                params.push(Param { label, ty, inout, variadic });
+                // A default value changes nothing in the symbol; `#isolation` is the only one understood.
+                if self.eat("=") && !self.eat("#isolation") {
+                    return Err(self.error("only `= #isolation` is understood as a default value"));
+                }
+                params.push(Param { label, ty, inout, variadic, isolated });
             }
             let is_async = self.eat_keyword("async");
             let throws = self.eat_keyword("throws");

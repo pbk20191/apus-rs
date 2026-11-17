@@ -170,3 +170,13 @@ public final class Tracked: NSObject {
 @inline(never) public func trackedValue(_ object: Tracked) -> Int { object.value }
 @inline(never) public func className(_ object: NSObject) -> String { String(describing: type(of: object)) }
 @inline(never) public func echoObject(_ object: NSObject) -> NSObject { object }
+
+// Isolation (tests/swift_isolation.rs).
+@inline(never) public func withIsolation(_ x: Int, isolation: isolated (any Actor)? = #isolation) async -> Int {
+    guard let isolation else { return x }
+    return x + (isolation === MainActor.shared ? 1000 : 2000)
+}
+@inline(never) public func isolationKind(isolation: isolated (any Actor)? = #isolation) -> Int {
+    guard let isolation else { return 0 }
+    return isolation === MainActor.shared ? 1 : 2
+}

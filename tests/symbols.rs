@@ -3,8 +3,16 @@
 use std::process::Command;
 
 /// Functions the C side defines and Rust calls.
-const C_DEFINED: [&str; 7] =
-    ["rs_entry_fn", "rs_context_size", "rs_job_metadata", "rs_run_job_fn", "rs_string_from_utf8", "rs_call_sync", "apus_swift_task_isCancelled"];
+const C_DEFINED: [&str; 8] = [
+    "rs_entry_fn",
+    "rs_context_size",
+    "rs_job_metadata",
+    "rs_run_job_fn",
+    "rs_string_from_utf8",
+    "rs_call_sync",
+    "apus_swift_task_isCancelled",
+    "apus_fill_isolation",
+];
 
 fn main() {
     // Make sure the boundary is linked in: the self-check runs on the first spawn.

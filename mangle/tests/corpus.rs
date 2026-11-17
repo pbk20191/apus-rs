@@ -130,6 +130,9 @@ const DECLARATIONS: &[&str] = &[
     "Probe.currentTaskBits() async -> Int",
     "Probe.scores() async -> [String: Int]",
     "Probe.describe(_: Bool, _: Int32, _: UInt64) async -> String",
+    // isolation
+    "Probe.withIsolation(_: Int, isolation: isolated (any Actor)? = #isolation) async -> Int",
+    "Probe.isolatedTo(_: isolated any Actor, _: Int) -> Int",
 ];
 
 fn compiled_symbols() -> HashSet<String> {

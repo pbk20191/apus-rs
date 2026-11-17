@@ -144,6 +144,9 @@ impl<R: SwiftRet> SwiftSyncCall<R> {
             return Err(CallError::InvalidArgument(why));
         }
         let mut ret = RetRegs::new();
+        // A sync call runs right here: on the main actor if this is a main task's poll.
+        let main_task = super::task::current().is_some_and(|task| task.main);
+        unsafe { apus_sys::apus_fill_isolation(&mut self.lowering.regs, main_task) };
         let kind = if self.indirect { KIND_INDIRECT } else if R::FLOAT { KIND_FLOATS } else { KIND_INTEGERS };
         unsafe {
             apus_sys::rs_call_sync(function, &self.lowering.regs, self.slot.address(), &mut ret.0, kind);

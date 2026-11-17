@@ -384,6 +384,9 @@ impl Mangler {
     fn parameters(&mut self, params: &[Param]) -> Result<(), String> {
         let element = |m: &mut Mangler, p: &Param| -> Result<(), String> {
             m.ty(&p.ty)?;
+            if p.isolated {
+                m.push("Yi");
+            }
             if p.inout {
                 m.push("z");
             }
@@ -535,7 +538,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
             }
             let params: Vec<Param> = params
                 .iter()
-                .map(|p| Param { label: p.label.clone(), ty: canonical(&p.ty, &same_types), inout: p.inout, variadic: p.variadic })
+                .map(|p| Param { label: p.label.clone(), ty: canonical(&p.ty, &same_types), inout: p.inout, variadic: p.variadic, isolated: p.isolated })
                 .collect();
             m.parameters(&params)?;
             if *is_async {
