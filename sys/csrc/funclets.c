@@ -1,5 +1,5 @@
 // Code the Swift runtime calls into: task entry, poll step, continuation resume point, Swift-call return,
-// child-task entry, cancellation handler. Rust calls the runtime's sync functions itself (src/swift/rt.rs);
+// child-task entry, cancellation handler. Rust calls the runtime's sync functions itself (sys/include/apus/abi.h);
 // only what needs swiftasynccall / swift_context lives here.
 //
 // Tail calls (checked with objdump -d on arm64): the task completion call, swift_continuation_await,
@@ -10,75 +10,50 @@
 // does with function_cast: the extra argument rides in swift_context and is ignored or supplied.
 #pragma clang diagnostic ignored "-Wcast-function-type-mismatch"
 
-// ---- runtime (include/swift/Runtime/Concurrency.h, Metadata.h) ----
-typedef struct { void *task; AsyncContext *initial_context; } AsyncTaskAndContext;
-typedef struct { const void *metadata; size_t state; } MetadataResponse;
-extern SWIFTCALL AsyncTaskAndContext swift_task_create_common(size_t flags, void *options, const void *result_type,
-                                                              void *function, void *closure_context, size_t size);
-extern SWIFTCALL MetadataResponse swift_getTupleTypeMetadata(size_t request, size_t flags, const void *const *elements,
-                                                             const char *labels, const void *proposed_witnesses);
-extern SWIFTCALL void *swift_continuation_init(ContinuationAsyncContext *ctx, size_t flags);
-extern SWIFTASYNCCALL void swift_continuation_await(ContinuationAsyncContext *ctx);
-extern SWIFTCALL void swift_continuation_resume(void *task);
-extern SWIFTCALL SerialExecutorRef swift_task_getMainExecutor(void);
-extern SWIFTASYNCCALL void swift_task_switch(ACTX AsyncContext *resume_ctx, TaskContinuationFunction *resume,
-                                             SerialExecutorRef executor);
-extern SWIFTCALL void *swift_task_alloc(size_t size);
-extern SWIFTCALL void swift_task_dealloc(void *ptr);
-typedef SWIFTCALL void CancelFn(SCTX void *);
-extern SWIFTCALL void *swift_task_addCancellationHandler(CancelFn *fn, void *ctx);
-extern SWIFTCALL void swift_task_removeCancellationHandler(void *record);
-extern SWIFTCALL void swift_taskGroup_initializeWithFlags(size_t flags, void *group, const void *T);
-extern SWIFTCALL void swift_taskGroup_destroy(void *group);
-extern SWIFTASYNCCALL void swift_taskGroup_waitAll(void *result, ACTX AsyncContext *caller, void *group, void *body_error,
-                                                   ThrowingContinuation *resume, AsyncContext *call_context);
+// Our initial task context. The runtime allocates it (initialContextSize) and fills `base`
+// (Parent = NULL, ResumeParent = completeTaskAndRelease); FutureAsyncContext is just AsyncContext.
+typedef struct __attribute__((aligned(16))) {
+  AsyncContext base;
+  ContinuationAsyncContext cont;      // reused at every suspension
+  void *rust;                         // Arc<Task> raw pointer (closure context, consumed)
+  void *cancel_record;
+  SerialExecutorRef executor;         // generic, or the main executor for MainActor tasks
+  uint64_t unused_result;
+  void *current_call;                 // call record of the in-flight same-Task Swift call
+  void *call_ret;                     // RetRegs of that call
+  bool group_initialized;
+  TaskFutureWaitAsyncContext wait;
+  void *group[NUM_WORDS_TASK_GROUP] __attribute__((aligned(16)));   // TaskGroup storage: NumWords_TaskGroup = 32 (ABI/MetadataValues.h)
+} RsTaskContext;
 
-// ---- Rust (src/swift/task.rs, call.rs) ----
-int  rs_poll(void *rust);                                                       // 1 = Ready
-int  rs_park(void *rust, void *continuation);                                   // 1 = parked, 0 = woken mid-poll
-void rs_finish(void *rust);
-void rs_cancelled(void *rust);
-bool rs_is_main(void *rust);
-int  rs_take_call(void *rust, const AsyncFunctionPointer **fn, CallRegs **regs, RetRegs **ret, void **record);  // 1 = run it in this Task
-int  rs_take_child(void *rust, void **record);                                  // 1 = run it as a child Task
-void rs_call_target(void *record, const AsyncFunctionPointer **fn, CallRegs **regs, RetRegs **ret);
-void rs_set_child(void *record, void *child_task);                              // +1 child task
-void rs_call_done(void *record);                                                // results are in the call's RetRegs
-
-// Flags (include/swift/ABI/MetadataValues.h).
-enum {
-  CONT_HAS_EXECUTOR_OVERRIDE = 1u << 1,     // AsyncContinuationFlags
-  GROUP_DISCARD_RESULTS = 1u << 8,          // TaskGroupFlags::TaskGroup_DiscardResults
-  CREATE_IS_CHILD_TASK = 1u << 8,           // TaskCreateFlags
-  CREATE_ENQUEUE_JOB = 1u << 12,
-  CREATE_ADD_PENDING_GROUP_TASK_UNCONDITIONALLY = 1u << 13,
-  CREATE_IS_DISCARDING_TASK = 1u << 14,
-  CREATE_IS_TASK_FUNCTION_CONSUMED = 1u << 15,
-  OPTION_KIND_TASK_GROUP = 1,               // TaskOptionRecordKind::TaskGroup
-};
+typedef struct __attribute__((aligned(16))) {
+  AsyncContext base;
+  void *record;
+  void *ret;                          // RetRegs of the child's call
+} ChildContext;
 
 // Metadata for (). Not `$sytN`: that symbol is the full metadata (prefix included) and IRGen adds the
 // address-point offset itself; passing it directly crashes swift_task_create_common.
 static const void *empty_tuple_metadata(void) { return swift_getTupleTypeMetadata(0, 0, NULL, NULL, NULL).metadata; }
 
-typedef SWIFTASYNCCALL void CompleteFn(ACTX AsyncContext *, SCTX void *error);
+typedef APUS_SWIFTASYNCCALL void CompleteFn(APUS_ASYNC_CONTEXT AsyncContext *, APUS_SWIFT_CONTEXT void *error);
 
-static SWIFTCALL void on_cancel(SCTX void *rust) { rs_cancelled(rust); }
+static APUS_SWIFTCALL void on_cancel(APUS_SWIFT_CONTEXT void *rust) { rs_cancelled(rust); }
 
-static SWIFTASYNCCALL void step(ACTX AsyncContext *ctx);
+static APUS_SWIFTASYNCCALL void step(APUS_ASYNC_CONTEXT AsyncContext *ctx);
 
-static SWIFTASYNCCALL void resume_point(ACTX AsyncContext *cont) {
+static APUS_SWIFTASYNCCALL void resume_point(APUS_ASYNC_CONTEXT AsyncContext *cont) {
   return step(cont->parent);                 // cont->parent is our RsTaskContext
 }
 
-static SWIFTASYNCCALL void finish(ACTX AsyncContext *ctx) {
+static APUS_SWIFTASYNCCALL void finish(APUS_ASYNC_CONTEXT AsyncContext *ctx) {
   RsTaskContext *c = (RsTaskContext *)ctx;
   swift_task_removeCancellationHandler(c->cancel_record);
   rs_finish(c->rust);
   return ((CompleteFn *)c->base.resume_parent)(&c->base, NULL);   // completeTaskAndRelease(ctx, error: nil)
 }
 
-static SWIFTASYNCCALL void after_wait_all(ACTX AsyncContext *ctx, SCTX void *error) {
+static APUS_SWIFTASYNCCALL void after_wait_all(APUS_ASYNC_CONTEXT AsyncContext *ctx, APUS_SWIFT_CONTEXT void *error) {
   RsTaskContext *c = (RsTaskContext *)ctx;
   swift_taskGroup_destroy(c->group);
   c->group_initialized = false;
@@ -100,9 +75,9 @@ static void store_results(RetRegs *ret, uint64_t r0, uint64_t r1, uint64_t r2, u
 }
 
 // A same-Task call returns here: ResumeParent(direct results..., callee context, error).
-static SWIFTASYNCCALL void after_call(uint64_t r0, uint64_t r1, uint64_t r2, uint64_t r3,
+static APUS_SWIFTASYNCCALL void after_call(uint64_t r0, uint64_t r1, uint64_t r2, uint64_t r3,
                                       double f0, double f1, double f2, double f3,
-                                      ACTX AsyncContext *callee, SCTX void *error) {
+                                      APUS_ASYNC_CONTEXT AsyncContext *callee, APUS_SWIFT_CONTEXT void *error) {
   AsyncContext *ctx = callee->parent;
   swift_task_dealloc(callee);
   RsTaskContext *c = (RsTaskContext *)ctx;
@@ -116,9 +91,9 @@ static SWIFTASYNCCALL void after_call(uint64_t r0, uint64_t r1, uint64_t r2, uin
 }
 
 // ---- child Tasks: a discarding TaskGroup, like `async let` / `withDiscardingTaskGroup` ----
-static SWIFTASYNCCALL void child_after(uint64_t r0, uint64_t r1, uint64_t r2, uint64_t r3,
+static APUS_SWIFTASYNCCALL void child_after(uint64_t r0, uint64_t r1, uint64_t r2, uint64_t r3,
                                        double f0, double f1, double f2, double f3,
-                                       ACTX AsyncContext *callee, SCTX void *error) {
+                                       APUS_ASYNC_CONTEXT AsyncContext *callee, APUS_SWIFT_CONTEXT void *error) {
   ChildContext *k = (ChildContext *)callee->parent;
   swift_task_dealloc(callee);
   store_results(k->ret, r0, r1, r2, r3, f0, f1, f2, f3, error);
@@ -127,7 +102,7 @@ static SWIFTASYNCCALL void child_after(uint64_t r0, uint64_t r1, uint64_t r2, ui
 }
 
 // AsyncVoidClosureEntryPoint: discarding children start through the runtime's non_future_adapter.
-static SWIFTASYNCCALL void child_entry(ACTX AsyncContext *ctx, SCTX void *record) {
+static APUS_SWIFTASYNCCALL void child_entry(APUS_ASYNC_CONTEXT AsyncContext *ctx, APUS_SWIFT_CONTEXT void *record) {
   ChildContext *k = (ChildContext *)ctx;
   k->record = record;
   const AsyncFunctionPointer *fn;
@@ -154,7 +129,7 @@ static void spawn_child(RsTaskContext *c, void *record) {
   rs_set_child(record, child.task);
 }
 
-static SWIFTASYNCCALL void step(ACTX AsyncContext *ctx) {
+static APUS_SWIFTASYNCCALL void step(APUS_ASYNC_CONTEXT AsyncContext *ctx) {
   RsTaskContext *c = (RsTaskContext *)ctx;
   if (rs_poll(c->rust)) {
     if (c->group_initialized)   // structured concurrency: the parent never completes before its children
@@ -186,7 +161,7 @@ static SWIFTASYNCCALL void step(ACTX AsyncContext *ctx) {
 }
 
 // AsyncGenericClosureEntryPoint: (indirect result, context, closure context). The result type is (): nothing to write.
-static SWIFTASYNCCALL void entry(void *indirect_result, ACTX AsyncContext *ctx, SCTX void *rust) {
+static APUS_SWIFTASYNCCALL void entry(void *indirect_result, APUS_ASYNC_CONTEXT AsyncContext *ctx, APUS_SWIFT_CONTEXT void *rust) {
   RsTaskContext *c = (RsTaskContext *)ctx;
   c->rust = rust;
   c->current_call = NULL;
@@ -203,10 +178,8 @@ size_t rs_context_size(void) { return sizeof(RsTaskContext); }
 // Job header: include/swift/ABI/Task.h (class Job). Metadata shape: FullMetadata<DispatchClassMetadata> as in
 // stdlib/public/Concurrency/Task.cpp (jobHeapMetadata, which is not exported): kind Job = 3 | NonType |
 // RuntimePrivate (ABI/MetadataKind.def), dispatchSwiftObjectType = 1, OpaqueObjC[3] on ObjC platforms.
-extern SWIFTCALL void swift_job_run(void *job, SerialExecutorRef executor);
-void rs_job_run(void *job);
 
-static SWIFTASYNCCALL void run_job(void *job) { rs_job_run(job); }
+static APUS_SWIFTASYNCCALL void run_job(void *job) { rs_job_run(job); }
 static void invoke_job(void *job, void *unused, uint32_t flags) {
   swift_job_run(job, (SerialExecutorRef){0, 0});   // SerialExecutorRef::generic()
 }
@@ -237,10 +210,9 @@ typedef struct { double f[4]; } Floats4;
 #define SYNC_ARGS(r) (r)->gpr[0], (r)->gpr[1], (r)->gpr[2], (r)->gpr[3], (r)->gpr[4], (r)->gpr[5], \
                      (r)->fpr[0], (r)->fpr[1], (r)->fpr[2], (r)->fpr[3], (r)->fpr[4], (r)->fpr[5], (r)->fpr[6], (r)->fpr[7]
 #endif
-#define SERR __attribute__((swift_error_result))
-typedef SWIFTCALL Ints4 SyncFnInts(SYNC_PARAMS, SCTX void *, SERR void **);
-typedef SWIFTCALL Floats4 SyncFnFloats(SYNC_PARAMS, SCTX void *, SERR void **);
-typedef SWIFTCALL void SyncFnIndirect(__attribute__((swift_indirect_result)) void *, SYNC_PARAMS, SCTX void *, SERR void **);
+typedef APUS_SWIFTCALL Ints4 SyncFnInts(SYNC_PARAMS, APUS_SWIFT_CONTEXT void *, APUS_SWIFT_ERROR void **);
+typedef APUS_SWIFTCALL Floats4 SyncFnFloats(SYNC_PARAMS, APUS_SWIFT_CONTEXT void *, APUS_SWIFT_ERROR void **);
+typedef APUS_SWIFTCALL void SyncFnIndirect(APUS_SWIFT_INDIRECT_RESULT void *, SYNC_PARAMS, APUS_SWIFT_CONTEXT void *, APUS_SWIFT_ERROR void **);
 
 // kind: 0 = integer results, 1 = floating-point results, 2 = indirect result at `indirect`
 void rs_call_sync(const void *fn, const CallRegs *r, void *indirect, RetRegs *ret, int kind) {
@@ -259,11 +231,8 @@ void rs_call_sync(const void *fn, const CallRegs *r, void *indirect, RetRegs *re
 
 // `String._fromUTF8Repairing(_: UnsafeBufferPointer<UInt8>) -> (result: String, repairsMade: Bool)`: copies the
 // bytes (any length, NUL bytes included). Three result registers, which only a swiftcall declaration can receive.
-typedef struct { uint64_t words[2]; uint8_t repairs_made; } StringAndFlag;
-extern SWIFTCALL StringAndFlag swift_string_from_utf8_repairing(const uint8_t *start, intptr_t count)
-    __asm__("_$sSS18_fromUTF8RepairingySS6result_Sb11repairsMadetSRys5UInt8VGFZ");
-void rs_string_from_utf8(const uint8_t *start, intptr_t count, uint64_t out[2]) {
+void rs_string_from_utf8(const uint8_t *start, intptr_t count, SwiftString *out) {
   StringAndFlag s = swift_string_from_utf8_repairing(start, count);
-  out[0] = s.words[0];
-  out[1] = s.words[1];
+  out->words[0] = s.words[0];
+  out->words[1] = s.words[1];
 }

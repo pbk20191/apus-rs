@@ -13,3 +13,10 @@ macos15 = []
 
 [build-dependencies]
 cc = "1"
+
+[dev-dependencies]
+clang-sys = { version = "1.9", features = ["runtime", "clang_12_0"] }
+
+[[test]]
+name = "lowering"
+harness = false

@@ -32,6 +32,7 @@ fn main() {
     let include = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("include");
     cc::Build::new()
         .file("csrc/funclets.c")
+        .file("csrc/thunks.c")
         .include(&include)
         .opt_level(2)
         .warnings(true)
