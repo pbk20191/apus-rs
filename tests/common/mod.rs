@@ -94,3 +94,9 @@ pub async fn join2<A, B>(a: impl Future<Output = A>, b: impl Future<Output = B>)
     })
     .await
 }
+
+/// Polls a very long sleep once: it must be pending (and arm nothing that fires early), not panic.
+pub fn pending_after_one_poll<S: Future<Output = ()>>(sleep: S) -> bool {
+    let mut sleep = pin!(sleep);
+    sleep.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending()
+}

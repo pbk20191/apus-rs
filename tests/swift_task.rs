@@ -11,7 +11,7 @@ use std::time::Instant;
 use apus::{JoinError, Priority, SpawnOptions};
 use common::{block, check, Failed, Trial};
 use probe::*;
-use std::future::poll_fn;
+use std::future::{poll_fn, Future};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
@@ -223,9 +223,27 @@ fn preferred_executor_is_optional() -> Result<(), Failed> {
     check(apus::__sys::optional::swift_task_getPreferredTaskExecutor().is_some(), "macOS 15+ runtime")
 }
 
+/// Polling a handle again after it gave its result is a bug in the caller, reported as on the dispatch backend.
+fn handle_polled_after_completion_panics() -> Result<(), Failed> {
+    let mut h = spawn(async { 1 });
+    check(matches!(block(&mut h), Ok(1)), "first poll")?;
+    let again = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        std::pin::Pin::new(&mut h).poll(&mut std::task::Context::from_waker(Waker::noop()))
+    }));
+    check(again.is_err(), "a second result instead of a panic")
+}
+
+/// A sleep past what `Instant` can hold never ends, and never panics.
+fn endless_sleep() -> Result<(), Failed> {
+    check(common::pending_after_one_poll(sleep(Duration::MAX)), "Duration::MAX")?;
+    check(common::pending_after_one_poll(sleep(Duration::from_secs(u64::MAX / 2))), "u64::MAX / 2 seconds")
+}
+
 fn main() {
     common::run(vec![
         Trial::test("sleep_wakes_latest_waker", sleep_wakes_latest_waker),
+        Trial::test("endless_sleep", endless_sleep),
+        Trial::test("handle_polled_after_completion_panics", handle_polled_after_completion_panics),
         Trial::test("preferred_executor_is_optional", preferred_executor_is_optional),
         Trial::test("abort_with_panicking_drop", abort_with_panicking_drop),
         Trial::test("task_is_swift_task", task_is_swift_task),

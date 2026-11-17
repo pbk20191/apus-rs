@@ -22,7 +22,7 @@ fn main() {
     }
     std::thread::spawn(|| {
         std::thread::sleep(Duration::from_secs(5));
-        eprintln!("run_main_returns_when_finished_inside_a_nested_run_loop ... FAILED: hung");
+        eprintln!("swift_run_main ... FAILED: hung");
         std::process::exit(2);
     });
     let mut context = CFRunLoopSourceContext {
@@ -43,4 +43,9 @@ fn main() {
     let took = started.elapsed();
     assert!(took >= Duration::from_millis(450) && took < Duration::from_secs(2), "took {took:?}");
     println!("run_main_returns_when_finished_inside_a_nested_run_loop ... ok");
+
+    // Inside a main task the main queue is busy with that task, so a nested run_main could never run its own.
+    let refused = run_main(async { std::panic::catch_unwind(|| run_main(async { 1 })).is_err() });
+    assert!(refused, "nested run_main returned");
+    println!("nested_run_main_panics ... ok");
 }

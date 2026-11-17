@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use common::{block, check, join2, Failed, Trial};
 use probe::*;
 use std::future::Future;
-use std::pin::pin;
+use std::pin::{pin, Pin};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
@@ -28,6 +28,18 @@ fn same_task_identity() -> Result<(), Failed> {
     }))
     .unwrap();
     check(r.0 == r.1, format!("caller 0x{:x}, closure saw 0x{:x}", r.0, r.1))
+}
+
+/// A call polled once in a task that then returns it (before running it) runs when another task awaits it.
+fn call_moved_out_of_its_task() -> Result<(), Failed> {
+    let pending = block(spawn(async {
+        let mut c = call(unsafe { probe_closure_sleep(10) });
+        poll_fn(|cx| Poll::Ready(Pin::new(&mut c).poll(cx).is_pending())).await.then_some(c)
+    }))
+    .unwrap()
+    .expect("pending after one poll");
+    let r = common::block_with_timeout(spawn(async move { pending.await.map(|v| v.downcast::<String>()) }), Duration::from_secs(2));
+    check(matches!(&r, Some(Ok(Ok(Some(_))))), format!("got {r:?}"))
 }
 
 fn result_and_error() -> Result<(), Failed> {
@@ -185,6 +197,7 @@ fn main() {
     common::run(vec![
         Trial::test("same_task_identity", same_task_identity),
         Trial::test("result_and_error", result_and_error),
+        Trial::test("call_moved_out_of_its_task", call_moved_out_of_its_task),
         Trial::test("cancel_mid_call", cancel_mid_call),
         Trial::test("no_current_task", no_current_task),
         Trial::test("dropped_swift_async_releases_context", dropped_swift_async_releases_context),

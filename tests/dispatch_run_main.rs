@@ -12,4 +12,14 @@ fn main() {
     assert!(before && after, "run_main future left the main thread: {before} {after}");
     assert_eq!(run_main(async { 41 + 1 }), 42, "run_main is reusable");
     println!("run_main_returns_on_main ... ok");
+
+    // Inside a main task the main queue is busy with that task, so a nested run_main could never run its own.
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_secs(5));
+        eprintln!("nested_run_main_panics ... FAILED: hung");
+        std::process::exit(2);
+    });
+    let refused = run_main(async { std::panic::catch_unwind(|| run_main(async { 1 })).is_err() });
+    assert!(refused, "nested run_main returned");
+    println!("nested_run_main_panics ... ok");
 }

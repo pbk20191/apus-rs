@@ -48,6 +48,8 @@ fn arm_timer(delay: Duration, slot: Arc<TimerSlot>) {
 
 /// Completes after `duration`.
 pub fn sleep(duration: Duration) -> Sleep {
+    // The timer is a Job the runtime runs: check the runtime first, even before any spawn.
+    super::selfcheck::ensure();
     Sleep::new(duration, arm_timer)
 }
 

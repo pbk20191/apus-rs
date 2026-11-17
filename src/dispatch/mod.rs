@@ -44,6 +44,12 @@ thread_local! {
     static IN_MAIN_TASK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// True while a main-queue task is being polled on this thread.
+#[allow(dead_code)] // used by run_main without the swift backend
+pub(crate) fn in_main_task() -> bool {
+    IN_MAIN_TASK.get()
+}
+
 extern "C" fn run_runnable(runnable: *mut c_void) {
     let runnable = unsafe { Runnable::<()>::from_raw(std::ptr::NonNull::new_unchecked(runnable.cast())) };
     // `Guarded` turns task panics into JoinError; this only keeps anything else from unwinding into libdispatch.

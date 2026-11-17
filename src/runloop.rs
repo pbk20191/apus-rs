@@ -97,6 +97,8 @@ where
     F::Output: 'static,
 {
     assert!(is_main_thread(), "run_main must be called on the main thread");
+    // The main queue runs one task at a time: inside a main task, the task run_main starts would never run.
+    assert!(!inside_main_task(), "run_main called inside a main task: await the future instead");
     let run_loop = CFRunLoop::main().expect("no main run loop");
     let mode = unsafe { kCFRunLoopDefaultMode };
     let state = Arc::new(MainLoopWaker { source: OnceLock::new(), run_loop: run_loop.clone() });
@@ -150,6 +152,17 @@ where
         Err(crate::JoinError::Panicked(payload)) => std::panic::resume_unwind(payload),
         Err(crate::JoinError::Aborted) => unreachable!("run_main task cannot be aborted"),
     }
+}
+
+/// Whether a task is running on this (main) thread right now: then it is a main task.
+#[cfg(feature = "swift")]
+fn inside_main_task() -> bool {
+    !unsafe { crate::swift::rt::swift_task_getCurrent() }.is_null()
+}
+
+#[cfg(all(feature = "dispatch", not(feature = "swift")))]
+fn inside_main_task() -> bool {
+    crate::dispatch::in_main_task()
 }
 
 #[cfg(feature = "swift")]

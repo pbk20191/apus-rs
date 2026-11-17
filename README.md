@@ -286,6 +286,10 @@ branch can win: there is no way to know in advance that another branch will wake
 
 Don't block inside tasks: the Swift cooperative pool does not grow to compensate.
 
+A panic in a task's future is caught (`JoinError::Panicked`). A panic that starts inside a Swift callback cannot
+unwind through Swift and aborts the process: a `Waker::wake` that panics when a Swift call completes or a task is
+cancelled, or the `Drop` of an abandoned call's result.
+
 ## Passing Rust closures to Swift
 
 A Swift parameter of function type takes a `SwiftClosure`: a Rust closure as a Swift closure value, which Swift may

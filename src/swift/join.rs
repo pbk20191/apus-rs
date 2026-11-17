@@ -11,12 +11,13 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
 pub(crate) struct JoinState<T> {
-    value: Mutex<(Option<Result<T, JoinError>>, Option<Waker>)>,
+    /// The result, the waker of the last poll, and whether the result was already handed out.
+    value: Mutex<(Option<Result<T, JoinError>>, Option<Waker>, bool)>,
 }
 
 impl<T> JoinState<T> {
     pub(crate) fn new() -> Arc<Self> {
-        Arc::new(JoinState { value: Mutex::new((None, None)) })
+        Arc::new(JoinState { value: Mutex::new((None, None, false)) })
     }
 
     pub(crate) fn complete(&self, result: Result<T, JoinError>) {
@@ -64,8 +65,12 @@ impl<T> Future for JoinHandle<T> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut g = self.state.value.lock().unwrap();
+        assert!(!g.2, "JoinHandle polled after completion");
         match g.0.take() {
-            Some(result) => Poll::Ready(result),
+            Some(result) => {
+                g.2 = true;
+                Poll::Ready(result)
+            }
             None => {
                 g.1 = Some(cx.waker().clone());
                 Poll::Pending

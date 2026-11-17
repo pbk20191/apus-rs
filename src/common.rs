@@ -162,16 +162,21 @@ impl TimerSlot {
     }
 }
 
+/// The longest delay a timer is armed for (about 136 years, well inside both backends' signed nanoseconds); a
+/// longer sleep re-arms when it fires.
+const LONGEST_ARM: std::time::Duration = std::time::Duration::from_secs(u32::MAX as u64);
+
 /// Completes at a deadline. `arm` schedules `TimerSlot::fire` after a delay (backend-specific).
 pub struct Sleep {
-    deadline: std::time::Instant,
+    /// `None`: later than `Instant` can hold, so never.
+    deadline: Option<std::time::Instant>,
     slot: Option<Arc<TimerSlot>>,
     arm: fn(std::time::Duration, Arc<TimerSlot>),
 }
 
 impl Sleep {
     pub(crate) fn new(duration: std::time::Duration, arm: fn(std::time::Duration, Arc<TimerSlot>)) -> Sleep {
-        Sleep { deadline: std::time::Instant::now() + duration, slot: None, arm }
+        Sleep { deadline: std::time::Instant::now().checked_add(duration), slot: None, arm }
     }
 }
 
@@ -179,7 +184,8 @@ impl Future for Sleep {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let left = self.deadline.saturating_duration_since(std::time::Instant::now());
+        let Some(deadline) = self.deadline else { return Poll::Pending };
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
         if left.is_zero() {
             return Poll::Ready(());
         }
@@ -188,7 +194,7 @@ impl Future for Sleep {
         *slot.waker.lock().unwrap() = Some(cx.waker().clone());
         // Not armed yet, or the timer fired before the deadline: (re-)arm for the time that is left.
         if slot.fired.swap(false, Ordering::SeqCst) {
-            arm(left, slot.clone());
+            arm(left.min(LONGEST_ARM), slot.clone());
         }
         Poll::Pending
     }

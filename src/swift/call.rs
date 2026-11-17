@@ -474,12 +474,19 @@ impl<R: SwiftRet> Future for SwiftCall<R> {
             }
         }
         *self.shared.waker.lock().unwrap() = Some(cx.waker().clone());
-        if self.registered {
-            return Poll::Pending;
+        if self.registered && !matches!(*self.shared.state.lock().unwrap(), CallState::Registered) {
+            return Poll::Pending; // running: the waker above hears when it is done
         }
         let Some(t) = task::current() else { return Poll::Ready(Err(CallError::NoCurrentTask)) };
+        // Still waiting to run: the task it was registered in may have finished without running it (the call
+        // was returned out of it), so it registers in this task unless it is there already. Whichever task takes
+        // it first runs it.
+        let mut calls = t.calls.lock().unwrap();
+        if !calls.iter().any(|c| Arc::ptr_eq(c, &self.shared)) {
+            calls.push(self.shared.clone());
+        }
+        drop(calls);
         self.registered = true;
-        t.calls.lock().unwrap().push(self.shared.clone());
         Poll::Pending
     }
 }

@@ -124,9 +124,16 @@ fn sleep_wakes_latest_waker() -> Result<(), Failed> {
     check(common::latest_waker_woken(sleep(Duration::from_millis(30))), "the waker from the latest poll was never woken")
 }
 
+/// A sleep past what `Instant` can hold never ends, and never panics.
+fn endless_sleep() -> Result<(), Failed> {
+    check(common::pending_after_one_poll(sleep(Duration::MAX)), "Duration::MAX")?;
+    check(common::pending_after_one_poll(sleep(Duration::from_secs(u64::MAX / 2))), "u64::MAX / 2 seconds")
+}
+
 fn main() {
     common::run(vec![
         Trial::test("sleep_wakes_latest_waker", sleep_wakes_latest_waker),
+        Trial::test("endless_sleep", endless_sleep),
         Trial::test("abort_with_panicking_drop", abort_with_panicking_drop),
         Trial::test("spawn_returns_value", spawn_returns_value),
         Trial::test("ten_thousand_sleeps_overlap", ten_thousand_sleeps_overlap),
