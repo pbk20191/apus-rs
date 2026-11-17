@@ -256,3 +256,29 @@ public struct TypedFailing: AsyncSequence {
     let isolation = #isolation
     return isolation.map { $0 === MainActor.shared } ?? false
 }
+
+// A hop call abandoned mid-flight (tests/swift_isolation.rs): the actor's last reference is the call's. Its deinit must
+// run after the Task has left the actor's executor, never inside one of its jobs.
+public final class FlaggingExecutor: SerialExecutor, @unchecked Sendable {
+    let queue = DispatchQueue(label: "probe.flagging")
+    nonisolated(unsafe) static var inJob = false
+    public func enqueue(_ job: consuming ExecutorJob) {
+        let job = UnownedJob(job)
+        queue.async {
+            FlaggingExecutor.inJob = true
+            job.runSynchronously(on: self.asUnownedSerialExecutor())
+            FlaggingExecutor.inJob = false
+        }
+    }
+    public func asUnownedSerialExecutor() -> UnownedSerialExecutor { UnownedSerialExecutor(ordinary: self) }
+}
+nonisolated(unsafe) var slowDeinitInJob = -1   // -1: not deinitialized yet, 1: inside a job, 0: outside
+public actor Slow {
+    nonisolated let executor = FlaggingExecutor()
+    public nonisolated var unownedExecutor: UnownedSerialExecutor { executor.asUnownedSerialExecutor() }
+    public init() {}
+    deinit { slowDeinitInJob = FlaggingExecutor.inJob ? 1 : 0 }
+    @inline(never) public func nap(ms: Int) -> Int { usleep(UInt32(ms) * 1000); return ms }
+}
+@inline(never) public func makeSlow() -> Slow { Slow() }
+@inline(never) public func slowDeinitState() -> Int { slowDeinitInJob }

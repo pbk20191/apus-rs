@@ -102,6 +102,18 @@ pub fn typed_throws(declaration: &str) -> Result<bool, Error> {
     }
 }
 
+/// Refuses declarations apus would call with the wrong arguments: an `isolated` parameter of a type other than
+/// `(any Actor)?` (apus passes nil outside the main actor, which a non-optional actor parameter cannot hold).
+pub fn check_callable(declaration: &str) -> Result<(), Error> {
+    let decl = parse::parse(declaration).map_err(Error)?;
+    if let ast::Signature::Function { params, .. } = &decl.signature {
+        if params.iter().any(|p| p.isolated && !matches!(p.ty, ast::Ty::Optional(_))) {
+            return Err(Error("only `isolated (any Actor)?` parameters are supported: apus passes nil where the call is not on the main actor".into()));
+        }
+    }
+    Ok(())
+}
+
 /// Whether the declaration is `nonisolated(nonsending)`: apus passes the caller's isolation as a hidden first argument.
 /// Only the declaration can say so; the symbol is the same as a plain async function's.
 pub fn nonsending(declaration: &str) -> Result<bool, Error> {
@@ -123,6 +135,14 @@ mod isolation_tests {
         assert_eq!(of("@MainActor M.onMain() -> Bool"), Isolation::MainActor);
         assert_eq!(of("@MainActor M.onMain() async -> Bool"), Isolation::None);
         assert_eq!(of("M.Counter(class).bump(by: Int) -> Int"), Isolation::None);
+    }
+
+    #[test]
+    fn only_optional_isolated_parameters_are_callable() {
+        use super::check_callable;
+        assert!(check_callable("M.f(_: Int, isolation: isolated (any Actor)? = #isolation) async -> Int").is_ok());
+        let error = check_callable("M.f(_: isolated any Actor, _: Int) -> Int").unwrap_err().to_string();
+        assert!(error.contains("isolated (any Actor)?"), "{error}");
     }
 
     #[test]

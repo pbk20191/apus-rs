@@ -36,6 +36,13 @@ apus::swift! {
     #[swift_linked = "nonisolated(nonsending) Probe.inheritsMain() async -> Bool"]
     async fn inherits_main() -> bool;
 
+    #[swift_linked = "Probe.makeSlow() -> Slow(actor)"]
+    fn make_slow() -> SwiftObject;
+    #[swift_linked = "Probe.Slow(actor).nap(ms: Int) -> Int"]
+    async fn nap(self: &SwiftObject, ms: i64) -> i64;
+    #[swift_linked = "Probe.slowDeinitState() -> Int"]
+    fn slow_deinit_state() -> i64;
+
     #[swift_linked = "Probe.makeBoom(code: Int) -> Boom(struct)"]
     fn make_boom(code: i64) -> SwiftValue;
     #[swift_linked = "Probe.errorCode<E: Error>(_: E) -> Int"]
@@ -53,6 +60,21 @@ fn nonsending_functions() -> Result<(), Failed> {
     check(plain == (42, false), format!("plain task: {plain:?}"))?;
     let main = block(spawn_on_main(async { (inherits(41).await.unwrap(), inherits_main().await.unwrap()) })).unwrap();
     check(main == (42, true), format!("main task: {main:?}"))
+}
+
+/// A hop call given up while its child Task is on the actor (the timeout drops it) holds the actor's last reference.
+/// It must be released only after the Task has left the actor's executor: the actor is freed outside its jobs.
+fn abandoned_hop_releases_after_leaving() -> Result<(), Failed> {
+    block(spawn(async {
+        let slow = make_slow().unwrap();
+        let result = apus::swift::timeout(std::time::Duration::from_millis(5), nap(&slow, 100)).await;
+        assert!(result.is_none(), "the nap outlasts the timeout");
+        drop(slow); // now only the abandoned call holds the actor
+        apus::swift::sleep(std::time::Duration::from_millis(300)).await;
+    }))
+    .unwrap();
+    let state = slow_deinit_state().unwrap();
+    check(state == 0, format!("deinit state {state} (1: freed inside the actor's job, -1: never freed)"))
 }
 
 static ERROR: SwiftProtocol = SwiftProtocol::new("$ss5ErrorMp");
@@ -123,5 +145,6 @@ fn main() {
         Trial::test("isolated_sync_members", isolated_sync_members),
         Trial::test("typed_throws_generic", typed_throws_generic),
         Trial::test("nonsending_functions", nonsending_functions),
+        Trial::test("abandoned_hop_releases_after_leaving", abandoned_hop_releases_after_leaving),
     ]);
 }

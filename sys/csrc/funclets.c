@@ -109,14 +109,21 @@ static APUS_SWIFTASYNCCALL void after_call(uint64_t r0, uint64_t r1, uint64_t r2
   return step(ctx);
 }
 
+// A hopping same-Task call, back on the Task's own executor: only now may the call record go (it can hold the
+// actor's last reference, which must not be released while the Task is still on that actor).
+static APUS_SWIFTASYNCCALL void after_hop(APUS_ASYNC_CONTEXT AsyncContext *ctx) {
+  RsTaskContext *c = (RsTaskContext *)ctx;
+  void *record = c->current_call;
+  c->current_call = NULL;
+  rs_call_done(record);
+  return step(ctx);
+}
+
 // A hopping same-Task call: now on the target executor, call, then hop back to the Task's own executor.
 static APUS_SWIFTASYNCCALL void hop_run(APUS_ASYNC_CONTEXT AsyncContext *ctx) {
   RsTaskContext *c = (RsTaskContext *)ctx;
   rs_call_sync(c->hop.function, c->hop_regs, c->hop.indirect, c->call_ret, c->hop.kind);
-  void *record = c->current_call;
-  c->current_call = NULL;
-  rs_call_done(record);
-  return swift_task_switch(ctx, step, c->executor);   // the main executor, or the generic one (0, 0)
+  return swift_task_switch(ctx, after_hop, c->executor);   // the main executor, or the generic one (0, 0)
 }
 
 // ---- child Tasks: a discarding TaskGroup, like `async let` / `withDiscardingTaskGroup` ----
@@ -130,8 +137,10 @@ static APUS_SWIFTASYNCCALL void child_after(uint64_t r0, uint64_t r1, uint64_t r
   return ((ThrowingContinuation *)k->base.resume_parent)(&k->base, NULL);
 }
 
+// Back on the generic executor: the record may go now (see after_hop), then the child completes.
 static APUS_SWIFTASYNCCALL void child_finish(APUS_ASYNC_CONTEXT AsyncContext *ctx) {
   ChildContext *k = (ChildContext *)ctx;
+  rs_call_done(k->record);
   return ((ThrowingContinuation *)k->base.resume_parent)(&k->base, NULL);
 }
 
@@ -139,7 +148,6 @@ static APUS_SWIFTASYNCCALL void child_finish(APUS_ASYNC_CONTEXT AsyncContext *ct
 static APUS_SWIFTASYNCCALL void child_hop_run(APUS_ASYNC_CONTEXT AsyncContext *ctx) {
   ChildContext *k = (ChildContext *)ctx;
   rs_call_sync(k->hop.function, k->hop_regs, k->hop.indirect, k->ret, k->hop.kind);
-  rs_call_done(k->record);
   return swift_task_switch(ctx, child_finish, (SerialExecutorRef){0, 0});
 }
 

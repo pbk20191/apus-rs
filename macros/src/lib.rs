@@ -115,8 +115,28 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         },
         _ => None,
     };
+    // The Rust signature's `ErrorSlot` argument (an identifier anywhere in its groups).
+    fn mentions(stream: TokenStream, name: &str) -> bool {
+        stream.into_iter().any(|t| match t {
+            TokenTree::Ident(i) => i.to_string() == name,
+            TokenTree::Group(g) => mentions(g.stream(), name),
+            _ => false,
+        })
+    }
+    let rust_error_slot = tail.iter().any(|t| matches!(t, TokenTree::Group(g) if mentions(g.stream(), "ErrorSlot")));
     if let ("declared", Some(declaration)) = (how.to_string().as_str(), &declaration_text) {
+        if let Err(error) = apus_mangle::check_callable(declaration) {
+            return item_compile_error(&format!("`{declaration}`: {error}"));
+        }
         match apus_mangle::typed_throws(declaration) {
+            Ok(true) if !rust_error_slot => {
+                return item_compile_error(&format!(
+                    "`{declaration}` has typed throws: pass an `ErrorSlot` argument after its generic arguments, where the callee writes its error"
+                ))
+            }
+            Ok(false) if rust_error_slot => {
+                return item_compile_error(&format!("`{declaration}` has no typed throws: it takes no `ErrorSlot`"))
+            }
             Ok(true) if rust_throws => {
                 return item_compile_error(&format!(
                     "`{declaration}` has typed throws: declare it without `throws` and pass an `ErrorSlot` after its generic arguments; its error comes back as `CallError::Typed`"

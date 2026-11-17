@@ -323,7 +323,8 @@ The test probes need macOS 14 (`MainActor.assumeIsolated`). This repository sets
 
 ## Isolation and actors
 
-- **`isolated` parameters (`#isolation`)**: declare the parameter in Rust as `apus::swift::Isolation` and pass
+- **`isolated` parameters (`#isolation`)**: only `isolated (any Actor)?` (apus passes nil off the main actor). Declare
+  the parameter in Rust as `apus::swift::Isolation` and pass
   `Isolation::current()`. It is decided when the call runs: the main actor when the call runs in a main task
   (`spawn_on_main`, `run_main`), nil in a plain task and in a child Task (`.child()`, `join!`), like Swift's `async let`.
   It never names another actor.
@@ -339,7 +340,7 @@ The test probes need macOS 14 (`MainActor.assumeIsolated`). This repository sets
   }
   ```
 - **Typed throws**: only a generic or associated error type (`throws(E)`): pass an `ErrorSlot::of(E's type)` after the
-  generic arguments and declare no `throws` in Rust; a thrown error is `CallError::Typed(SwiftValue)`. A concrete error
+  generic arguments (`swift!` requires it, and refuses it elsewhere) and declare no `throws` in Rust; a thrown error is `CallError::Typed(SwiftValue)`. A concrete error
   type is refused: whether its error comes back in registers or through a slot depends on its layout.
 - **`nonisolated(nonsending)`**: write it in the declaration; apus passes the caller's isolation as the hidden first
   argument. **The symbol is the same as a plain async function's**: a declaration without the attribute calls such a
