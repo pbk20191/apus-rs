@@ -407,12 +407,13 @@ impl<R> SwiftCall<R> {
             self.invalid.get_or_insert(CallError::InvalidArgument("too many integer arguments for the argument registers"));
             return self;
         }
+        let copy = opened.copy();
         let regs = call.regs.get_mut();
-        regs.self_ = opened.value();
+        regs.self_ = copy.as_ptr();
         regs.gpr[call.next_int] = opened.ty().as_ptr() as u64;
         regs.gpr[call.next_int + 1] = opened.witness().0 as u64;
         call.next_int += 2;
-        call.owned.push(Owned::Shared(opened.keep_alive()));
+        call.owned.push(Owned::Value(copy));
         self
     }
 

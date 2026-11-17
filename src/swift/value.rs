@@ -319,19 +319,18 @@ impl<T: IntoSwift> IntoSwift for Vec<T> {
 
 /// An `any P` value opened: its value's address, its dynamic type and the witness table of `P`, as Swift has them
 /// inside an existential. Made by [`SwiftValue::open`]; a receiver (`self: &Opened`) for `P`'s requirements, which
-/// are called through their dispatch thunks.
+/// are called through their dispatch thunks. Like a `&SwiftValue` receiver, each call gets its own copy of the value:
+/// a `mutating` requirement changes that copy, never this value or the one it was opened from.
 pub struct Opened {
     value: *mut c_void,
     ty: SwiftType,
     witness: WitnessTable,
-    /// The existential it was opened from (a copy), which owns the value; calls on it hold it too.
-    container: std::sync::Arc<KeepAlive>,
+    /// The existential it was opened from (a copy), which owns the value (a box may be shared with the original).
+    #[allow(dead_code)]
+    container: SwiftValue,
 }
 
-/// A value a call only keeps alive (never touches), so sharing it across threads is fine.
-pub(crate) struct KeepAlive(#[allow(dead_code)] SwiftValue);
-unsafe impl Sync for KeepAlive {}
-
+// Calls only copy the value (Swift copies with atomic reference counting), so they may run on several threads.
 unsafe impl Send for Opened {}
 unsafe impl Sync for Opened {}
 
@@ -341,16 +340,17 @@ impl Opened {
         self.ty
     }
 
-    pub(crate) fn value(&self) -> *mut c_void {
-        self.value
-    }
-
     pub(crate) fn witness(&self) -> WitnessTable {
         self.witness
     }
 
-    pub(crate) fn keep_alive(&self) -> std::sync::Arc<KeepAlive> {
-        self.container.clone()
+    /// A copy of the value, of its dynamic type: what a call works on.
+    pub(crate) fn copy(&self) -> SwiftValue {
+        let storage = UninitValue::new(self.ty);
+        unsafe {
+            (rt::value_witnesses(self.ty.0).initialize_with_copy.unwrap())(storage.ptr.as_ptr().cast(), self.value, self.ty.0);
+            storage.assume_init()
+        }
     }
 }
 
@@ -383,7 +383,7 @@ impl SwiftValue {
             } else {
                 container.as_ptr()
             };
-            Some(Opened { value, ty, witness, container: std::sync::Arc::new(KeepAlive(container)) })
+            Some(Opened { value, ty, witness, container })
         }
     }
 }

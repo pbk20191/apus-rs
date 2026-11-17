@@ -118,10 +118,11 @@ impl<R> SwiftSyncCall<R> {
     /// Calls a protocol requirement on an opened `any P`: the value's address is `self`, and the dynamic type and
     /// the witness table follow the arguments.
     pub fn on_opened(mut self, opened: &super::value::Opened) -> Self {
-        self.lowering.regs.self_ = opened.value();
+        let copy = opened.copy();
+        self.lowering.regs.self_ = copy.as_ptr();
         self.lowering.int(opened.ty().as_ptr() as u64);
         self.lowering.int(opened.witness().0 as u64);
-        self.lowering.owned.push(Owned::Shared(opened.keep_alive())); // `.hop()` runs the call later
+        self.lowering.owned.push(Owned::Value(copy)); // `.hop()` runs the call later
         self
     }
 

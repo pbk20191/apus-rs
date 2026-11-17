@@ -152,7 +152,10 @@ the standard library spelled out:
   arguments follow the kind: `Box(struct)<Int>`.
 - Members of generic types name the type's parameters, with the type's own constraints:
   `Shop.Box(struct)<T>.get() -> T?`, `Swift.Array<Element>.first: Element? { get }`, `Keyed(struct)<K: Hashable>`.
-- Protocol members: `Shop.Shape(protocol).area() -> Double`; the conforming type is `Self`.
+- Protocol members: `Shop.Shape(protocol).area() -> Double`; the conforming type is `Self`. Call them on an
+  `any Shape` value opened with `SwiftValue::open()` (`self: &Opened`).
+- A value receiver (`self: &SwiftValue`, `self: &Opened`) is passed as a copy: a `mutating` method changes the copy,
+  never the Rust-side value.
 - `(extension in Module)` marks a member of an extension that Swift mangles as one: an extension in another
   module than the type's, any constrained extension, every protocol extension. For example
   `Task.sleep(nanoseconds:)`:
@@ -163,7 +166,7 @@ static (extension in _Concurrency where Success == Never, Failure == Never)
 ```
 
 - Isolation: `isolated` parameters, `@MainActor`, `nonisolated`, `nonisolated(nonsending)`, `(actor)`, `throws(E)`.
-- Not supported yet: function-typed parameters, operators, initializers, subscripts, setters, non-ASCII names,
+- Not supported yet: operators, initializers, subscripts, setters, non-ASCII names,
   ownership attributes, more than one generic enclosing type. A declaration that cannot be mangled
   is a compile error; for anything unsupported, pass the symbol itself with `#[symbol]`.
 

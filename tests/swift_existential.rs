@@ -19,6 +19,8 @@ apus::swift! {
     fn label(self: &Opened) -> String;
     #[swift_linked = "Res.Shape(protocol).grown(by: Double) async -> Double"]
     async fn grown(self: &Opened, factor: f64) -> f64;
+    #[swift_linked = "Res.Shape(protocol).stretch() -> Double"]
+    fn stretch(self: &Opened) -> f64;
     #[swift_linked = "Probe.makeAnyError() -> any Error"]
     fn make_any_error() -> DirectValue;
 }
@@ -51,6 +53,21 @@ fn temporary_receiver() -> Result<(), Failed> {
     check(matches!(result, Ok(r) if r == 30.0), format!("{result:?}"))
 }
 
+/// A receiver is passed by value, as `&SwiftValue` receivers are: a `mutating` requirement changes a copy, never the
+/// value it was opened from (a boxed value shares its box with that value).
+fn mutating_requirements_change_a_copy() -> Result<(), Failed> {
+    let original = make_polygon().unwrap();
+    let opened = original.open().unwrap();
+    check(matches!(stretch(&opened), Ok(25.0)), "stretch")?;
+    let after = original.open().map(|o| area(&o));
+    check(matches!(after, Some(Ok(15.0))), format!("the original changed: {after:?}"))?;
+    check(matches!(area(&opened), Ok(15.0)), "the opened value changed")
+}
+
 fn main() {
-    common::run(vec![Trial::test("opened_values", opened_values), Trial::test("temporary_receiver", temporary_receiver)]);
+    common::run(vec![
+        Trial::test("opened_values", opened_values),
+        Trial::test("temporary_receiver", temporary_receiver),
+        Trial::test("mutating_requirements_change_a_copy", mutating_requirements_change_a_copy),
+    ]);
 }
