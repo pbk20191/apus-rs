@@ -244,6 +244,31 @@ impl Declaration {
     }
 }
 
+/// The symbol of the opaque type descriptor of a declaration with a `some P` result (`…QOMQ`, named after the
+/// function, property or subscript itself), or `None`. The runtime gives the result's actual type from it
+/// (`swift_getOpaqueTypeMetadata2`).
+pub fn opaque_descriptor(declaration: &str) -> Result<Option<String>, Error> {
+    let parsed = Declaration::parse(declaration)?;
+    let result = match &parsed.0.signature {
+        ast::Signature::Function { result, .. } => result,
+        ast::Signature::Getter(ty) | ast::Signature::Subscript { result: ty, setter: false, .. } => ty,
+        _ => return Ok(None),
+    };
+    if result.opaque_count() == 0 {
+        return Ok(None);
+    }
+    let symbol = mangler::mangle(&parsed.0).map_err(Error)?;
+    // A getter's descriptor is the variable's or subscript's: `…vg` -> `…vp`, `…ig` -> `…ip` (before a static `Z`).
+    let (body, is_static) = symbol.strip_suffix('Z').map_or((symbol.as_str(), ""), |body| (body, "Z"));
+    let entity = match &parsed.0.signature {
+        ast::Signature::Getter(_) => body.strip_suffix("vg").map(|stem| format!("{stem}vp")),
+        ast::Signature::Subscript { .. } => body.strip_suffix("ig").map(|stem| format!("{stem}ip")),
+        _ => Some(body.to_string()),
+    }
+    .ok_or_else(|| Error("unexpected accessor symbol".into()))?;
+    Ok(Some(format!("{entity}{is_static}QOMQ")))
+}
+
 /// The isolation a call to `declaration` needs (see [`Isolation`]).
 pub fn isolation(declaration: &str) -> Result<Isolation, Error> {
     Ok(Declaration::parse(declaration)?.isolation())
@@ -299,7 +324,7 @@ fn closure_shape(function: &ast::FunctionTy) -> Result<String, String> {
         use ast::Ty;
         fn mentions_param(ty: &Ty) -> bool {
             match ty {
-                Ty::Param(_) | Ty::Member(..) => true,
+                Ty::Param(_) | Ty::Member(..) | Ty::Opaque(_) => true,
                 Ty::Optional(wrapped) => mentions_param(wrapped),
                 Ty::Tuple(elements) => elements.iter().any(|(_, element)| mentions_param(element)),
                 Ty::Nominal { args, .. } => args.iter().any(mentions_param),

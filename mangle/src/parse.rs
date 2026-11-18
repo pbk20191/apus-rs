@@ -233,6 +233,9 @@ impl<'a> Parser<'a> {
         if self.eat_keyword("any") {
             return Ok(Ty::Existential(self.protocol()?));
         }
+        if self.eat_keyword("some") {
+            return Ok(Ty::Opaque(self.protocol_list()?));
+        }
         if self.eat_keyword("AnyObject") {
             return Ok(Ty::AnyObject);
         }
@@ -681,6 +684,30 @@ impl<'a> Parser<'a> {
             },
             (Some(_), _) => return Err("an operator is a function".into()),
         };
+        // `some P` parameters are anonymous generic parameters after the declared ones; a `some P` result is the
+        // declaration's opaque result type, one at most.
+        let own_depth = usize::from(context_params > 0);
+        let mut generic_params = generic_params;
+        let mut signature = signature;
+        if let Signature::Function { params, .. } | Signature::Subscript { params, .. } = &mut signature {
+            for param in params.iter_mut() {
+                param.ty = anonymous_generics(&param.ty, own_depth, &mut generic_params, &mut requirements);
+            }
+        }
+        let opaque_results = match &signature {
+            Signature::Function { result, typed_error, .. } => {
+                if typed_error.as_ref().is_some_and(|e| e.opaque_count() > 0) {
+                    return Err("`some` is not supported in a typed throws error".into());
+                }
+                result.opaque_count()
+            }
+            Signature::Getter(ty) | Signature::Subscript { result: ty, setter: false, .. } => ty.opaque_count(),
+            Signature::Setter(ty) | Signature::Subscript { result: ty, .. } => ty.opaque_count() * 2,
+            Signature::Case(payload) => payload.iter().map(|(_, ty)| ty.opaque_count() * 2).sum(),
+        };
+        if opaque_results > 1 {
+            return Err("only one `some P` result is supported (not in setters, cases or several places)".into());
+        }
         if member.name == "init" {
             match context.last() {
                 None => return Err("`init` belongs to a type: `Module.Type(kind).init(…)`".into()),
@@ -747,6 +774,28 @@ fn standard_type_is_constrained(module: &str, name: &str) -> bool {
 
 fn swift_generic(name: &str, args: Vec<Ty>) -> Ty {
     Ty::Nominal { module: "Swift".into(), path: vec![(name.into(), Kind::Struct)], args }
+}
+
+/// `ty` with each `some P` replaced by a new generic parameter at `depth`, conforming to its protocols.
+fn anonymous_generics(ty: &Ty, depth: usize, count: &mut usize, requirements: &mut Vec<Requirement>) -> Ty {
+    let mut again = |ty: &Ty| anonymous_generics(ty, depth, count, requirements);
+    match ty {
+        Ty::Opaque(protocols) => {
+            let param = GenericParam { depth, index: *count };
+            *count += 1;
+            requirements.extend(protocols.iter().map(|p| Requirement::Conforms(Subject::Param(param), p.clone())));
+            Ty::Param(param)
+        }
+        Ty::Optional(wrapped) => Ty::Optional(Box::new(again(wrapped))),
+        Ty::Tuple(elements) => Ty::Tuple(elements.iter().map(|(label, e)| (label.clone(), again(e))).collect()),
+        Ty::Nominal { module, path, args } => Ty::Nominal { module: module.clone(), path: path.clone(), args: args.iter().map(again).collect() },
+        Ty::Function(f) => Ty::Function(Box::new(FunctionTy {
+            params: f.params.iter().map(&mut again).collect(),
+            result: again(&f.result),
+            ..(**f).clone()
+        })),
+        other => other.clone(),
+    }
 }
 
 /// The characters of an ASCII operator name.

@@ -201,6 +201,21 @@ const DECLARATIONS: &[&str] = &[
     "Probe.PE(enum).Pair(struct)<A, B>.init(a: A, b: B)",
     "Probe.usePair(_: PE(enum).Pair(struct)<Int, String>)",
     "Probe.constant(_: _const String, _: Int)",
+    "Probe.makeSome(_: Double) -> some Shape",
+    "Probe.takesSome(_: some Shape, _: some Shape & Hashable) -> Double",
+    "Probe.someVar: some Shape { get }",
+    "Probe.Holder2(struct).shape: some Shape { get }",
+    "static Probe.Holder2(struct).make() -> some Shape",
+    "Probe.GBox(struct)<T>.shape() -> some Shape",
+];
+
+/// Declarations with a `some P` result: their opaque type descriptors, which apus resolves the result type with.
+const OPAQUE: &[&str] = &[
+    "Probe.makeSome(_: Double) -> some Shape",
+    "Probe.someVar: some Shape { get }",
+    "Probe.Holder2(struct).shape: some Shape { get }",
+    "static Probe.Holder2(struct).make() -> some Shape",
+    "Probe.GBox(struct)<T>.shape() -> some Shape",
 ];
 
 /// Enum cases: each mangles to the tag symbol a library-evolution module exports for it.
@@ -249,6 +264,16 @@ fn symbols_of(file: &str, module: &str, flags: &[&str]) -> HashSet<String> {
         .filter_map(|l| l.split_whitespace().last())
         .map(|s| s.trim_start_matches('_').to_string())
         .collect()
+}
+
+#[test]
+fn opaque_type_descriptors_are_named() {
+    let symbols = compiled_symbols();
+    for decl in OPAQUE {
+        let descriptor = apus_mangle::opaque_descriptor(decl).unwrap().expect("a some-P result");
+        assert!(symbols.contains(&descriptor), "{decl}: {descriptor} not emitted");
+    }
+    assert_eq!(apus_mangle::opaque_descriptor("Probe.f(_: Int) -> Int").unwrap(), None);
 }
 
 #[test]

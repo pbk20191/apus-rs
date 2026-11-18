@@ -180,3 +180,11 @@ public struct GenBox<T> { public struct Item { public init(x: Int) {} } }
 public enum PE { public struct Pair<A, B> { public init(a: A, b: B) {} } }
 public func usePair(_ p: PE.Pair<Int, String>) {}
 public func constant(_ id: _const String, _ n: Int) {}
+// Opaque types: a `some P` result mangles as `Qr` and has a descriptor (`…QOMQ`); a `some P` parameter is an
+// anonymous generic parameter.
+public struct Sq2: Shape { public func area() -> Double { 1 } }
+public func makeSome(_ s: Double) -> some Shape { Sq2() }
+public func takesSome(_ s: some Shape, _ t: some Shape & Hashable) -> Double { 0 }
+public var someVar: some Shape { Sq2() }
+public struct Holder2 { public var shape: some Shape { Sq2() } ; public static func make() -> some Shape { Sq2() } }
+public struct GBox<T> { public func shape() -> some Shape { Sq2() } }

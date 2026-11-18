@@ -50,6 +50,23 @@ pub enum Ty {
     Member(GenericParam, String),
     /// A closure type: `@escaping @Sendable @MainActor (A, B) async throws -> R`.
     Function(Box<FunctionTy>),
+    /// `some P & Q` as the declaration's result: its opaque result type (`Qr`). As a parameter it is an anonymous
+    /// generic parameter instead (the parser rewrites it).
+    Opaque(Vec<Protocol>),
+}
+
+impl Ty {
+    /// How many `some P` this type holds.
+    pub fn opaque_count(&self) -> usize {
+        match self {
+            Ty::Opaque(_) => 1,
+            Ty::Optional(wrapped) => wrapped.opaque_count(),
+            Ty::Tuple(elements) => elements.iter().map(|(_, e)| e.opaque_count()).sum(),
+            Ty::Nominal { args, .. } => args.iter().map(Ty::opaque_count).sum(),
+            Ty::Function(f) => f.params.iter().map(Ty::opaque_count).sum::<usize>() + f.result.opaque_count(),
+            Ty::Any | Ty::AnyObject | Ty::Existential(_) | Ty::Param(_) | Ty::Member(..) => 0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
