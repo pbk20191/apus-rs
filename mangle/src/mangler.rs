@@ -429,6 +429,23 @@ impl Mangler {
                 self.ty(ty)?;
                 (subject, "Rs", "RS", "Rt")
             }
+            // docs/ABI/Mangling.rst: `type 'Rb' GENERIC-PARAM-INDEX` (base class); `'Rl' GENERIC-PARAM-INDEX
+            // LAYOUT-CONSTRAINT` with `C` for a class. The parser allows them on generic parameters only.
+            Requirement::Superclass(Subject::Param(param), ty) => {
+                self.ty(ty)?;
+                self.push("Rb");
+                self.generic_param_index(*param);
+                return Ok(());
+            }
+            Requirement::AnyObject(Subject::Param(param)) => {
+                self.push("Rl");
+                self.generic_param_index(*param);
+                self.push("C");
+                return Ok(());
+            }
+            Requirement::Superclass(Subject::Member(..), _) | Requirement::AnyObject(Subject::Member(..)) => {
+                return Err("a class constraint on an associated type is not supported".into());
+            }
         };
         match subject {
             Subject::Param(param) => {
@@ -534,6 +551,10 @@ pub(crate) fn sorted_requirements(requirements: &[Requirement]) -> Vec<Requireme
     let mut sorted = requirements.to_vec();
     sorted.sort_by_key(|requirement| {
         let (subject, kind, protocol) = match requirement {
+            // Same subject: a layout, then a superclass, before protocols (observed from swiftc: `RlzC…Rz`,
+            // `…CRbz…Rz`).
+            Requirement::AnyObject(subject) => (subject, -2, Default::default()),
+            Requirement::Superclass(subject, _) => (subject, -1, Default::default()),
             Requirement::Conforms(subject, protocol) => (subject, 0, (protocol.module.clone(), protocol.name.clone())),
             Requirement::SameType(subject, _) => (subject, 1, Default::default()),
         };

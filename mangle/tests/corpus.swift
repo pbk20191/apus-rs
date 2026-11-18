@@ -211,3 +211,11 @@ public func gf2<V>(_ x: GOuter<V>.Inner, _ y: GOuter<V>.Inner) {}
 public func gf3(_ x: GOuter<Int>.E<String>) {}
 public func gf4(_ x: GTwo<Int, String>.W) {}
 public func gf6(_ x: [GOuter<Int>.Inner]) -> GOuter<Int>.Inner? { nil }
+// Class-bound generic parameters: a superclass (`Rb`) or AnyObject (`Rl…C`), before the protocols.
+open class SBase { public init() {} }
+public protocol SP {}
+public func s1<T: SBase>(_ t: T) -> T { t }
+public func s2<T: NSObject>(_ t: T, _ n: Int) -> [T] { [t] }
+public func s3<T>(_ t: T) where T: SBase, T: SP {}
+public func s4<T: AnyObject>(_ t: T) -> T { t }
+public func s5<T: AnyObject & SP>(_ t: T) {}

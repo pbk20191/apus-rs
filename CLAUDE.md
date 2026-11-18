@@ -70,5 +70,8 @@ README.md documents every user-facing rule; keep it in step with behavior change
   are refused.
 - Compile-time features (macros, property wrappers, result builders) and `@inlinable`/`@_alwaysEmitIntoClient` APIs
   without a symbol cannot be called; they need a Swift shim.
+- Class-bound generic parameters (`T: SomeClass`, `T: AnyObject`): mangled, refused by `swift!`. swiftc passes
+  their values as single references (observed type lowering; the calling-convention document does not say so);
+  awaiting the owner's decision.
 - Small non-resilient values in registers (layout computed by the compiler) and making `indirect` enum cases are
   refused on purpose.

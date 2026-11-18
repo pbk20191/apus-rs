@@ -28,12 +28,37 @@ pub struct Parser<'a> {
 
 type Parsed<T> = Result<T, String>;
 
+/// What a `T: …` item requires.
+enum Constraint {
+    Protocol(Protocol),
+    Superclass(Ty),
+    AnyObject,
+}
+
+impl Constraint {
+    fn on_param(self, param: GenericParam) -> Requirement {
+        match self {
+            Constraint::Protocol(protocol) => Requirement::Conforms(Subject::Param(param), protocol),
+            Constraint::Superclass(ty) => Requirement::Superclass(Subject::Param(param), ty),
+            Constraint::AnyObject => Requirement::AnyObject(Subject::Param(param)),
+        }
+    }
+
+    fn on(self, subject: Subject) -> Parsed<Requirement> {
+        match (self, subject) {
+            (Constraint::Protocol(protocol), subject) => Ok(Requirement::Conforms(subject, protocol)),
+            (constraint, Subject::Param(param)) => Ok(constraint.on_param(param)),
+            (_, Subject::Member(_, name)) => Err(format!("a class constraint on an associated type (`{name}`) is not supported")),
+        }
+    }
+}
+
 /// One dotted segment of the declaration's path, with what was written after its name.
 struct Segment {
     name: String,
     kind: Option<Kind>,
     /// `<T: P, U>`: parameter names with their inline constraints.
-    generics: Option<Vec<(String, Vec<Protocol>)>>,
+    generics: Option<Vec<(String, Vec<Constraint>)>>,
     /// `(extension in Module [where …])` before it: its module and where its `where` clause starts.
     extension: Option<(String, Option<usize>)>,
 }
@@ -446,8 +471,8 @@ impl<'a> Parser<'a> {
                 });
             } else {
                 self.expect(":")?;
-                for protocol in self.protocol_list()? {
-                    into.push(Requirement::Conforms(subject.clone(), protocol));
+                for constraint in self.constraint_list()? {
+                    into.push(constraint.on(subject.clone())?);
                 }
             }
             if !self.eat(",") {
@@ -457,11 +482,40 @@ impl<'a> Parser<'a> {
     }
 
     /// `<T: P & Q, U>` (the `<` already eaten): names with their inline constraints.
-    fn generic_clause(&mut self) -> Parsed<Vec<(String, Vec<Protocol>)>> {
+    /// `P & Q`, where an item may also be a superclass (`Base(class)`, written with its class kind) or `AnyObject`.
+    fn constraint_list(&mut self) -> Parsed<Vec<Constraint>> {
+        let mut constraints = Vec::new();
+        loop {
+            self.skip_whitespace();
+            // The item's text, up to the next `&`, `,` or closing `>`/`)` outside brackets.
+            let mut depth = 0i32;
+            let end = self
+                .rest()
+                .char_indices()
+                .find(|&(_, c)| {
+                    depth += match c { '<' | '(' | '[' => 1, '>' | ')' | ']' => -1, _ => 0 };
+                    depth < 0 || (depth == 0 && matches!(c, '&' | ','))
+                })
+                .map_or(self.rest().len(), |(i, _)| i);
+            let item = &self.rest()[..end];
+            constraints.push(if self.eat_keyword("AnyObject") || self.eat("Swift.AnyObject") {
+                Constraint::AnyObject
+            } else if item.contains("(class)") || item.contains("(typedef class)") || item.contains("(actor)") {
+                Constraint::Superclass(self.ty()?)
+            } else {
+                Constraint::Protocol(self.protocol()?)
+            });
+            if !self.eat("&") {
+                return Ok(constraints);
+            }
+        }
+    }
+
+    fn generic_clause(&mut self) -> Parsed<Vec<(String, Vec<Constraint>)>> {
         let mut params = Vec::new();
         loop {
             let name = self.identifier()?;
-            let constraints = if self.eat(":") { self.protocol_list()? } else { Vec::new() };
+            let constraints = if self.eat(":") { self.constraint_list()? } else { Vec::new() };
             params.push((name, constraints));
             if !self.eat(",") {
                 break;
@@ -521,12 +575,12 @@ impl<'a> Parser<'a> {
     }
 
     /// Registers generic parameters at `depth` and returns the requirements written inline.
-    fn declare_generics(&mut self, clause: Vec<(String, Vec<Protocol>)>, depth: usize) -> Vec<Requirement> {
+    fn declare_generics(&mut self, clause: Vec<(String, Vec<Constraint>)>, depth: usize) -> Vec<Requirement> {
         let mut requirements = Vec::new();
         for (index, (name, constraints)) in clause.into_iter().enumerate() {
             let param = GenericParam { depth, index };
             self.generics.push((name, param));
-            requirements.extend(constraints.into_iter().map(|protocol| Requirement::Conforms(Subject::Param(param), protocol)));
+            requirements.extend(constraints.into_iter().map(|constraint| constraint.on_param(param)));
         }
         requirements
     }

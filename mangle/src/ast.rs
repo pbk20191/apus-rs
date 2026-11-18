@@ -152,6 +152,17 @@ pub enum Subject {
 pub enum Requirement {
     Conforms(Subject, Protocol),
     SameType(Subject, Ty),
+    /// `T: SomeClass`: a superclass.
+    Superclass(Subject, Ty),
+    /// `T: AnyObject`: the class layout.
+    AnyObject(Subject),
+}
+
+impl Requirement {
+    /// Whether it makes its subject a class type, whose values Swift passes as a single reference.
+    pub fn is_class_bound(&self) -> bool {
+        matches!(self, Requirement::Superclass(..) | Requirement::AnyObject(_))
+    }
 }
 
 pub enum Signature {

@@ -63,6 +63,16 @@
 /// }
 /// ```
 ///
+/// - A class-bound generic parameter (`T: SomeClass`, `T: AnyObject`) is refused: Swift passes its values as
+///   references, which apus does not do yet.
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "Probe.keep<T: AnyObject>(_: T) -> T"]
+///     fn keep(x: &apus::swift::SwiftObject) -> apus::swift::SwiftObject;
+/// }
+/// ```
+///
 /// - A struct's setter (`name: T { set }`, `subscript(…) -> T { set }`) or `mutating` method changes `self` in place:
 ///   declare `self: &mut SwiftValue`; an `inout` parameter is a `&mut SwiftValue`. Both only in a synchronous
 ///   `fn` (an async call would outlive the borrow). A setter's new value comes first, then a subscript's indices.

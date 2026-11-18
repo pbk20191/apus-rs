@@ -202,6 +202,9 @@ static (extension in _Concurrency where Success == Never, Failure == Never)
   `SwiftUI.FocusState(struct)<Bool>.Binding(struct)`, `M.Outer(struct)<Int>.E(enum)<String>`. In a type, a
   constrained extension in the path (`Outer(struct)<T>.(extension in M where T: P) Inner(struct)`) must be the one
   the declaration or its enclosing type is declared in: its `where` clause speaks of that type's parameters.
+- A superclass constraint names the class with its kind, `<T: __C.NSObject(class)>`; `T: AnyObject` is written as
+  such. Such declarations are mangled (`mangle!`) but `swift!` refuses to call them: Swift passes a value of a
+  class-bound generic type as a reference, not by address, which apus does not do yet.
 - Isolation: `isolated` parameters, `@MainActor`, `nonisolated`, `nonisolated(nonsending)`, `(actor)`, `throws(E)`.
 - Not supported yet: metatypes (`T.Type`), non-ASCII names (and so non-ASCII operators),
   a declaration inside more than one generic enclosing type. A declaration that cannot be mangled

@@ -378,8 +378,8 @@ class Graph:
                     params, constraints = own, generics.get("constraints", [])
                     bound = collections.defaultdict(list)
                     for c in constraints:
-                        if c["kind"] == "conformance" and c["lhs"] in own:
-                            bound[c["lhs"]].append(protocol_name(c["rhs"], c.get("rhsPrecise")))
+                        if c["kind"] in ("conformance", "superclass") and c["lhs"] in own:
+                            bound[c["lhs"]].append(constraint_rhs(c))
                         elif sym["kind"]["identifier"] == "swift.enum.case":
                             # A case's symbol carries the enum's whole generic signature.
                             raise Untranslatable("enum constraint beyond a conformance")
@@ -439,8 +439,19 @@ def constraint_lhs(graph, lhs):
     return f"{base}.{associated_type(name, graph.usr_by_name.get(name))}"
 
 
+def constraint_rhs(c):
+    """The right side of a conformance or superclass constraint, in apus syntax."""
+    if c["kind"] == "superclass":
+        return render_chain([{"spelling": c["rhs"], "preciseIdentifier": c.get("rhsPrecise")}])
+    if c["rhs"] == "AnyObject":
+        return "AnyObject"
+    return protocol_name(c["rhs"], c.get("rhsPrecise"))
+
+
 def constraint_text(graph, c):
     c = dict(c, lhs=constraint_lhs(graph, c["lhs"]))
+    if c["kind"] in ("conformance", "superclass"):
+        return f"{c['lhs']}: {constraint_rhs(c)}"
     if c["kind"] == "conformance":
         return f"{c['lhs']}: {protocol_name(c['rhs'], c.get('rhsPrecise'))}"
     if c["kind"] == "sameType":
@@ -591,6 +602,12 @@ def measure(module):
         status, _, value = next(results).partition(" ")
         if status == "ERR":
             row["outcome"], row["reason"] = "refused", value
+        elif status == "NOCALL":
+            value, _, why = value.partition("\t")
+            if value == row["expected"]:
+                row["outcome"], row["reason"] = "mangled only", why  # `mangle!` names it; `swift!` will not call it
+            else:
+                row["outcome"], row["reason"], row["mangled"] = "mismatch", "mangled differently", value
         elif value == row["expected"]:
             row["outcome"] = "callable"
         else:
@@ -606,7 +623,8 @@ def main():
     report = ["# SDK coverage of `swift!`", "",
               f"Target {TARGET}; SDK {os.path.basename(sdk())}. Public Swift functions, methods, initializers, getters,",
               "subscripts, operators and enum cases. *Callable*: exported and mangled exactly; *not exported*: no symbol",
-              "to call (inlinable); the rest are apus's gaps.", "",
+              "to call (inlinable); *mangled only*: `mangle!` names the symbol, `swift!` refuses to call it; the rest are",
+              "apus's gaps.", "",
               "| Module | Declarations | Exported | Callable | Callable of exported |", "|---|---|---|---|---|"]
     reasons = collections.Counter()
     for module in modules:

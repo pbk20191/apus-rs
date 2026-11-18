@@ -206,6 +206,22 @@ impl Declaration {
         if self.0.is_static && self.0.context.last().is_some_and(|(_, kind)| *kind == ast::Kind::Protocol) {
             return Err(Error("static protocol requirements are not supported".into()));
         }
+        // A value of a class-bound generic type (`T: SomeClass`, `T: AnyObject`) is passed as a single reference, not
+        // by address: swiftc's type lowering, not written in the ABI documents. Refused until that is decided.
+        let decl = &self.0;
+        let requirements = decl
+            .requirements
+            .iter()
+            .chain(&decl.context_requirements)
+            .chain(decl.extension.iter().flat_map(|e| e.requirements.iter()))
+            .chain(decl.context_extension.iter().flat_map(|e| e.requirements.iter()));
+        if requirements.clone().any(ast::Requirement::is_class_bound) {
+            return Err(Error(
+                "class-bound generic parameters (`T: SomeClass`, `T: AnyObject`) are not callable yet: Swift passes \
+                 their values as references; use `mangle!` and call the symbol yourself"
+                    .into(),
+            ));
+        }
         if let ast::Signature::Function { params, .. } = &self.0.signature {
             if params.iter().any(|p| p.isolated && !matches!(p.ty, ast::Ty::Optional(_))) {
                 return Err(Error("only `isolated (any Actor)?` parameters are supported: apus passes nil where the call is not on the main actor".into()));
@@ -288,7 +304,8 @@ pub fn typed_throws(declaration: &str) -> Result<bool, Error> {
 }
 
 /// Refuses declarations apus would call with the wrong arguments: an `isolated` parameter of a type other than
-/// `(any Actor)?` (apus passes nil outside the main actor, which a non-optional actor parameter cannot hold).
+/// `(any Actor)?` (apus passes nil outside the main actor, which a non-optional actor parameter cannot hold); a
+/// class-bound generic parameter (its values are references, not passed by address).
 pub fn check_callable(declaration: &str) -> Result<(), Error> {
     Declaration::parse(declaration)?.check_callable()
 }
@@ -431,6 +448,8 @@ fn generic_plan_of(decl: &ast::Decl) -> Result<Option<GenericPlan>, Error> {
             Requirement::Conforms(Subject::Member(..), _) => return explicit("requirements on associated types".into()),
             Requirement::SameType(Subject::Param(_), _) => return explicit("generic parameters fixed to a type".into()),
             Requirement::SameType(Subject::Member(..), _) => {}
+            // Refused before: see `Declaration::check_callable`.
+            Requirement::Superclass(..) | Requirement::AnyObject(_) => {}
         }
     }
     let error_slot_from = match typed_error {
@@ -538,6 +557,20 @@ mod isolation_tests {
         assert_eq!(typed_throws("M.f() throws(Never) -> Int").unwrap(), false);
         let concrete = super::generic_plan("M.g<T>(_: T) throws(Boom(struct)) -> Int").unwrap_err().to_string();
         assert!(concrete.contains("concrete typed throws") && !concrete.contains("associated"), "{concrete}");
+    }
+
+    #[test]
+    fn class_bound_generic_parameters_are_not_callable() {
+        // Swift passes a value of a class-bound generic type as a reference, not by address as apus does.
+        for declaration in [
+            "M.f<T: Base(class)>(_: T) -> T",
+            "M.f<T: AnyObject>(_: T)",
+            "M.Box(struct)<T: AnyObject>.get() -> T",
+            "(extension in M where T: Base(class)) M.Box(struct)<T>.get() -> Int",
+        ] {
+            let error = super::check_callable(declaration).unwrap_err().to_string();
+            assert!(error.contains("class-bound"), "{declaration}: {error}");
+        }
     }
 
     #[test]
