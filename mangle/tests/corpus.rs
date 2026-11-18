@@ -200,6 +200,7 @@ const DECLARATIONS: &[&str] = &[
     "@preconcurrency Probe.preMain(_: @escaping @MainActor () -> Void)",
     "Probe.PE(enum).Pair(struct)<A, B>.init(a: A, b: B)",
     "Probe.usePair(_: PE(enum).Pair(struct)<Int, String>)",
+    "Probe.cTypedefs(_: __C.NSDecimal(typedef struct), _: __C.CGColorRef(typedef class)) -> __C.CGColorRef(typedef class)?",
     "Probe.constant(_: _const String, _: Int)",
     "Probe.makeSome(_: Double) -> some Shape",
     "Probe.takesSome(_: some Shape, _: some Shape & Hashable) -> Double",

@@ -118,6 +118,8 @@ impl<'a> Parser<'a> {
             ("(actor)", Kind::Actor),
             ("(enum)", Kind::Enum),
             ("(protocol)", Kind::Protocol),
+            ("(typedef struct)", Kind::TypedefStruct),
+            ("(typedef class)", Kind::TypedefClass),
         ];
         for (text, kind) in kinds {
             if self.rest().starts_with(text) {
@@ -304,6 +306,9 @@ impl<'a> Parser<'a> {
         let mut resolved = Vec::new();
         for (name, kind) in path {
             let kind = kind.ok_or_else(|| needs_kind(name))?;
+            if matches!(kind, Kind::TypedefStruct | Kind::TypedefClass) && (module != "__C" || path.len() != 1) {
+                return Err(format!("`{name}`: a typedef kind names an imported C type, `__C.{name}(typedef …)`"));
+            }
             resolved.push((name.clone(), kind));
         }
         Ok(Ty::Nominal { module, path: resolved, args })
@@ -521,6 +526,9 @@ impl<'a> Parser<'a> {
                 None if lone_context => standard_kind(&self.module, &segment.name).ok_or_else(|| needs_kind(&segment.name))?,
                 None => return Err(needs_kind(&segment.name)),
             };
+            if matches!(kind, Kind::TypedefStruct | Kind::TypedefClass) && (self.module != "__C" || !context.is_empty()) {
+                return Err(format!("`{}`: a typedef kind names an imported C type, `__C.{}(typedef …)`", segment.name, segment.name));
+            }
             if kind == Kind::Protocol {
                 if segment.generics.is_some() {
                     return Err(format!("protocol `{}` takes no generic parameters; its conforming type is `Self`", segment.name));
@@ -680,7 +688,7 @@ impl<'a> Parser<'a> {
             }
             signature => signature,
         };
-        if mutating && (is_static || !matches!(signature, Signature::Function { .. }) || context.last().is_none_or(|(_, kind)| !matches!(kind, Kind::Struct | Kind::Enum))) {
+        if mutating && (is_static || !matches!(signature, Signature::Function { .. }) || context.last().is_none_or(|(_, kind)| !matches!(kind, Kind::Struct | Kind::Enum | Kind::TypedefStruct))) {
             return Err("`mutating` marks a method of a struct or enum".into());
         }
         let operator = match (&operator, &signature) {

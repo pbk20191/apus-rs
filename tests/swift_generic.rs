@@ -45,7 +45,12 @@ fn types_and_conformances() -> Result<(), Failed> {
     check(SwiftType::from_mangled_name("5Probe7NoSuchV").is_none(), "unknown type resolved")?;
     check(strings.conformance(&COLLECTION).is_some(), "[String] should be a Collection")?;
     check(strings.conformance(&HASHABLE).is_some(), "[String] should be Hashable")?;
-    check(big_type().conformance(&HASHABLE).is_none(), "Big should not be Hashable")
+    check(big_type().conformance(&HASHABLE).is_none(), "Big should not be Hashable")?;
+    // An imported C type named by a typedef: its name in a declaration's result is one the runtime resolves.
+    let decimal = SwiftType::from_mangled_name(apus::result_type!("M.f() -> __C.NSDecimal(typedef struct)").unwrap());
+    check(decimal.is_some_and(|ty| ty.size() == 20), "NSDecimal")?;
+    let color = SwiftType::from_mangled_name(apus::result_type!("M.f() -> __C.CGColorRef(typedef class)").unwrap());
+    check(color.is_some_and(|ty| ty.name() == "__C.CGColorRef"), format!("{:?}", color.map(|ty| ty.name())))
 }
 
 fn values_round_trip() -> Result<(), Failed> {

@@ -8,6 +8,10 @@ pub enum Kind {
     Actor,
     Enum,
     Protocol,
+    /// An imported C type named by a typedef, mangled under that name (`So9NSDecimala`): an anonymous struct
+    /// (`typedef struct {…} NSDecimal`) or a Core Foundation class (`CGColorRef`, written `CGColor` in Swift).
+    TypedefStruct,
+    TypedefClass,
 }
 
 impl Kind {
@@ -17,6 +21,7 @@ impl Kind {
             Kind::Class | Kind::Actor => 'C',
             Kind::Enum => 'O',
             Kind::Protocol => 'P',
+            Kind::TypedefStruct | Kind::TypedefClass => 'a',
         }
     }
 }

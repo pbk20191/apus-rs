@@ -500,6 +500,12 @@ apus::swift! {
 }
 ```
 
+Other imported C types are `__C.CGPoint(struct)` and the like. One that Swift names after its typedef is written with
+the typedef's name and `typedef struct` or `typedef class`: an anonymous struct (`__C.NSDecimal(typedef struct)`,
+Swift's `Decimal`), an `NS_TYPED_ENUM` type (`__C.NSURLResourceKey(typedef struct)`, Swift's `URLResourceKey`), a Core
+Foundation class (`__C.CGColorRef(typedef class)`, Swift's `CGColor`). A typedef of another type
+(`TimeInterval`, `CLLocationDistance`) is that type: write `Double`.
+
 `SwiftObject` retains and releases with `swift_unknownObjectRetain`/`Release`, so it holds NSObject-derived Swift
 classes and Objective-C objects as well as native Swift ones, with or without the feature.
 

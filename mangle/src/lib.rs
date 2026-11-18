@@ -126,8 +126,8 @@ impl Declaration {
             return TypeSelf::NotStatic;
         }
         match decl.context.last() {
-            Some((_, ast::Kind::Class | ast::Kind::Actor)) => TypeSelf::Thick,
-            Some((_, ast::Kind::Struct | ast::Kind::Enum)) => TypeSelf::Thin,
+            Some((_, ast::Kind::Class | ast::Kind::Actor | ast::Kind::TypedefClass)) => TypeSelf::Thick,
+            Some((_, ast::Kind::Struct | ast::Kind::Enum | ast::Kind::TypedefStruct)) => TypeSelf::Thin,
             _ => TypeSelf::NotStatic,
         }
     }
@@ -182,7 +182,7 @@ impl Declaration {
     pub fn mutates_self(&self) -> bool {
         let decl = &self.0;
         let setter = matches!(decl.signature, ast::Signature::Setter(_) | ast::Signature::Subscript { setter: true, .. });
-        let value_type = decl.context.last().is_some_and(|(_, kind)| matches!(kind, ast::Kind::Struct | ast::Kind::Enum));
+        let value_type = decl.context.last().is_some_and(|(_, kind)| matches!(kind, ast::Kind::Struct | ast::Kind::Enum | ast::Kind::TypedefStruct));
         !decl.is_static && value_type && (decl.mutating || setter)
     }
 
@@ -343,7 +343,7 @@ fn closure_shape(function: &ast::FunctionTy) -> Result<String, String> {
             Ty::AnyObject => 'd',
             Ty::Nominal { module, path, args } if module == "Swift" && path.len() == 1 && args.is_empty()
                 && (DIRECT.contains(&path[0].0.as_str()) || path[0].0 == "String") => 'd',
-            Ty::Nominal { path, args, .. } if args.is_empty() && matches!(path.last(), Some((_, ast::Kind::Class | ast::Kind::Actor))) => 'd',
+            Ty::Nominal { path, args, .. } if args.is_empty() && matches!(path.last(), Some((_, ast::Kind::Class | ast::Kind::Actor | ast::Kind::TypedefClass))) => 'd',
             ty if mentions_param(ty) => {
                 return Err("a closure parameter or result that involves a generic parameter must be the parameter itself".into())
             }

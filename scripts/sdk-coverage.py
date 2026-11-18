@@ -67,6 +67,16 @@ def exported(module):
     return symbols
 
 
+# C typedefs of other types, which Swift mangles as the type they name (a sample of the SDK's common ones).
+C_TYPEDEFS = {
+    **{name: "Double" for name in ("NSTimeInterval", "CLLocationDistance", "CLLocationDegrees", "CLLocationSpeed",
+                                   "CLLocationDirection", "CLLocationAccuracy", "CLLocationDirectionAccuracy",
+                                   "CLLocationSpeedAccuracy", "CFTimeInterval", "CFAbsoluteTime")},
+    "FourCharCode": "UInt32", "OSType": "UInt32", "unichar": "UInt16", "UTF32Char": "UInt32", "OSStatus": "Int32",
+    "NSRect": "__C.CGRect(struct)", "NSPoint": "__C.CGPoint(struct)", "NSSize": "__C.CGSize(struct)",
+}
+
+
 def usr_module_kind(usr):
     """(module, kind) of a type's USR; kind None when it is not a nominal type apus can name."""
     if usr.startswith("c:objc(cs)"):
@@ -113,7 +123,15 @@ def render_chain(chain):
     if len(chain) == 1 and re.fullmatch(r"s:S[a-zA-Z]|s:Sc[a-zA-Z]", usr):
         return first["spelling"]
     if usr.startswith("c:@SA@") or usr.startswith("c:@T@"):
-        raise Untranslatable("C typedef")
+        name = usr.split("@")[-1]
+        if len(chain) != 1:
+            raise Untranslatable("C typedef")
+        if name in C_TYPEDEFS:  # a typedef of another type is mangled as that type
+            return C_TYPEDEFS[name]
+        if usr.startswith("c:@T@") and name == first["spelling"] + "Ref":
+            return f"__C.{name}(typedef class)"  # a Core Foundation class
+        # An anonymous struct named by its typedef, or a `swift_newtype` (NS_TYPED_ENUM) struct.
+        return f"__C.{name}(typedef struct)"
     if usr.startswith("c:"):
         name = objc_name(usr)
         module, kind = usr_module_kind(usr)

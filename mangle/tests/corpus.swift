@@ -188,3 +188,7 @@ public func takesSome(_ s: some Shape, _ t: some Shape & Hashable) -> Double { 0
 public var someVar: some Shape { Sq2() }
 public struct Holder2 { public var shape: some Shape { Sq2() } ; public static func make() -> some Shape { Sq2() } }
 public struct GBox<T> { public func shape() -> some Shape { Sq2() } }
+// Imported C types named by a typedef (an anonymous struct, a CF class) are mangled under the typedef's name (`a`).
+import Foundation
+import CoreGraphics
+public func cTypedefs(_ d: Decimal, _ c: CGColor) -> CGColor? { nil }
