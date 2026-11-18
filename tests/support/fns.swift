@@ -327,4 +327,15 @@ public final class Minted {
     public init(n: Int) { self.n = n }
     public static func twice(_ n: Int) -> Minted { Minted(n: n * 2) }
     public var value: Int { n }
+    nonisolated(unsafe) static var gone: Set<Int> = []
+    static let goneLock = NSLock()
+    deinit { Minted.goneLock.withLock { _ = Minted.gone.insert(n) } }
+}
+public func mintedGone(_ n: Int) -> Bool { Minted.goneLock.withLock { Minted.gone.contains(n) } }
+// An initializer consumes its arguments (they are passed +1): a String and a class reference to keep.
+public final class Holder {
+    public let s: String
+    public let o: Minted
+    public init(s: String, o: Minted) { self.s = s; self.o = o }
+    public var text: String { s }
 }

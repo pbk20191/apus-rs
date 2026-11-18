@@ -32,7 +32,7 @@ pub use value::{IntoSwift, Opened, SwiftProtocol, SwiftType, SwiftValue, Witness
 pub use isolation::Isolation;
 #[doc(hidden)]
 pub use generic::{__generic_args, __type_of, GenericArgs, HasSwiftType};
-pub use func::{ErrorSlot, ArgLowering, DirectValue, SwiftArg, SwiftArgs, SwiftAsyncFn, SwiftObject, SwiftReceiver, SwiftRet};
+pub use func::{Consumed, ErrorSlot, ArgLowering, DirectValue, SwiftArg, SwiftArgs, SwiftAsyncFn, SwiftObject, SwiftReceiver, SwiftRet};
 pub use current::{cancelled, current_task, is_cancelled, priority, Cancelled, TaskRef};
 pub use join::{JoinHandle, MainOnlyHandle};
 pub use timer::{sleep, within, Sleep};

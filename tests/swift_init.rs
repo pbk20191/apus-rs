@@ -20,6 +20,12 @@ apus::swift! {
     fn twice(self: &SwiftType, n: i64) -> SwiftObject;
     #[swift_linked = "Probe.Minted(class).value: Int { get }"]
     fn value(self: &SwiftObject) -> i64;
+    #[swift_linked = "Probe.mintedGone(_: Int) -> Bool"]
+    fn minted_gone(n: i64) -> bool;
+    #[swift_linked = "Probe.Holder(class).init(s: String, o: Minted(class))"]
+    fn holder(self: &SwiftType, s: &str, o: &SwiftObject) -> SwiftObject;
+    #[swift_linked = "Probe.Holder(class).text: String { get }"]
+    fn text(self: &SwiftObject) -> String;
 }
 
 static HIGH: SwiftEnumCase = SwiftEnumCase::new(apus::mangle!("case Res.Grade(enum).high"));
@@ -43,9 +49,26 @@ fn classes_pass_themselves() -> Result<(), Failed> {
     check(value(&twice(&class, 4).unwrap()).unwrap() == 8, "Minted.twice(4)")
 }
 
+fn initializer_arguments_are_consumed() -> Result<(), Failed> {
+    let minted_class = SwiftType::from_mangled_name("5Probe6MintedC").unwrap();
+    let holder_class = SwiftType::from_mangled_name("5Probe6HolderC").unwrap();
+    let kept = minted(&minted_class, 1001).unwrap();
+    let long = "a string too long to be stored inline in the String itself";
+    for _ in 0..3 {
+        let held = holder(&holder_class, long, &kept).unwrap();
+        check(text(&held).unwrap() == long, "the held String")?;
+    }
+    // Each holder released its own references: had they been borrowed, `kept` would be gone by now.
+    check(!minted_gone(1001).unwrap(), "the kept object is alive")?;
+    check(value(&kept).unwrap() == 1001, "and usable")?;
+    drop(kept);
+    check(minted_gone(1001).unwrap(), "until its last reference goes")
+}
+
 fn main() {
     common::run(vec![
         Trial::test("value_types_pass_no_self", value_types_pass_no_self),
         Trial::test("classes_pass_themselves", classes_pass_themselves),
+        Trial::test("initializer_arguments_are_consumed", initializer_arguments_are_consumed),
     ]);
 }

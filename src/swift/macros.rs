@@ -224,13 +224,18 @@ macro_rules! __swift_item {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __swift_args {
-    ([$($arg:ident),*] []) => { ($($arg,)*) };
-    // Closure arguments, checked against their declared function types (`closures [(argument "shape")…]`).
-    ([$($arg:ident),*] [closures [$(($c:ident $shape:literal))*]]) => {{
-        $(let $c = $crate::swift::DeclaredClosure($c, $shape);)*
+    // `[consumed…]`: the arguments the callee consumes (an initializer's, a setter's new value), wrapped last.
+    ([$($arg:ident),*] [$($o:ident)*] []) => {{
+        $(let $o = $crate::swift::Consumed($o);)*
         ($($arg,)*)
     }};
-    ([$($arg:ident),*] [auto [$($m:ident)*] [$(($w:ident $p:literal))*] [$($slot:ident)?] [$($result:ident)?] $(closures [$(($c:ident $shape:literal))*])?]) => {{
+    // Closure arguments, checked against their declared function types (`closures [(argument "shape")…]`).
+    ([$($arg:ident),*] [$($o:ident)*] [closures [$(($c:ident $shape:literal))*]]) => {{
+        $(let $c = $crate::swift::DeclaredClosure($c, $shape);)*
+        $(let $o = $crate::swift::Consumed($o);)*
+        ($($arg,)*)
+    }};
+    ([$($arg:ident),*] [$($o:ident)*] [auto [$($m:ident)*] [$(($w:ident $p:literal))*] [$($slot:ident)?] [$($result:ident)?] $(closures [$(($c:ident $shape:literal))*])?]) => {{
         let generic = $crate::swift::__generic_args(
             &[$($crate::swift::__type_of(&$m)),*],
             &[$(($crate::swift::__type_of(&$w), {
@@ -245,6 +250,7 @@ macro_rules! __swift_args {
             },
         );
         $($(let $c = $crate::swift::DeclaredClosure($c, $shape);)*)?
+        $(let $o = $crate::swift::Consumed($o);)*
         ($($arg,)* generic,)
     }};
 }
@@ -254,14 +260,20 @@ macro_rules! __swift_args {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __swift_call {
-    ($function:ident [$($arg:ident),*] [auto $m:tt $w:tt $slot:tt [$result:ident] $($closures:tt)*] $declared:expr) => {
-        $function.call_returning(
-            $crate::swift::__type_of(&$result),
-            $crate::__swift_args!([$($arg),*] [auto $m $w $slot [$result] $($closures)*]),
-        )
+    ($function:ident [$($arg:ident),*] [consumed [$($o:ident)*] $($generic:tt)*] $declared:expr) => {
+        $crate::__swift_call!(@ $function [$($arg),*] [$($o)*] [$($generic)*] $declared)
     };
     ($function:ident [$($arg:ident),*] [$($generic:tt)*] $declared:expr) => {
-        $function.call_declared($crate::__swift_args!([$($arg),*] [$($generic)*]), $declared)
+        $crate::__swift_call!(@ $function [$($arg),*] [] [$($generic)*] $declared)
+    };
+    (@ $function:ident [$($arg:ident),*] $o:tt [auto $m:tt $w:tt $slot:tt [$result:ident] $($closures:tt)*] $declared:expr) => {
+        $function.call_returning(
+            $crate::swift::__type_of(&$result),
+            $crate::__swift_args!([$($arg),*] $o [auto $m $w $slot [$result] $($closures)*]),
+        )
+    };
+    (@ $function:ident [$($arg:ident),*] $o:tt [$($generic:tt)*] $declared:expr) => {
+        $function.call_declared($crate::__swift_args!([$($arg),*] $o [$($generic)*]), $declared)
     };
 }
 

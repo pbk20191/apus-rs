@@ -126,6 +126,13 @@ impl Declaration {
         }
     }
 
+    /// Per formal parameter, whether the callee consumes it (+1) instead of borrowing it: every parameter of an
+    /// initializer (Swift's default for initializers and setters, SE-0377).
+    pub fn consumed(&self) -> Vec<bool> {
+        let consumes = self.0.name == "init";
+        vec![consumes; self.formal_count()]
+    }
+
     /// See [`typed_throws`].
     pub fn typed_throws(&self) -> Result<bool, Error> {
         match &self.0.signature {

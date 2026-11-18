@@ -274,6 +274,19 @@ impl<T: IntoSwift + Clone> SwiftArg for Vec<T> {
     }
 }
 
+/// An argument the callee consumes (+1): an initializer's arguments, a setter's new value. `swift!` wraps them.
+#[doc(hidden)]
+pub struct Consumed<A>(pub A);
+
+impl<A: SwiftArg> SwiftArg for Consumed<A> {
+    fn lower(&self, into: &mut ArgLowering) {
+        let start = into.owned.len();
+        self.0.lower(into);
+        let lowered: Vec<Owned> = into.owned.drain(start..).collect();
+        into.owned.extend(lowered.into_iter().filter_map(Owned::hand_over));
+    }
+}
+
 /// A tuple of arguments, in declaration order.
 pub trait SwiftArgs {
     #[doc(hidden)]

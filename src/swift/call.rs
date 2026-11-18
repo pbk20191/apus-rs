@@ -104,8 +104,31 @@ pub(crate) enum Owned {
     Bridge(u64),
     /// A value passed by address; dropped with the record.
     Value(#[allow(dead_code)] SwiftValue),
+    /// The storage of a value the callee took (an owned argument passed by address): freed, not destroyed.
+    Storage(#[allow(dead_code)] UninitValue),
     /// Shared storage the callee works on in place (an `inout` self).
     Shared(#[allow(dead_code)] Arc<dyn std::any::Any + Send + Sync>),
+}
+
+impl Owned {
+    /// Hands what this keeps alive over to the callee, for an argument it consumes (+1): a reference's +1 becomes
+    /// the callee's; a value passed by address becomes the callee's, its storage still ours until the call is over.
+    pub(crate) fn hand_over(self) -> Option<Owned> {
+        match self {
+            Owned::Object(_) | Owned::Native(_) | Owned::Bridge(_) => {
+                std::mem::forget(self);
+                None
+            }
+            Owned::Value(_) => {
+                let this = std::mem::ManuallyDrop::new(self);
+                let Owned::Value(value) = &*this else { unreachable!() };
+                // Moved out of `this`, which is never dropped.
+                let value = unsafe { std::ptr::read(value) };
+                Some(Owned::Storage(value.into_uninit()))
+            }
+            other => Some(other),
+        }
+    }
 }
 
 impl Drop for Owned {
@@ -115,7 +138,7 @@ impl Drop for Owned {
                 Owned::Object(object) => rt::swift_unknownObjectRelease(object),
                 Owned::Native(object) => rt::swift_release(object),
                 Owned::Bridge(word) => rt::swift_bridgeObjectRelease(word as *mut c_void),
-                Owned::Value(_) | Owned::Shared(_) => {} // release themselves
+                Owned::Value(_) | Owned::Storage(_) | Owned::Shared(_) => {} // release themselves
             }
         }
     }

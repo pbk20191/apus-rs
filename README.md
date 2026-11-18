@@ -158,7 +158,8 @@ the standard library spelled out:
 - Initializers: `Shop.Cart(struct).init(items: [String])`, `Shop.Level(enum).init(rawValue: Int) -> Level(enum)?`
   (the result is the type unless written; a failable one returns an optional). An initializer or `static` member of a
   class or actor takes the class as `self` (`self: &SwiftType`, its metadata); a struct's or enum's takes no `self`.
-  `swift!` refuses the wrong one. Protocol initializers and static protocol requirements are not supported.
+  `swift!` refuses the wrong one. An initializer consumes its arguments (Swift passes them +1): `swift!` hands them
+  over. Protocol initializers and static protocol requirements are not supported.
 - A value receiver (`self: &SwiftValue`, `self: &Opened`) is passed as a copy: a `mutating` method changes the copy,
   never the Rust-side value.
 - `(extension in Module)` marks a member of an extension that Swift mangles as one: an extension in another

@@ -213,6 +213,29 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             Err(error) => return item_compile_error(&format!("`{declaration}`: {error}")),
         }
     }
+    // Arguments the callee consumes (an initializer's): passed +1, the call keeping no reference of its own.
+    if let Some((declaration, parsed)) = &declared {
+        let consumed: Vec<TokenTree> = parsed
+            .consumed()
+            .iter()
+            .zip(&rust_args)
+            .filter(|(consumes, _)| **consumes)
+            .map(|(_, name)| TokenTree::Ident(name.clone()))
+            .collect();
+        if !consumed.is_empty() {
+            if parsed.nonsending() {
+                return item_compile_error(&format!("`{declaration}`: nonisolated(nonsending) with consumed arguments is not supported"));
+            }
+            let mut front: TokenStream = [
+                TokenTree::Ident(proc_macro::Ident::new("consumed", proc_macro::Span::call_site())),
+                TokenTree::Group(Group::new(Delimiter::Bracket, consumed.into_iter().collect())),
+            ]
+            .into_iter()
+            .collect();
+            front.extend(generic);
+            generic = front;
+        }
+    }
     // A typed-throws declaration whose error slot is neither passed nor filled automatically.
     if let Some((declaration, parsed)) = &declared {
         if parsed.typed_throws().unwrap_or(false) && !rust_error_slot && !automatic {
