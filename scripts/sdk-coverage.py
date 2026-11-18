@@ -113,7 +113,8 @@ def protocol_name(spelling, usr):
     return spelling if module is None or "." in spelling else f"{module}.{spelling}"
 
 
-def render_chain(chain):
+def render_chain(chain, extended=False):
+    """`extended`: the chain continues a type it extends from another module (an imported one)."""
     first = chain[0]
     usr = first.get("preciseIdentifier")
     names = [c["spelling"] for c in chain]
@@ -135,9 +136,12 @@ def render_chain(chain):
     if usr.startswith("c:"):
         name = objc_name(usr)
         module, kind = usr_module_kind(usr)
-        if len(chain) != 1 or name is None or kind is None:
+        if name is None or kind is None:
             raise Untranslatable("imported type unknown")
-        return f"__C.{name}" if kind == "protocol" else f"__C.{name}({kind})"
+        if len(chain) == 1:
+            return f"__C.{name}" if kind == "protocol" else f"__C.{name}({kind})"
+        # A Swift type nested in an imported one: declared in an overlay's extension of it.
+        return f"__C.{name}({kind})." + render_chain(chain[1:], extended=True).split(".", 1)[1]
     if len(chain) >= 1 and chain[-1].get("preciseIdentifier", "").endswith("a") and GRAPH is not None:
         alias = GRAPH.by_usr.get(chain[-1]["preciseIdentifier"])
         if alias is not None and alias["kind"]["identifier"] == "swift.typealias" and not alias.get("swiftGenerics"):
@@ -149,15 +153,22 @@ def render_chain(chain):
         raise Untranslatable("typealias from another module" if alias is None else "generic typealias")
     parts = []
     module = None
-    for c in chain:
+    for n, c in enumerate(chain):
         m, kind = usr_module_kind(c.get("preciseIdentifier", ""))
         module = module or m
         if kind in (None, "typealias", "associatedtype"):
             raise Untranslatable(f"type {kind or 'unknown'}" if kind else "type unknown")
-        parts.append((c["spelling"], kind))
+        marker = ""
+        declared = GRAPH.by_usr.get(c.get("preciseIdentifier", "")) if GRAPH is not None else None
+        ext = declared.get("swiftExtension") if declared is not None and (n > 0 or extended) else None
+        if ext is not None and (extended or ext.get("constraints") or ext.get("extendedModule", GRAPH.module) != GRAPH.module):
+            if ext.get("constraints"):
+                raise Untranslatable("type of a constrained extension in a type reference")
+            marker = f"(extension in {GRAPH.module}) "
+        parts.append((c["spelling"], kind, marker))
     if parts[-1][1] == "protocol":
         return protocol_name(".".join(names), usr)
-    return f"{module}." + ".".join(f"{name}({kind})" for name, kind in parts)
+    return f"{module}." + ".".join(f"{marker}{name}({kind})" for name, kind, marker in parts)
 
 
 def render(frags):
@@ -289,6 +300,14 @@ class Graph:
         self.by_usr = {s["identifier"]["precise"]: s for s in self.symbols}
         self.types_by_path = {tuple(s["pathComponents"]): s for s in self.symbols
                               if s["kind"]["identifier"] in TYPE_KINDS}
+        # Each type name the declarations spell, with the USR they link it to (None: spelled for several types).
+        self.usr_by_name = {}
+        for symbol in self.symbols:
+            for f in symbol.get("declarationFragments", []):
+                if f["kind"] == "typeIdentifier" and f.get("preciseIdentifier"):
+                    known = self.usr_by_name.setdefault(f["spelling"], f["preciseIdentifier"])
+                    if known != f["preciseIdentifier"]:
+                        self.usr_by_name[f["spelling"]] = None
         self.parent = {r["source"]: r["target"] for r in self.relations
                        if r["kind"] in ("memberOf", "requirementOf", "optionalRequirementOf")}
 
@@ -304,13 +323,20 @@ class Graph:
             _, kind = usr_module_kind(target)
             if name is None or kind is None:
                 raise Untranslatable("imported context unknown")
-            return "__C", [(name, kind, "")], [], []
+            return "__C", [(name, kind, "", "")], [], []
         parts, params, constraints = [], [], []
+        imported = False
         for n in range(1, len(path) + 1):
             t = self.types_by_path.get(tuple(path[:n]))
             clause = ""
             if t is not None:
                 kind = TYPE_KINDS[t["kind"]["identifier"]]
+                if t["identifier"]["precise"].startswith("c:"):
+                    # An imported type: mangled under its C/ObjC name, in a module apart from any Swift overlay.
+                    if n != 1 or objc_name(t["identifier"]["precise"]) is None:
+                        raise Untranslatable("imported context unknown")
+                    path = [objc_name(t["identifier"]["precise"])] + path[1:]
+                    imported = True
                 generics = t.get("swiftGenerics", {})
                 own = [p["name"] for p in generics.get("parameters", []) if p.get("depth", 0) == 0 and p["name"] not in params]
                 if own and kind != "protocol":
@@ -325,18 +351,51 @@ class Graph:
                             # A case's symbol carries the enum's whole generic signature.
                             raise Untranslatable("enum constraint beyond a conformance")
                     clause = "<" + ", ".join(f"{p}: {' & '.join(bound[p])}" if p in bound else p for p in own) + ">"
-            elif n == len(path) and self.parent.get(sym["identifier"]["precise"]):
-                _, kind = usr_module_kind(self.parent[sym["identifier"]["precise"]])
+            else:
+                # A type of another module, extended here: its USR is the parent of the next level down.
+                child = sym if n == len(path) else self.types_by_path.get(tuple(path[:n + 1]))
+                usr = self.parent.get(child["identifier"]["precise"], "") if child is not None else ""
+                if not usr:
+                    raise Untranslatable("context in another module")
+                _, kind = usr_module_kind(usr)
                 if kind not in ("struct", "class", "enum", "protocol"):
                     raise Untranslatable("context kind unknown")
-            else:
-                raise Untranslatable("context in another module")
-            parts.append((path[n - 1], kind, clause))
+                if usr.startswith("c:"):
+                    if n != 1 or objc_name(usr) is None:
+                        raise Untranslatable("imported context unknown")
+                    path = [objc_name(usr)] + path[1:]  # mangled flat, under its C/ObjC name
+                    imported = True
+            marker = ""
+            ext = t.get("swiftExtension") if t is not None and n > 1 else None
+            if ext is not None:
+                # A type declared in a constrained extension, or in another module's: the extension is its context.
+                extra = [c for c in ext.get("constraints", []) if c not in constraints]
+                if extra or imported or ext.get("extendedModule", self.module) != self.module:
+                    where = (" where " + ", ".join(constraint_text(self, c) for c in extra)) if extra else ""
+                    marker = f"(extension in {self.module}{where}) "
+                    constraints = constraints + extra
+            parts.append((path[n - 1], kind, clause, marker))
         target = self.parent.get(sym["identifier"]["precise"])
         module = usr_module_kind(target)[0] if target and target.startswith("s:") else None
         if parts[-1][1] == "protocol":
             params = ["Self"]
         return module or self.module, parts, params, constraints
+
+
+def type_text(graph, text, usr):
+    """A generic type as a constraint spells it (`Measurement<UnitLength>`), its names resolved through the USRs
+    the graph links them to; a name it does not link is left as written (a generic parameter)."""
+    tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_.]*|[<>,]", text)
+    out = []
+    for i, token in enumerate(tokens):
+        if token in "<>,":
+            out.append(token + (" " if token == "," else ""))
+            continue
+        token_usr = usr if i == 0 else graph.usr_by_name.get(token, "")
+        if token_usr is None or (token_usr == "" and "." in token):
+            raise Untranslatable("same-type requirement on a generic type")
+        out.append(render_chain([{"spelling": token, "preciseIdentifier": token_usr}]) if token_usr else token)
+    return "".join(out)
 
 
 def constraint_text(graph, c):
@@ -345,7 +404,7 @@ def constraint_text(graph, c):
     if c["kind"] == "sameType":
         rhs = c["rhs"]
         if "<" in rhs:
-            raise Untranslatable("same-type requirement on a generic type")
+            return f"{c['lhs']} == {type_text(graph, rhs, c.get('rhsPrecise'))}"
         if c.get("rhsPrecise"):
             module, kind = usr_module_kind(c["rhsPrecise"])
             if module not in ("Swift", "_Concurrency"):
@@ -386,7 +445,7 @@ def declaration(graph, sym):
         if extra or protocol or (ext.get("extendedModule") and ext["extendedModule"] != graph.module):
             where = (" where " + ", ".join(constraint_text(graph, c) for c in extra)) if extra else ""
             extension = f"(extension in {graph.module}{where}) "
-    ctx = "".join(f".{name}({k}){clause}" for name, k, clause in parts)
+    ctx = "".join(f".{marker}{name}({k}){clause}" for name, k, clause, marker in parts)
     generics = sym.get("swiftGenerics", {})
     own_params = [p["name"] for p in generics.get("parameters", []) if p["name"] not in ctx_params]
     known = ctx_constraints + (ext.get("constraints", []) if ext else [])

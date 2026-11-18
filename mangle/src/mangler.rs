@@ -33,6 +33,12 @@ struct Mangler {
     /// The declaration's enclosing type and the level of it that declares the generic parameters: its bound form
     /// puts the arguments at that level, not the last.
     nested_generic: Option<(Vec<(String, Kind)>, usize)>,
+    /// A `@preconcurrency` declaration: its symbol leaves out marker protocols.
+    strip_markers: bool,
+}
+
+fn is_sendable(protocol: &Protocol) -> bool {
+    protocol.module == "Swift" && protocol.name == "Sendable"
 }
 
 /// `INDEX`: 0 is `_`, n is `<n-1>_`.
@@ -202,7 +208,9 @@ impl Mangler {
     }
 
     /// ASTMangler::appendAnyGenericType for a non-generic (or unbound) nominal type.
-    fn nominal(&mut self, module: &str, path: &[(String, Kind)]) -> Result<(), String> {
+    /// `extension`: the context extension of a path element, mangled after its parent when that element is in `path`.
+    fn nominal(&mut self, module: &str, path: &[(String, Kind)], extension: Option<&ContextExtension>) -> Result<(), String> {
+        let extension = extension.filter(|extension| extension.at < path.len());
         let (name, kind) = path.last().ok_or("empty type path")?;
         if path.len() == 1 {
             let standard = match (module, kind) {
@@ -217,14 +225,28 @@ impl Mangler {
                 return Ok(());
             }
         }
-        let key = Key::Type(Ty::Nominal { module: module.to_string(), path: path.to_vec(), args: Vec::new() });
+        let key = Key::Type(Ty::Nominal {
+            module: module.to_string(),
+            path: path.to_vec(),
+            args: Vec::new(),
+            extension: extension.cloned().map(Box::new),
+        });
         if self.try_substitution(&key) {
             return Ok(());
         }
         if path.len() == 1 {
             self.module(module)?;
         } else {
-            self.nominal(module, &path[..path.len() - 1])?;
+            self.nominal(module, &path[..path.len() - 1], extension)?;
+        }
+        if let Some(extension) = extension.filter(|extension| extension.at == path.len() - 1) {
+            // ASTMangler::appendExtension: the extended type (just mangled), the module, the new requirements, `E`.
+            self.module(&extension.module)?;
+            if !extension.requirements.is_empty() {
+                self.requirements(&extension.requirements)?;
+                self.push(signature_end(extension.extended_params, extension.extended_constrained));
+            }
+            self.push("E");
         }
         self.identifier(name)?;
         self.buffer.push(kind.operator());
@@ -249,13 +271,13 @@ impl Mangler {
 
     fn ty(&mut self, ty: &Ty) -> Result<(), String> {
         match ty {
-            Ty::Nominal { module, path, args } if args.is_empty() => self.nominal(module, path),
-            Ty::Nominal { module, path, args } => {
+            Ty::Nominal { module, path, args, extension } if args.is_empty() => self.nominal(module, path, extension.as_deref()),
+            Ty::Nominal { module, path, args, extension } => {
                 let key = Key::Type(ty.clone());
                 if self.try_substitution(&key) {
                     return Ok(());
                 }
-                self.nominal(module, path)?;
+                self.nominal(module, path, extension.as_deref())?;
                 // One argument list per type level, outermost first (`y`, then `_` before each next level), the
                 // arguments at the level that declares them: `PE.Pair<Int, String>` is `y_SiSSG`.
                 let level = match &self.nested_generic {
@@ -371,6 +393,18 @@ impl Mangler {
     }
 
     /// ASTMangler::appendRequirement
+    /// A signature's requirements in canonical order; under `@preconcurrency`, without the marker protocol
+    /// `Sendable` (ASTMangler's AllowMarkerProtocols).
+    fn requirements(&mut self, requirements: &[Requirement]) -> Result<(), String> {
+        for requirement in sorted_requirements(requirements) {
+            if self.strip_markers && matches!(&requirement, Requirement::Conforms(_, protocol) if is_sendable(protocol)) {
+                continue;
+            }
+            self.requirement(&requirement)?;
+        }
+        Ok(())
+    }
+
     fn requirement(&mut self, requirement: &Requirement) -> Result<(), String> {
         let (subject, plain, with_substitution, on_associated_type) = match requirement {
             Requirement::Conforms(subject, protocol) => {
@@ -427,7 +461,7 @@ impl Mangler {
             self.push("K");
         }
         if function.main_actor {
-            self.nominal("_Concurrency", &[("MainActor".into(), Kind::Class)])?;
+            self.nominal("_Concurrency", &[("MainActor".into(), Kind::Class)], None)?;
             self.push("Yc");
         }
         self.push(if in_parameter && !function.escaping { "XE" } else { "c" });
@@ -541,9 +575,12 @@ fn canonical(ty: &Ty, same_types: &SameTypes) -> Ty {
         Ty::Member(param, name) => same_types.members.get(&(*param, name.clone())).cloned().unwrap_or_else(|| ty.clone()),
         Ty::Optional(wrapped) => Ty::Optional(Box::new(canonical(wrapped, same_types))),
         Ty::Tuple(elements) => Ty::Tuple(elements.iter().map(|(label, element)| (label.clone(), canonical(element, same_types))).collect()),
-        Ty::Nominal { module, path, args } => {
-            Ty::Nominal { module: module.clone(), path: path.clone(), args: args.iter().map(|arg| canonical(arg, same_types)).collect() }
-        }
+        Ty::Nominal { module, path, args, extension } => Ty::Nominal {
+            module: module.clone(),
+            path: path.clone(),
+            args: args.iter().map(|arg| canonical(arg, same_types)).collect(),
+            extension: extension.clone(),
+        },
         Ty::Function(function) => Ty::Function(Box::new(FunctionTy {
             params: function.params.iter().map(|param| canonical(param, same_types)).collect(),
             result: canonical(&function.result, same_types),
@@ -551,12 +588,19 @@ fn canonical(ty: &Ty, same_types: &SameTypes) -> Ty {
             main_actor: function.main_actor && !same_types.strip_concurrency,
             ..(**function).clone()
         })),
+        Ty::Existential(protocol) if same_types.strip_concurrency && is_sendable(protocol) => Ty::Any,
         Ty::Any | Ty::AnyObject | Ty::Existential(_) | Ty::Opaque(_) => ty.clone(),
     }
 }
 
 fn all_same_types(decl: &Decl) -> SameTypes {
-    let mut map = same_types(decl.extension.iter().flat_map(|e| e.requirements.iter()).chain(decl.requirements.iter()));
+    let mut map = same_types(
+        decl.extension
+            .iter()
+            .flat_map(|e| e.requirements.iter())
+            .chain(decl.context_extension.iter().flat_map(|e| e.requirements.iter()))
+            .chain(decl.requirements.iter()),
+    );
     map.strip_concurrency = decl.preconcurrency;
     map
 }
@@ -565,7 +609,11 @@ fn all_same_types(decl: &Decl) -> SameTypes {
 /// with a lone unconstrained context parameter the whole signature is mangled (`l`); otherwise only the new
 /// requirements are, after an empty parameter count (`rl`).
 fn contextual_signature_end(decl: &Decl, inside_constrained_extension: bool) -> &'static str {
-    if decl.context_params == 1 && !decl.context_is_constrained && !inside_constrained_extension { "l" } else { "rl" }
+    signature_end(decl.context_params, decl.context_is_constrained || inside_constrained_extension)
+}
+
+fn signature_end(context_params: usize, context_is_constrained: bool) -> &'static str {
+    if context_params == 1 && !context_is_constrained { "l" } else { "rl" }
 }
 
 /// A protocol's descriptor symbol (`$sSHMp` for Hashable).
@@ -578,20 +626,18 @@ pub(crate) fn protocol_descriptor(protocol: &Protocol) -> Result<String, String>
 
 pub fn mangle(decl: &Decl) -> Result<String, String> {
     let same_types = all_same_types(decl);
-    let mut m = Mangler { buffer: "$s".into(), ..Default::default() };
+    let mut m = Mangler { buffer: "$s".into(), strip_markers: decl.preconcurrency, ..Default::default() };
     if decl.context.is_empty() {
         m.module(&decl.module)?;
     } else {
-        m.nominal(&decl.module, &decl.context)?;
+        m.nominal(&decl.module, &decl.context, decl.context_extension.as_ref())?;
     }
     let mut in_constrained_extension = false;
     if let Some(extension) = &decl.extension {
         // ASTMangler::appendExtension: the type, the extension's module, the constraints it adds, `E`.
         m.module(&extension.module)?;
         if !extension.requirements.is_empty() {
-            for requirement in sorted_requirements(&extension.requirements) {
-                m.requirement(&requirement)?;
-            }
+            m.requirements(&extension.requirements)?;
             m.push(contextual_signature_end(decl, false));
             in_constrained_extension = true;
         }
@@ -650,9 +696,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
             m.parameters(&params)?;
             m.push("c");
             if decl.generic_params > 0 {
-                for requirement in sorted_requirements(&decl.requirements) {
-                    m.requirement(&requirement)?;
-                }
+                m.requirements(&decl.requirements)?;
                 if decl.generic_params > 1 {
                     m.push("r");
                     m.push(&index(decl.generic_params - 1));
@@ -666,7 +710,10 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
             // generic signature; then the tag symbol's `WC`.
             let path: Vec<(String, Kind)> = decl.context.clone();
             let args = (0..decl.context_params).map(|index| Ty::Param(GenericParam { depth: 0, index })).collect();
-            let this = Ty::Nominal { module: decl.module.clone(), path, args };
+            let this = canonical(
+                &Ty::Nominal { module: decl.module.clone(), path, args, extension: decl.context_extension.clone().map(Box::new) },
+                &same_types,
+            );
             m.push("y");
             m.ty(&this)?;
             if !payload.is_empty() {
@@ -681,9 +728,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
             m.ty(&this)?;
             m.push("m");
             if decl.context_params > 0 {
-                for requirement in sorted_requirements(&decl.requirements) {
-                    m.requirement(&requirement)?;
-                }
+                m.requirements(&decl.requirements)?;
                 if decl.context_params > 1 {
                     m.push("r");
                     m.push(&index(decl.context_params - 1));
@@ -732,9 +777,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
                 // own, then `fC`.
                 m.push("c");
                 if decl.generic_params > 0 {
-                    for requirement in sorted_requirements(&decl.requirements) {
-                        m.requirement(&requirement)?;
-                    }
+                    m.requirements(&decl.requirements)?;
                     if decl.generic_params > 1 {
                         m.push("r");
                         m.push(&index(decl.generic_params - 1));
@@ -745,9 +788,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
                 return Ok(m.buffer);
             }
             if decl.generic_params > 0 {
-                for requirement in sorted_requirements(&decl.requirements) {
-                    m.requirement(&requirement)?;
-                }
+                m.requirements(&decl.requirements)?;
                 if decl.generic_params > 1 {
                     m.push("r");
                     m.push(&index(decl.generic_params - 1));
@@ -758,9 +799,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
                 if decl.context_params == 0 {
                     return Err("a `where` clause needs generic parameters".into());
                 }
-                for requirement in sorted_requirements(&decl.requirements) {
-                    m.requirement(&requirement)?;
-                }
+                m.requirements(&decl.requirements)?;
                 m.push(contextual_signature_end(decl, in_constrained_extension));
             }
             m.push("F");

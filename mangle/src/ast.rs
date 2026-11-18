@@ -42,8 +42,9 @@ pub struct Protocol {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
-    /// `Module.Outer.Inner<Args>`; `args` belong to the last path element.
-    Nominal { module: String, path: Vec<(String, Kind)>, args: Vec<Ty> },
+    /// `Module.Outer.Inner<Args>`; `args` belong to the last path element. `extension`: one element of the path is
+    /// declared in an extension that is part of its context.
+    Nominal { module: String, path: Vec<(String, Kind)>, args: Vec<Ty>, extension: Option<Box<ContextExtension>> },
     Optional(Box<Ty>),
     Tuple(Vec<(Option<String>, Ty)>),
     Any,
@@ -120,13 +121,13 @@ impl Ownership {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Subject {
     Param(GenericParam),
     Member(GenericParam, String),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Requirement {
     Conforms(Subject, Protocol),
     SameType(Subject, Ty),
@@ -152,10 +153,26 @@ pub struct Extension {
     pub requirements: Vec<Requirement>,
 }
 
+/// A type declared in an extension that Swift makes part of its context (a constrained one, or one in another module
+/// than the extended type's): `Outer<T>.(extension in M where T: P) Inner`. ASTMangler::appendContext.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ContextExtension {
+    /// The index in the path of the type declared in the extension.
+    pub at: usize,
+    pub module: String,
+    pub requirements: Vec<Requirement>,
+    /// The extended type's generic parameters, and whether its own declaration constrains them: how the
+    /// extension's generic signature ends.
+    pub extended_params: usize,
+    pub extended_constrained: bool,
+}
+
 pub struct Decl {
     pub module: String,
     /// The types the declaration is a member of, outermost first.
     pub context: Vec<(String, Kind)>,
+    /// An enclosing type declared in an extension that is part of its context.
+    pub context_extension: Option<ContextExtension>,
     /// Generic parameters of the enclosing type (1 for a protocol: `Self`).
     pub context_params: usize,
     /// Which enclosing type (index into `context`) declares those parameters: a type nested in a generic one binds

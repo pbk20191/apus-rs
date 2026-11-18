@@ -200,6 +200,7 @@ const DECLARATIONS: &[&str] = &[
     "@preconcurrency Probe.preMain(_: @escaping @MainActor () -> Void)",
     "Probe.PE(enum).Pair(struct)<A, B>.init(a: A, b: B)",
     "Probe.usePair(_: PE(enum).Pair(struct)<Int, String>)",
+    "@preconcurrency Probe.pw<T1: Sendable, T2: Sendable & Hashable>(_: PQ(struct)<T1>, _: T2, _: any Sendable)",
     "Probe.cTypedefs(_: __C.NSDecimal(typedef struct), _: __C.CGColorRef(typedef class)) -> __C.CGColorRef(typedef class)?",
     "Probe.constant(_: _const String, _: Int)",
     "Probe.makeSome(_: Double) -> some Shape",
@@ -244,6 +245,12 @@ const ENUM_CASES: &[&str] = &[
     "case Cases.Both(enum)<A: Tagged, B: Sendable>.b",
     "case Cases.Sorting(struct)<E: Hashable>.Order(enum).up",
     "case Cases.Sorting(struct)<E: Hashable>.Order(enum).down(E)",
+    "case Cases.Holder(struct)<T>.(extension in Cases where T: Tagged) Mode(enum).on",
+    "case Cases.Holder(struct)<T>.(extension in Cases where T: Tagged) Mode(enum).off(T)",
+    "Cases.Holder(struct)<T>.(extension in Cases where T: Tagged) Item(struct).init()",
+    "Cases.Holder(struct)<T>.(extension in Cases where T: Tagged) Item(struct).size() -> Int",
+    "case Cases.Holder(struct)<T>.(extension in Cases where T == Int) Plain(enum).a",
+    "case Cases.Holder(struct)<T>.Free(enum).z",
 ];
 
 /// Compiled once per test process: tests run in parallel and would otherwise write the same library.
@@ -340,6 +347,20 @@ fn framework_symbols() {
     assert_eq!(
         mangle("case Swift.DecodingError(enum).dataCorrupted(DecodingError(enum).Context(struct))").unwrap(),
         "$ss13DecodingErrorO13dataCorruptedyA2B7ContextVcABmFWC"
+    );
+    // A type Foundation declares in its extension of an Objective-C class (in the SDK's Foundation.tbd).
+    assert_eq!(
+        mangle("case __C.NSScanner(class).(extension in Foundation) NumberRepresentation(enum).decimal").unwrap(),
+        "$sSo9NSScannerC10FoundationE20NumberRepresentationO7decimalyA2EmFWC"
+    );
+    // Such a type named in the signature carries the extension too (a substitution here: `AG`).
+    assert_eq!(
+        mangle(
+            "static Swift.Duration(struct).(extension in Foundation) TimeFormatStyle(struct).Pattern(struct).hourMinute: \
+             Swift.Duration(struct).(extension in Foundation) TimeFormatStyle(struct).Pattern(struct) { get }"
+        )
+        .unwrap(),
+        "$ss8DurationV10FoundationE15TimeFormatStyleV7PatternV10hourMinuteAGvgZ"
     );
 }
 

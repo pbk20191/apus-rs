@@ -29,6 +29,8 @@ struct Segment {
     kind: Option<Kind>,
     /// `<T: P, U>`: parameter names with their inline constraints.
     generics: Option<Vec<(String, Vec<Protocol>)>>,
+    /// `(extension in Module [where …])` before it: its module and where its `where` clause starts.
+    extension: Option<(String, Option<usize>)>,
 }
 
 impl<'a> Parser<'a> {
@@ -81,6 +83,16 @@ impl<'a> Parser<'a> {
     fn eat_path_dot(&mut self) -> bool {
         let mut chars = self.rest().chars();
         if chars.next() == Some('.') && chars.next().is_some_and(|c| c.is_alphabetic() || c == '_') {
+            self.position += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// A `.` before a path segment declared in an extension: `Outer.(extension in M) Inner`.
+    fn eat_extension_dot(&mut self) -> bool {
+        if self.rest().starts_with(".(extension ") {
             self.position += 1;
             true
         } else {
@@ -260,7 +272,21 @@ impl<'a> Parser<'a> {
             return Ok(Ty::Param(param));
         }
         let mut segments = vec![(first, self.kind_suffix())];
-        while self.eat_path_dot() {
+        // A segment declared in another module's extension: `Swift.Duration(struct).(extension in Foundation) …`.
+        let mut extension = None;
+        loop {
+            if self.eat_extension_dot() {
+                if extension.is_some() {
+                    return Err(self.error("only one type of a path may be declared in an extension"));
+                }
+                let (module, where_at) = self.extension_marker()?.expect("`.(extension` was seen");
+                if where_at.is_some() {
+                    return Err("a constrained extension in a type's path is not supported".into());
+                }
+                extension = Some((segments.len(), module));
+            } else if !self.eat_path_dot() {
+                break;
+            }
             let name = self.identifier()?;
             segments.push((name, self.kind_suffix()));
         }
@@ -297,12 +323,28 @@ impl<'a> Parser<'a> {
                         if name == "Optional" && args.len() == 1 {
                             return Ok(Ty::Optional(Box::new(args.into_iter().next().unwrap())));
                         }
-                        return Ok(Ty::Nominal { module: known_module.into(), path: vec![(name.clone(), kind)], args });
+                        return Ok(Ty::Nominal { module: known_module.into(), path: vec![(name.clone(), kind)], args, extension: None });
                     }
                 }
             }
             return Err(format!("unknown type `{name}`: write `{name}(struct)`, `{name}(class)` or `{name}(enum)`"));
         }
+        let extension = match extension {
+            Some((at, extension_module)) => {
+                let at = at - (segments.len() - path.len());
+                if at == 0 {
+                    return Err(self.error("an extension needs a type to extend"));
+                }
+                Some(Box::new(ContextExtension {
+                    at,
+                    module: extension_module,
+                    requirements: Vec::new(),
+                    extended_params: 0,
+                    extended_constrained: false,
+                }))
+            }
+            None => None,
+        };
         let mut resolved = Vec::new();
         for (name, kind) in path {
             let kind = kind.ok_or_else(|| needs_kind(name))?;
@@ -311,7 +353,7 @@ impl<'a> Parser<'a> {
             }
             resolved.push((name.clone(), kind));
         }
-        Ok(Ty::Nominal { module, path: resolved, args })
+        Ok(Ty::Nominal { module, path: resolved, args, extension })
     }
 
     fn subject(&mut self) -> Parsed<Subject> {
@@ -374,10 +416,52 @@ impl<'a> Parser<'a> {
     }
 
     fn segment(&mut self) -> Parsed<Segment> {
+        let extension = self.extension_marker()?;
         let name = self.identifier()?;
         let kind = self.kind_suffix();
         let generics = if self.eat_here('<') { Some(self.generic_clause()?) } else { None };
-        Ok(Segment { name, kind, generics })
+        Ok(Segment { name, kind, generics, extension })
+    }
+
+    /// `(extension in Module [where …])`: its `where` clause is parsed once the generic parameters are known.
+    fn extension_marker(&mut self) -> Parsed<Option<(String, Option<usize>)>> {
+        self.skip_whitespace();
+        if !self.rest().starts_with('(') {
+            return Ok(None);
+        }
+        self.position += 1;
+        if !(self.eat_keyword("extension") && self.eat_keyword("in")) {
+            return Err(self.error("expected `(extension in Module)`"));
+        }
+        let module = self.identifier()?;
+        let where_at = if self.eat_keyword("where") { Some(self.position) } else { None };
+        // The `)` that closes the extension, past any in its `where` clause (`T == Big(struct)`).
+        let mut depth = 0;
+        let close = self
+            .rest()
+            .char_indices()
+            .find(|&(_, c)| {
+                depth += match c { '(' => 1, ')' => -1, _ => 0 };
+                depth < 0
+            })
+            .map(|(i, _)| i)
+            .ok_or_else(|| self.error("expected `)`"))?;
+        self.position += close + 1;
+        Ok(Some((module, where_at)))
+    }
+
+    /// The requirements of an extension's `where` clause that starts at `at`.
+    fn extension_requirements(&mut self, at: Option<usize>) -> Parsed<Vec<Requirement>> {
+        let mut requirements = Vec::new();
+        if let Some(at) = at {
+            let resume = std::mem::replace(&mut self.position, at);
+            self.where_clause(&mut requirements)?;
+            if !self.eat(")") {
+                return Err(self.error("unexpected text in the extension's `where` clause"));
+            }
+            self.position = resume;
+        }
+        Ok(requirements)
     }
 
     /// Registers generic parameters at `depth` and returns the requirements written inline.
@@ -464,44 +548,22 @@ impl<'a> Parser<'a> {
             fixity = Some("oP");
         }
 
-        // `(extension in Module [where …])`: its `where` clause is parsed once the generic parameters are known.
-        let mut extension: Option<(String, Option<usize>)> = None;
-        self.skip_whitespace();
-        if self.rest().starts_with('(') {
-            self.position += 1;
-            if !(self.eat_keyword("extension") && self.eat_keyword("in")) {
-                return Err(self.error("expected `(extension in Module)`"));
-            }
-            let module = self.identifier()?;
-            let where_at = if self.eat_keyword("where") { Some(self.position) } else { None };
-            // The `)` that closes the extension, past any in its `where` clause (`T == Big(struct)`).
-            let mut depth = 0;
-            let close = self
-                .rest()
-                .char_indices()
-                .find(|&(_, c)| {
-                    depth += match c { '(' => 1, ')' => -1, _ => 0 };
-                    depth < 0
-                })
-                .map(|(i, _)| i)
-                .ok_or_else(|| self.error("expected `)`"))?;
-            self.position += close + 1;
-            extension = Some((module, where_at));
-        }
+        // The declaration's own extension, before its module.
+        let extension = self.extension_marker()?;
 
         self.skip_whitespace();
         let mut segments = vec![self.segment()?];
-        if segments[0].kind.is_some() || segments[0].generics.is_some() {
+        if segments[0].kind.is_some() || segments[0].generics.is_some() || segments[0].extension.is_some() {
             return Err("expected `Module.name…`: a declaration starts with its module".into());
         }
         self.module = segments[0].name.clone();
         self.home = extension.as_ref().map_or_else(|| self.module.clone(), |(module, _)| module.clone());
-        while self.eat_path_dot() {
+        while self.eat_path_dot() || self.eat_extension_dot() {
             segments.push(self.segment()?);
         }
         let operator = self.operator_name();
         if let Some(name) = &operator {
-            segments.push(Segment { name: name.clone(), kind: None, generics: None });
+            segments.push(Segment { name: name.clone(), kind: None, generics: None, extension: None });
         } else if fixity.is_some() {
             return Err("`prefix` and `postfix` mark an operator".into());
         }
@@ -512,6 +574,9 @@ impl<'a> Parser<'a> {
         if member.kind.is_some() {
             return Err(format!("`{}` is the declaration's name: it takes no kind", member.name));
         }
+        if member.extension.is_some() {
+            return Err("a member's own extension goes before the declaration: `(extension in M) M.Type.member`".into());
+        }
 
         // The enclosing types.
         let mut context = Vec::new();
@@ -519,8 +584,25 @@ impl<'a> Parser<'a> {
         let mut context_generic_level = None;
         let mut context_is_constrained = false;
         let mut context_requirements = Vec::new();
+        let mut context_extension = None;
         let lone_context = segments.len() == 2;
         for segment in segments.drain(1..) {
+            if let Some((module, where_at)) = segment.extension {
+                if context.is_empty() {
+                    return Err(format!("`{}` has no enclosing type to extend", segment.name));
+                }
+                if context_extension.is_some() {
+                    return Err("only one enclosing type may be declared in an extension".into());
+                }
+                let requirements = self.extension_requirements(where_at)?;
+                context_extension = Some(ContextExtension {
+                    at: context.len(),
+                    module,
+                    requirements,
+                    extended_params: context_params,
+                    extended_constrained: context_is_constrained,
+                });
+            }
             let kind = match segment.kind {
                 Some(kind) => kind,
                 None if lone_context => standard_kind(&self.module, &segment.name).ok_or_else(|| needs_kind(&segment.name))?,
@@ -557,18 +639,7 @@ impl<'a> Parser<'a> {
         };
 
         let extension = match extension {
-            Some((module, where_at)) => {
-                let mut extension_requirements = Vec::new();
-                if let Some(at) = where_at {
-                    let resume = std::mem::replace(&mut self.position, at);
-                    self.where_clause(&mut extension_requirements)?;
-                    if !self.eat(")") {
-                        return Err(self.error("unexpected text in the extension's `where` clause"));
-                    }
-                    self.position = resume;
-                }
-                Some(Extension { module, requirements: extension_requirements })
-            }
+            Some((module, where_at)) => Some(Extension { module, requirements: self.extension_requirements(where_at)? }),
             None => None,
         };
 
@@ -581,7 +652,9 @@ impl<'a> Parser<'a> {
             if context_is_constrained && context_requirements.is_empty() {
                 return Err("write the enum's generic constraints: `Enum<T: P>.case`".into());
             }
+            // The enum's signature: its own constraints and those of the extension it is declared in.
             requirements = std::mem::take(&mut context_requirements);
+            requirements.extend(context_extension.iter().flat_map(|e: &ContextExtension| e.requirements.iter().cloned()));
             let mut payload = Vec::new();
             if self.eat("(") {
                 while !self.eat(")") {
@@ -638,7 +711,7 @@ impl<'a> Parser<'a> {
                 self.expect(")")?;
                 match ty {
                     Ty::Existential(ref p) if p.name == "Error" && p.module == "Swift" => None,
-                    Ty::Nominal { ref module, ref path, ref args } if module == "Swift" && args.is_empty() && matches!(path.as_slice(), [(name, _)] if name == "Never") => {
+                    Ty::Nominal { ref module, ref path, ref args, .. } if module == "Swift" && args.is_empty() && matches!(path.as_slice(), [(name, _)] if name == "Never") => {
                         throws = false;
                         None
                     }
@@ -652,7 +725,7 @@ impl<'a> Parser<'a> {
             } else if member.name == "init" {
                 // An initializer returns the type itself (written out only for a failable one: `-> T?`).
                 let args = (0..context_params).map(|index| Ty::Param(GenericParam { depth: 0, index })).collect();
-                Ty::Nominal { module: self.module.clone(), path: context.clone(), args }
+                Ty::Nominal { module: self.module.clone(), path: context.clone(), args, extension: context_extension.clone().map(Box::new) }
             } else {
                 Ty::Tuple(Vec::new())
             };
@@ -743,6 +816,7 @@ impl<'a> Parser<'a> {
         Ok(Decl {
             module: self.module.clone(),
             context,
+            context_extension,
             context_params,
             context_generic_level,
             preconcurrency,
@@ -789,7 +863,7 @@ fn standard_type_is_constrained(module: &str, name: &str) -> bool {
 }
 
 fn swift_generic(name: &str, args: Vec<Ty>) -> Ty {
-    Ty::Nominal { module: "Swift".into(), path: vec![(name.into(), Kind::Struct)], args }
+    Ty::Nominal { module: "Swift".into(), path: vec![(name.into(), Kind::Struct)], args, extension: None }
 }
 
 /// `ty` with each `some P` replaced by a new generic parameter at `depth`, conforming to its protocols.
@@ -804,7 +878,9 @@ fn anonymous_generics(ty: &Ty, depth: usize, count: &mut usize, requirements: &m
         }
         Ty::Optional(wrapped) => Ty::Optional(Box::new(again(wrapped))),
         Ty::Tuple(elements) => Ty::Tuple(elements.iter().map(|(label, e)| (label.clone(), again(e))).collect()),
-        Ty::Nominal { module, path, args } => Ty::Nominal { module: module.clone(), path: path.clone(), args: args.iter().map(again).collect() },
+        Ty::Nominal { module, path, args, extension } => {
+            Ty::Nominal { module: module.clone(), path: path.clone(), args: args.iter().map(again).collect(), extension: extension.clone() }
+        }
         Ty::Function(f) => Ty::Function(Box::new(FunctionTy {
             params: f.params.iter().map(&mut again).collect(),
             result: again(&f.result),

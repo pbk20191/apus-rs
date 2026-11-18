@@ -14,3 +14,11 @@ public protocol Tagged {}
 public enum Keyed<K: Hashable> { case one(K), none }
 public enum Both<A: Tagged, B: Sendable> { case a(A), b }
 public struct Sorting<E: Hashable> { public enum Order { case up, down(E) } }
+// Types declared in a constrained extension: the extension is part of their context.
+public struct Holder<T> { public init() {} }
+extension Holder where T: Tagged {
+    public enum Mode { case on, off(T) }
+    public struct Item { public init() {}; public func size() -> Int { 0 } }
+}
+extension Holder where T == Int { public enum Plain { case a } }
+extension Holder { public enum Free { case z } }

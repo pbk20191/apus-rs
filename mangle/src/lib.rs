@@ -36,8 +36,10 @@ impl std::error::Error for Error {}
 /// [static] [prefix | postfix] [Module.Type(kind)….]+(_: Type[, _: Type]) -> Type   (an operator: infix with two parameters)
 /// [mutating | consuming | borrowing] … (how the method takes `self`; the symbol does not show it)
 /// … ([label|_]: [_const] [inout | consuming | borrowing | __owned | __shared] Type, …)   (`_const`: AppIntents' compile-time constants)
-/// @preconcurrency …   (its symbol leaves out @Sendable and global actors in function types)
+/// @preconcurrency …   (its symbol leaves out @Sendable, global actors in function types and `Sendable` requirements)
 /// [(extension in Module [where …])] Module.Type(kind)[<T, …>]….init[<U: P>]([label|_]: Type, …) [async] [throws] [-> Type?]
+/// Module.Outer(kind).(extension in Module [where …]) Inner(kind)….member   (a type declared in an extension that is
+///     part of its context: a constrained one, or one in another module than the extended type's)
 /// case Module.Type(kind)[<T, …>]….Enum(enum).name[([label:] Type, …)]
 /// ```
 ///
@@ -341,7 +343,7 @@ fn closure_shape(function: &ast::FunctionTy) -> Result<String, String> {
             Ty::Existential(protocol) if protocol.module == "Swift" && protocol.name == "Error" => 'd',
             Ty::Existential(_) => '?',
             Ty::AnyObject => 'd',
-            Ty::Nominal { module, path, args } if module == "Swift" && path.len() == 1 && args.is_empty()
+            Ty::Nominal { module, path, args, .. } if module == "Swift" && path.len() == 1 && args.is_empty()
                 && (DIRECT.contains(&path[0].0.as_str()) || path[0].0 == "String") => 'd',
             Ty::Nominal { path, args, .. } if args.is_empty() && matches!(path.last(), Some((_, ast::Kind::Class | ast::Kind::Actor | ast::Kind::TypedefClass))) => 'd',
             ty if mentions_param(ty) => {

@@ -192,3 +192,6 @@ public struct GBox<T> { public func shape() -> some Shape { Sq2() } }
 import Foundation
 import CoreGraphics
 public func cTypedefs(_ d: Decimal, _ c: CGColor) -> CGColor? { nil }
+// `@preconcurrency`: marker protocols (Sendable) leave the symbol's generic signature and existentials.
+public struct PQ<T> {}
+@preconcurrency public func pw<T1: Sendable, T2: Sendable & Hashable>(_ a: PQ<T1>, _ b: T2, _ c: any Sendable) {}
