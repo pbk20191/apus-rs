@@ -215,6 +215,66 @@ def render_chain(chain, extended=False, continued=False):
     return path if continued else f"{module}.{path}"
 
 
+_VARIADIC = None
+
+
+def variadic_types():
+    """USR -> (generic parameter count, index of the `each` one) of the variadic generic types in the cached graphs."""
+    global _VARIADIC
+    if _VARIADIC is None:
+        _VARIADIC = {}
+        for path in glob.glob(os.path.join(CACHE, "*", "*.symbols.json")):
+            with open(path) as f:
+                for sym in json.load(f).get("symbols", []):
+                    frags = sym.get("declarationFragments", [])
+                    params = [i for i, f in enumerate(frags) if f["kind"] == "genericParameter"]
+                    packs = [n for n, i in enumerate(params) if i > 0 and "each" in frags[i - 1]["spelling"]]
+                    if packs and sym["kind"]["identifier"] in TYPE_KINDS:
+                        _VARIADIC[sym["identifier"]["precise"]] = (len(params), packs[0])
+    return _VARIADIC
+
+
+def pack_arguments(frags, i, variadic):
+    """At `frags[i]`, a `<…>` after a variadic type: its arguments with the pack's as `Pack{…}`, and the index after."""
+    count, pack = variadic
+    groups, current, depth, j = [], [], 0, i
+    first = frags[i]["spelling"]
+    frags = frags[:i] + [dict(frags[i], spelling=first[first.index("<") + 1:])] + frags[i + 1:]
+    while j < len(frags):
+        f = frags[j]
+        if f["kind"] != "text":
+            current.append(f)
+            j += 1
+            continue
+        text, piece = f["spelling"], ""
+        for k, ch in enumerate(text):
+            if ch in "<([":
+                depth += 1
+            elif ch in ">)]":
+                if depth == 0 and ch == ">":
+                    if piece:
+                        current.append(dict(f, spelling=piece))
+                    groups.append(current)
+                    rest = text[k + 1:]
+                    after = [dict(f, spelling=rest)] if rest else []
+                    args = [render(g) for g in groups if g]
+                    tail = count - pack - 1
+                    packed = args[:pack] + ["Pack{" + ", ".join(args[pack:len(args) - tail]) + "}"] + args[len(args) - tail:]
+                    return "<" + ", ".join(packed) + ">", after, j + 1
+                depth -= 1
+            elif ch == "," and depth == 0:
+                if piece:
+                    current.append(dict(f, spelling=piece))
+                groups.append(current)
+                current, piece = [], ""
+                continue
+            piece += ch
+        if piece:
+            current.append(dict(f, spelling=piece))
+        j += 1
+    raise Untranslatable("unbalanced generic arguments")
+
+
 def render(frags):
     out = []
     i = 0
@@ -230,6 +290,11 @@ def render(frags):
             # After `Outer<A>.` the chain continues that type: its path, without a module.
             continued = bool(out) and out[-1].endswith(">.")
             out.append(render_chain(chain, continued=continued))
+            variadic = variadic_types().get(chain[-1].get("preciseIdentifier", ""))
+            if variadic and j < len(frags) and frags[j]["kind"] == "text" and frags[j]["spelling"].startswith("<"):
+                text, after, j = pack_arguments(frags, j, variadic)
+                out.append(text)
+                frags = frags[:j] + after + frags[j:]
             i = j
             continue
         if kind == "attribute" and spelling.strip() == "@" and i + 1 < len(frags) \

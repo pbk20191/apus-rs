@@ -215,6 +215,9 @@ static (extension in _Concurrency where Success == Never, Failure == Never)
   (Swift passes nothing for it), an optional one and `any P.Type` are refused.
 - Both rest on swiftc's type lowering (one pointer each), which the calling-convention document does not spell out;
   Apple's frameworks export functions compiled that way, so ABI stability keeps it.
+- A variadic generic type's pack argument is written as Swift's demangler prints it, since the use site does not
+  show that the type is variadic: `Foundation.Predicate(struct)<Pack{T}>` for `Predicate<T>`,
+  `M.Mixed(struct)<Int, Pack{String, Bool}>`. Declarations with packs of their own (`<each T>`) are not supported.
 - Isolation: `isolated` parameters, `@MainActor`, `nonisolated`, `nonisolated(nonsending)`, `(actor)`, `throws(E)`.
 - Not supported yet: non-ASCII names (and so non-ASCII operators),
   a declaration inside more than one generic enclosing type. A declaration that cannot be mangled

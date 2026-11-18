@@ -419,12 +419,30 @@ impl<'a> Parser<'a> {
         if !self.eat_here('<') {
             return Ok(Vec::new());
         }
-        let mut args = vec![self.ty()?];
+        let mut args = vec![self.type_argument()?];
         while self.eat(",") {
-            args.push(self.ty()?);
+            args.push(self.type_argument()?);
         }
         self.expect(">")?;
         Ok(args)
+    }
+
+    /// A type argument, or a pack of them, `Pack{A, B}` (for a variadic generic type's `each` parameter).
+    fn type_argument(&mut self) -> Parsed<Ty> {
+        self.skip_whitespace();
+        if !self.rest().starts_with("Pack{") {
+            return self.ty();
+        }
+        self.position += "Pack{".len();
+        let mut elements = Vec::new();
+        if !self.eat("}") {
+            elements.push(self.ty()?);
+            while self.eat(",") {
+                elements.push(self.ty()?);
+            }
+            self.expect("}")?;
+        }
+        Ok(Ty::Pack(elements))
     }
 
     fn subject(&mut self) -> Parsed<Subject> {
@@ -1034,6 +1052,7 @@ fn anonymous_generics(ty: &Ty, depth: usize, count: &mut usize, requirements: &m
         }
         Ty::Optional(wrapped) => Ty::Optional(Box::new(again(wrapped))),
         Ty::Metatype(instance) => Ty::Metatype(Box::new(again(instance))),
+        Ty::Pack(elements) => Ty::Pack(elements.iter().map(&mut again).collect()),
         Ty::Tuple(elements) => Ty::Tuple(elements.iter().map(|(label, e)| (label.clone(), again(e))).collect()),
         Ty::Nominal { module, path, args, split, extension } => Ty::Nominal {
             module: module.clone(),

@@ -39,6 +39,7 @@ impl std::error::Error for Error {}
 /// @preconcurrency …   (its symbol leaves out @Sendable, global actors in function types and `Sendable` requirements)
 /// [(extension in Module [where …])] Module.Type(kind)[<T, …>]….init[<U: P>]([label|_]: Type, …) [async] [throws] [-> Type?]
 /// … T.Value(of P) …   (an associated type of a parameter with several protocols names its protocol)
+/// … Predicate(struct)<Pack{T}> …   (a variadic generic type's pack argument)
 /// Module.Outer(kind).(extension in Module [where …]) Inner(kind)….member   (a type declared in an extension that is
 ///     part of its context: a constrained one, or one in another module than the extended type's)
 /// case Module.Type(kind)[<T, …>]….Enum(enum).name[([label:] Type, …)]
@@ -193,6 +194,7 @@ fn check_lowering(decl: &ast::Decl) -> Result<(), String> {
                 function.params.iter().chain([&function.result]).try_for_each(|ty| walk(ty, At::Closure, class_bound))
             }
             Ty::Nominal { args, .. } => args.iter().try_for_each(|arg| walk(arg, inner(At::Argument), class_bound)),
+            Ty::Pack(elements) => elements.iter().try_for_each(|element| walk(element, inner(At::Argument), class_bound)),
             Ty::Param(_) | Ty::Member(..) | Ty::Any | Ty::AnyObject | Ty::Existential(_) | Ty::Opaque(_) => Ok(()),
         }
     }
@@ -503,6 +505,7 @@ fn closure_shape(function: &ast::FunctionTy) -> Result<String, String> {
             match ty {
                 Ty::Param(_) | Ty::Member(..) | Ty::Opaque(_) => true,
                 Ty::Optional(wrapped) | Ty::Metatype(wrapped) => mentions_param(wrapped),
+                Ty::Pack(elements) => elements.iter().any(mentions_param),
                 Ty::Tuple(elements) => elements.iter().any(|(_, element)| mentions_param(element)),
                 Ty::Nominal { args, .. } => args.iter().any(mentions_param),
                 Ty::Function(f) => f.params.iter().any(mentions_param) || mentions_param(&f.result),

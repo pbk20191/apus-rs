@@ -233,3 +233,13 @@ public func mt7(_ p: any MP.Type) -> Int { 0 }
 public protocol PStyle {}
 public struct PBordered: PStyle { public init() {} }
 extension PStyle where Self == PBordered { public static var bordered: Self { PBordered() } }
+// Variadic generic types (`Predicate<each Input>`): a pack argument is a type list, then `QP`.
+public struct Pk<each T> { public init() {} }
+public struct PMixed<A, each T> { public init() {} }
+public func k1(_ p: Pk<Int>) {}
+public func k2(_ p: Pk<Int, String>) {}
+public func k0(_ p: Pk< >) {}
+public func k3<V>(_ p: Pk<V>, _ q: Pk<V>) {}
+public func k4(_ p: PMixed<Int, String, Bool>) {}
+public func k5(_ p: [Pk<Int>]) -> Pk<Int>? { nil }
+public func k6<V>(_ p: Predicate<V>) {}

@@ -67,6 +67,9 @@ pub enum Ty {
     /// an extension that is part of its context.
     Nominal { module: String, path: Vec<(String, Kind)>, args: Vec<Ty>, split: Vec<usize>, extension: Option<Box<ContextExtension>> },
     Optional(Box<Ty>),
+    /// `Pack{A, B}`: a variadic generic type's pack argument (`Predicate<each Input>`), written as Swift's
+    /// demangler prints it; only among a nominal type's arguments.
+    Pack(Vec<Ty>),
     /// `T.Type`: a type's metatype (`Any.Type`, `any P.Type`: an existential metatype).
     Metatype(Box<Ty>),
     Tuple(Vec<(Option<String>, Ty)>),
@@ -90,6 +93,7 @@ impl Ty {
         match self {
             Ty::Opaque(_) => 1,
             Ty::Optional(wrapped) | Ty::Metatype(wrapped) => wrapped.opaque_count(),
+            Ty::Pack(elements) => elements.iter().map(Ty::opaque_count).sum(),
             Ty::Tuple(elements) => elements.iter().map(|(_, e)| e.opaque_count()).sum(),
             Ty::Nominal { args, .. } => args.iter().map(Ty::opaque_count).sum(),
             Ty::Function(f) => f.params.iter().map(Ty::opaque_count).sum::<usize>() + f.result.opaque_count(),

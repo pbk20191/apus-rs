@@ -307,6 +307,21 @@ impl Mangler {
                 self.add_substitution(key);
                 Ok(())
             }
+            // docs/ABI/Mangling.rst: `type-list 'QP'` (a pack); the list is a tuple's (`Si_SS`, empty `y`). Not a
+            // substitution entry.
+            Ty::Pack(elements) => {
+                if elements.is_empty() {
+                    self.push("y");
+                }
+                for (i, element) in elements.iter().enumerate() {
+                    self.ty(element)?;
+                    if i == 0 {
+                        self.push("_");
+                    }
+                }
+                self.push("QP");
+                Ok(())
+            }
             // docs/ABI/Mangling.rst: `type 'm'` (metatype); `type 'Xp'` for an existential's (`Any.Type`: `ypXp`).
             // Not a substitution entry (`T.Type` twice is `xmxm`).
             Ty::Metatype(instance) => {
@@ -618,6 +633,7 @@ fn canonical(ty: &Ty, same_types: &SameTypes) -> Ty {
         Ty::Member(param, name) => same_types.members.get(&(*param, name.clone())).cloned().unwrap_or_else(|| ty.clone()),
         Ty::Optional(wrapped) => Ty::Optional(Box::new(canonical(wrapped, same_types))),
         Ty::Metatype(instance) => Ty::Metatype(Box::new(canonical(instance, same_types))),
+        Ty::Pack(elements) => Ty::Pack(elements.iter().map(|element| canonical(element, same_types)).collect()),
         Ty::Tuple(elements) => Ty::Tuple(elements.iter().map(|(label, element)| (label.clone(), canonical(element, same_types))).collect()),
         Ty::Nominal { module, path, args, split, extension } => Ty::Nominal {
             module: module.clone(),
@@ -887,6 +903,7 @@ fn is_concrete(ty: &Ty) -> bool {
     match ty {
         Ty::Param(_) | Ty::Member(..) | Ty::Opaque(_) => false,
         Ty::Optional(wrapped) | Ty::Metatype(wrapped) => is_concrete(wrapped),
+        Ty::Pack(elements) => elements.iter().all(is_concrete),
         Ty::Tuple(elements) => elements.iter().all(|(_, element)| is_concrete(element)),
         Ty::Nominal { args, .. } => args.iter().all(is_concrete),
         Ty::Function(function) => function.params.iter().all(is_concrete) && is_concrete(&function.result),
