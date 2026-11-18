@@ -35,6 +35,12 @@ impl<T: Message> SwiftArg for &Retained<T> {
     }
 }
 
+impl<T: Message> super::ClassReference for &Retained<T> {
+    fn object(&self) -> *mut std::ffi::c_void {
+        Retained::as_ptr(self) as *mut std::ffi::c_void
+    }
+}
+
 /// A Swift class result (+1). `T` is what the declaration says the function returns; it is not checked.
 impl<T: Message> SwiftRet for Retained<T> {
     unsafe fn lift(ret: &RetRegs, _indirect: &mut IndirectSlot) -> Self {

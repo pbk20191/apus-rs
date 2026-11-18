@@ -222,6 +222,7 @@ const DECLARATIONS: &[&str] = &[
     "Probe.mt5() -> SBase(class).Type",
     "Probe.mt6<T>(_: T.Type) -> T.Type",
     "Probe.mt8(_: Any.Type) -> Int",
+    "Probe.mt7(_: any MP.Type) -> Int",
     "Probe.mt9(_: Int.Type?, _: Big(struct).Type) -> Int",
     "Probe.cTypedefs(_: __C.NSDecimal(typedef struct), _: __C.CGColorRef(typedef class)) -> __C.CGColorRef(typedef class)?",
     "Probe.constant(_: _const String, _: Int)",

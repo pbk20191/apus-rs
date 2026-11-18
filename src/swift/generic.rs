@@ -1,8 +1,8 @@
 //! Generic arguments `swift!` fills itself: type metadata, witness tables in the ABI's canonical requirement order,
 //! and a typed-throws error slot, taken from the call's own arguments (apus_mangle::generic_plan says from which).
-use super::func::{ArgLowering, ErrorSlot, SwiftArg};
+use super::func::{ArgLowering, ErrorSlot, SwiftArg, SwiftObject};
 use super::value::{SwiftProtocol, SwiftType, SwiftValue};
-use super::CallError;
+use super::{rt, CallError};
 
 /// A value whose Swift type is known at run time: what an automatic generic argument is taken from.
 #[doc(hidden)]
@@ -25,6 +25,71 @@ impl<T: HasSwiftType + ?Sized> HasSwiftType for &T {
 #[doc(hidden)]
 pub fn __type_of<T: HasSwiftType + ?Sized>(value: &T) -> SwiftType {
     value.swift_type()
+}
+
+/// A class reference: what a value of a class-bound generic type (`T: SomeClass`, `T: AnyObject`) is passed as.
+pub trait ClassReference: SwiftArg {
+    #[doc(hidden)]
+    fn object(&self) -> *mut std::ffi::c_void;
+}
+
+impl ClassReference for &SwiftObject {
+    fn object(&self) -> *mut std::ffi::c_void {
+        self.as_ptr()
+    }
+}
+
+/// An argument of a class-bound generic type: Swift passes it as one reference (guaranteed), not by address, so
+/// only a [`ClassReference`] is accepted. `swift!` wraps such arguments itself.
+#[doc(hidden)]
+pub struct ClassBound<A>(pub A);
+
+impl<A: ClassReference> SwiftArg for ClassBound<A> {
+    fn lower(&self, into: &mut ArgLowering) {
+        self.0.lower(into)
+    }
+}
+
+/// The type a class-bound generic parameter takes from its argument: the object's own (dynamic) class.
+#[doc(hidden)]
+pub fn __object_type_of<A: ClassReference>(value: &ClassBound<A>) -> SwiftType {
+    // swift_getObjectType (include/swift/Runtime/Metadata.h): a native or Objective-C object's metadata.
+    unsafe { SwiftType::from_metadata(rt::swift_getObjectType(value.0.object())) }
+}
+
+/// What a metatype argument (`T.Type`, a class's `.Type`, `Any.Type`) is given as: the type's metadata.
+pub trait AsMetatype {
+    #[doc(hidden)]
+    fn metatype(&self) -> SwiftType;
+}
+
+impl AsMetatype for SwiftType {
+    fn metatype(&self) -> SwiftType {
+        *self
+    }
+}
+
+impl AsMetatype for &SwiftType {
+    fn metatype(&self) -> SwiftType {
+        **self
+    }
+}
+
+/// A metatype argument: a thick metatype is the type's metadata pointer, passed directly. `swift!` wraps such
+/// arguments itself; a struct's or enum's metatype (thin: nothing is passed) is refused by the declaration check.
+#[doc(hidden)]
+pub struct Metatype<A>(pub A);
+
+impl<A: AsMetatype> SwiftArg for Metatype<A> {
+    fn lower(&self, into: &mut ArgLowering) {
+        into.int(self.0.metatype().as_ptr() as u64)
+    }
+}
+
+/// The type a `T.Type` argument names.
+#[doc(hidden)]
+pub fn __metatype_of<A: AsMetatype>(value: &Metatype<A>) -> SwiftType {
+    value.0.metatype()
 }
 
 /// The generic arguments after the formal ones: metadata, witness tables, then the error slot.

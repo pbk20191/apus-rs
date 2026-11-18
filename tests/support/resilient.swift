@@ -112,3 +112,19 @@ public func makeSomeShape(side: Double) -> some Shape { Square(side: side) }
 public func makeSomeShapeLater(side: Double) async -> some Shape { await Task.yield(); return Square(side: side) }
 public struct ShapeMaker { public init() {} ; public var polygon: some Shape { Polygon() } }
 extension Shape { public func enlarged() -> some Shape { Square(side: area()) } }
+
+// Class-bound generic parameters and metatypes (tests/swift_class_bound.rs): a class-bound value is one reference,
+// a thick metatype one metadata pointer.
+open class Animal { public let name: String; public required init(name: String) { self.name = name } }
+public final class Dog: Animal {}
+public func dog(name: String) -> Dog { Dog(name: name) }
+public func renamed<T: Animal>(_ a: T, suffix: String) -> T { T(name: a.name + suffix) }
+public func nameOf<T: Animal>(_ a: T) -> String { "\(T.self) \(a.name)" }
+public func same<T: AnyObject>(_ x: T) -> T { x }
+public func describeType<T>(_ t: T.Type) -> String { "\(t)" }
+public func make<T: Animal>(_ t: T.Type, name: String) -> T { t.init(name: name) }
+public func dogType() -> Animal.Type { Dog.self }
+public func anyTypeName(_ t: Any.Type) -> String { "\(t)" }
+public func zero<T: AdditiveArithmetic>(_ t: T.Type) -> T { T.zero }
+public func meters(_ value: Double) -> Measurement<UnitLength> { Measurement(value: value, unit: .meters) }
+public func unitSymbol(_ unit: Unit) -> String { unit.symbol }

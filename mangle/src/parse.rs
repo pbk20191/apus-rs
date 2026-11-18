@@ -178,7 +178,8 @@ impl<'a> Parser<'a> {
 
     fn protocol(&mut self) -> Parsed<Protocol> {
         let first = self.identifier()?;
-        if self.eat_path_dot() {
+        // `any P.Type` is `(any P).Type`.
+        if !self.at_metatype_suffix() && self.eat_path_dot() {
             return Ok(Protocol { module: first, name: self.identifier()? });
         }
         let module = if names::standard_protocol(&first).is_some() || names::swift_protocol(&first) {

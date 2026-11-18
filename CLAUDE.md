@@ -19,6 +19,9 @@ Judge every change by two questions, in this order:
   and descriptor layouts in `include/swift/ABI/*.h`, documented mangling (`docs/ABI/Mangling.rst`), the Swift calling
   conventions (swiftcall / swiftasynccall, as clang implements them), and symbols frameworks export (including dispatch
   thunks `…Tj`, async function pointers `…Tu`, enum case tags `…WC`). Name the header/declaration mirrored in a comment.
+- Accepted by the owner (2026-11-18), though observed rather than documented: a class-bound generic parameter's value
+  and a thick metatype (`T.Type`, a class's, `Any.Type`) are passed and returned as one pointer; a struct's or enum's
+  metatype is thin (passed as nothing). Apple's frameworks are compiled this way, so ABI stability fixes it.
 - Anything else (runtime internals, compiler-computed layouts of non-resilient types, private SPI, behavior observed
   but not documented) is **not** built on silently: stop and tell the owner what is unguaranteed and the alternatives,
   and let them decide.
@@ -65,13 +68,9 @@ README.md documents every user-facing rule; keep it in step with behavior change
 
 - Implementing Swift protocols in Rust (conformances, witness tables): deferred; not ABI-guaranteed as a whole, no
   public runtime registration. Blocks SwiftUI `View`, delegates, `Codable`, `@Observable`/`@Model` types.
-- Parameter packs, metatypes (`T.Type`), a declaration inside several generic enclosing types, non-ASCII names: not
-  mangled yet. `some P` results with primary associated types (`some Collection<Int>`), and more than one per result,
+- Parameter packs, a declaration inside several generic enclosing types, non-ASCII names: not mangled yet. `some P` results with primary associated types (`some Collection<Int>`), and more than one per result,
   are refused.
 - Compile-time features (macros, property wrappers, result builders) and `@inlinable`/`@_alwaysEmitIntoClient` APIs
   without a symbol cannot be called; they need a Swift shim.
-- Class-bound generic parameters (`T: SomeClass`, `T: AnyObject`): mangled, refused by `swift!`. swiftc passes
-  their values as single references (observed type lowering; the calling-convention document does not say so);
-  awaiting the owner's decision.
 - Small non-resilient values in registers (layout computed by the compiler) and making `indirect` enum cases are
   refused on purpose.

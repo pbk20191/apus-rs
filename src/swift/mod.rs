@@ -31,7 +31,10 @@ pub use sync::{HopTo, SwiftFn, SwiftSyncCall};
 pub use value::{IntoSwift, OpaqueResult, Opened, SwiftProtocol, SwiftType, SwiftValue, WitnessTable};
 pub use isolation::Isolation;
 #[doc(hidden)]
-pub use generic::{__generic_args, __type_of, GenericArgs, HasSwiftType};
+pub use generic::{
+    __generic_args, __metatype_of, __object_type_of, __type_of, AsMetatype, ClassBound, ClassReference, GenericArgs, HasSwiftType,
+    Metatype,
+};
 pub use func::{__bind, __bind_sync, BindAsyncReceiver, BindReceiver, Consumed, DeclaredResult, ErrorSlot, ArgLowering, DirectValue, SwiftArg, SwiftArgs, SwiftAsyncFn, SwiftObject, SwiftReceiver, SwiftRet};
 pub use current::{cancelled, current_task, is_cancelled, priority, Cancelled, TaskRef};
 pub use join::{JoinHandle, MainOnlyHandle};

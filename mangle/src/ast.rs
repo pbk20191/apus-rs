@@ -160,12 +160,6 @@ pub enum Requirement {
     AnyObject(Subject),
 }
 
-impl Requirement {
-    /// Whether it makes its subject a class type, whose values Swift passes as a single reference.
-    pub fn is_class_bound(&self) -> bool {
-        matches!(self, Requirement::Superclass(..) | Requirement::AnyObject(_))
-    }
-}
 
 pub enum Signature {
     /// `typed_error`: `throws(E)` with an error type other than `any Error`.

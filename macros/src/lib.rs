@@ -245,17 +245,22 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
                 // The argument identifiers themselves (not text): they must resolve to the function's own parameters.
                 let name = |i: usize| TokenTree::Ident(rust_args[i].clone());
                 let bracket = |tokens: Vec<TokenTree>| TokenTree::Group(Group::new(Delimiter::Bracket, tokens.into_iter().collect()));
-                let metadata = plan.metadata_from.iter().map(|&i| name(i)).collect();
+                // Each source as `function argument`: the function of `apus::swift` that gives the type it holds.
+                let function = |i: usize| TokenTree::Ident(proc_macro::Ident::new(plan.type_functions[i], proc_macro::Span::call_site()));
+                let source = |i: usize| vec![function(i), name(i)];
+                let paren = |tokens: Vec<TokenTree>| TokenTree::Group(Group::new(Delimiter::Parenthesis, tokens.into_iter().collect()));
+                let metadata = plan.metadata_from.iter().map(|&i| paren(source(i))).collect();
                 let witnesses = plan
                     .witnesses
                     .iter()
                     .map(|(i, p)| {
-                        let pair = vec![name(*i), TokenTree::Literal(Literal::string(p))];
-                        TokenTree::Group(Group::new(Delimiter::Parenthesis, pair.into_iter().collect()))
+                        let mut triple = source(*i);
+                        triple.push(TokenTree::Literal(Literal::string(p)));
+                        paren(triple)
                     })
                     .collect();
-                let slot = plan.error_slot_from.map(name).into_iter().collect();
-                let result = plan.result_from.map(name).into_iter().collect();
+                let slot = plan.error_slot_from.map(source).unwrap_or_default();
+                let result = plan.result_from.map(source).unwrap_or_default();
                 let auto = TokenTree::Ident(proc_macro::Ident::new("auto", proc_macro::Span::call_site()));
                 generic = [auto, bracket(metadata), bracket(witnesses), bracket(slot), bracket(result)].into_iter().collect();
                 automatic = true;
@@ -310,6 +315,49 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             .collect();
             front.extend(generic);
             generic = front;
+        }
+    }
+    // Arguments Swift passes as one pointer where a value would go by address: a class-bound generic parameter's
+    // (a class reference) and a metatype (a `SwiftType`). Wrapped so that another Rust type does not compile.
+    if let Some((declaration, parsed)) = &declared {
+        let kinds = match parsed.argument_kinds() {
+            Ok(kinds) => kinds,
+            Err(error) => return item_compile_error(&format!("`{declaration}`: {error}")),
+        };
+        let wrapped: Vec<TokenTree> = kinds
+            .iter()
+            .zip(&rust_args)
+            .filter_map(|(kind, name)| {
+                let wrapper = match (*kind)? {
+                    apus_mangle::ArgumentKind::ClassBound => "ClassBound",
+                    apus_mangle::ArgumentKind::Metatype => "Metatype",
+                };
+                let pair = [TokenTree::Ident(name.clone()), TokenTree::Ident(proc_macro::Ident::new(wrapper, proc_macro::Span::call_site()))];
+                Some(TokenTree::Group(Group::new(Delimiter::Parenthesis, pair.into_iter().collect())))
+            })
+            .collect();
+        if !wrapped.is_empty() {
+            let mut front: TokenStream = [
+                TokenTree::Ident(proc_macro::Ident::new("wrapped", proc_macro::Span::call_site())),
+                TokenTree::Group(Group::new(Delimiter::Bracket, wrapped.into_iter().collect())),
+            ]
+            .into_iter()
+            .collect();
+            front.extend(generic);
+            generic = front;
+        }
+        let ret = rust_return(tail);
+        let reference = ["SwiftObject", "Retained"].iter().any(|t| ret.contains(t)) && !ret.starts_with("Option");
+        match parsed.result_kind() {
+            Some(apus_mangle::ResultKind::ClassReference) if !reference => {
+                return item_compile_error(&format!(
+                    "`{declaration}` returns a class-bound generic parameter's value, a +1 reference: declare `-> SwiftObject` (or `Retained<T>`)"
+                ))
+            }
+            Some(apus_mangle::ResultKind::Metatype) if ret != "SwiftType" => {
+                return item_compile_error(&format!("`{declaration}` returns a metatype, the type's metadata: declare `-> SwiftType`"))
+            }
+            _ => {}
         }
     }
     // A typed-throws declaration whose error slot is neither passed nor filled automatically.
@@ -394,6 +442,16 @@ fn rust_receiver(tail: &[TokenTree]) -> Option<String> {
     let text: String = flatten(receiver.stream()).iter().map(|t| t.to_string()).collect::<Vec<_>>().join(" ");
     let ty = text.split_once(':').map_or(text.as_str(), |(_, ty)| ty).trim();
     (!ty.is_empty()).then(|| ty.to_string())
+}
+
+/// The Rust signature's return type as text (the sixth bracket group: docs, visibility, name… arguments, throws,
+/// return), `""` when there is none.
+fn rust_return(tail: &[TokenTree]) -> String {
+    let Some(ret) = tail.iter().filter_map(|t| match t {
+        TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket => Some(g),
+        _ => None,
+    }).nth(5) else { return String::new() };
+    flatten(ret.stream()).iter().map(|t| t.to_string()).collect::<Vec<_>>().join(" ").replace(" :: ", "::").trim().to_string()
 }
 
 /// The Rust signature's argument names: identifiers followed by a single `:` in its argument group (the fourth

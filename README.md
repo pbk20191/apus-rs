@@ -203,10 +203,16 @@ static (extension in _Concurrency where Success == Never, Failure == Never)
   constrained extension in the path (`Outer(struct)<T>.(extension in M where T: P) Inner(struct)`) must be the one
   the declaration or its enclosing type is declared in: its `where` clause speaks of that type's parameters.
 - A superclass constraint names the class with its kind, `<T: __C.NSObject(class)>`; `T: AnyObject` is written as
-  such. Such declarations are mangled (`mangle!`) but `swift!` refuses to call them: Swift passes a value of a
-  class-bound generic type as a reference, not by address, which apus does not do yet.
+  such. A value of a class-bound generic type (the declaration's, its type's: `Measurement<UnitType: NSUnit>`) is a
+  class reference, not a `SwiftValue`: `&SwiftObject` (or `&Retained<T>`) as an argument, `SwiftObject` as a
+  result (+1); T is then the object's own class. Anywhere else (`T?`, a tuple, a closure) it is refused.
+- Metatypes: `T.Type`, a class's `Base(class).Type` and `Any.Type` are `SwiftType`s, as arguments and results; a
+  `T.Type` argument also gives T (`decode<T: Decodable>(_: T.Type, from: …) -> T`). A struct's or enum's metatype
+  (Swift passes nothing for it), an optional one and `any P.Type` are refused.
+- Both rest on swiftc's type lowering (one pointer each), which the calling-convention document does not spell out;
+  Apple's frameworks export functions compiled that way, so ABI stability keeps it.
 - Isolation: `isolated` parameters, `@MainActor`, `nonisolated`, `nonisolated(nonsending)`, `(actor)`, `throws(E)`.
-- Not supported yet: metatypes (`T.Type`), non-ASCII names (and so non-ASCII operators),
+- Not supported yet: non-ASCII names (and so non-ASCII operators),
   a declaration inside more than one generic enclosing type. A declaration that cannot be mangled
   is a compile error; for anything unsupported, pass the symbol itself with `#[symbol]`.
 

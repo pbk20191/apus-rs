@@ -63,13 +63,28 @@
 /// }
 /// ```
 ///
-/// - A class-bound generic parameter (`T: SomeClass`, `T: AnyObject`) is refused: Swift passes its values as
-///   references, which apus does not do yet.
+/// - A value of a class-bound generic type (`T: SomeClass`, `T: AnyObject`) is a class reference, not a
+///   `SwiftValue`: `&SwiftObject` (or `&Retained<T>`) as an argument, `SwiftObject` as a result. A metatype
+///   (`T.Type`, a class's, `Any.Type`) is a `SwiftType`; a struct's or enum's (passed as nothing) is refused.
 ///
 /// ```compile_fail
 /// apus::swift! {
-///     #[swift = "Probe.keep<T: AnyObject>(_: T) -> T"]
-///     fn keep(x: &apus::swift::SwiftObject) -> apus::swift::SwiftObject;
+///     #[swift = "Res.same<T: AnyObject>(_: T) -> T"]
+///     fn same(x: &apus::swift::SwiftValue) -> apus::swift::SwiftObject; // a SwiftValue goes by address
+/// }
+/// ```
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "Res.same<T: AnyObject>(_: T) -> T"]
+///     fn same(x: &apus::swift::SwiftObject) -> apus::swift::SwiftValue; // the result is a reference
+/// }
+/// ```
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "Res.sizeOf(_: Int.Type) -> Int"]
+///     fn size_of(ty: apus::swift::SwiftType) -> i64; // `Int.Type` is thin: Swift passes nothing
 /// }
 /// ```
 ///
@@ -311,17 +326,17 @@ macro_rules! __swift_args {
         $(let $o = $crate::swift::Consumed($o);)*
         ($($arg,)*)
     }};
-    ([$($arg:ident),*] [$($o:ident)*] [auto [$($m:ident)*] [$(($w:ident $p:literal))*] [$($slot:ident)?] [$($result:ident)?] $(closures [$(($c:ident $shape:literal))*])?]) => {{
+    ([$($arg:ident),*] [$($o:ident)*] [auto [$(($mf:ident $m:ident))*] [$(($wf:ident $w:ident $p:literal))*] [$($sf:ident $slot:ident)?] [$($rf:ident $result:ident)?] $(closures [$(($c:ident $shape:literal))*])?]) => {{
         let generic = $crate::swift::__generic_args(
-            &[$($crate::swift::__type_of(&$m)),*],
-            &[$(($crate::swift::__type_of(&$w), {
+            &[$($crate::swift::$mf(&$m)),*],
+            &[$(($crate::swift::$wf(&$w), {
                 static PROTOCOL: $crate::swift::SwiftProtocol = $crate::swift::SwiftProtocol::new($p);
                 &PROTOCOL
             })),*],
             {
                 #[allow(unused_mut)]
                 let mut slot = ::core::option::Option::None;
-                $(slot = ::core::option::Option::Some($crate::swift::__type_of(&$slot));)?
+                $(slot = ::core::option::Option::Some($crate::swift::$sf(&$slot));)?
                 slot
             },
         );
@@ -336,16 +351,21 @@ macro_rules! __swift_args {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __swift_call {
+    // `wrapped [(argument Wrapper)…]`: arguments whose Rust type the declaration fixes (`ClassBound`, `Metatype`).
+    ($function:ident [$($arg:ident),*] [wrapped [$(($wa:ident $wk:ident))*] $($generic:tt)*] $declared:expr) => {{
+        $(let $wa = $crate::swift::$wk($wa);)*
+        $crate::__swift_call!($function [$($arg),*] [$($generic)*] $declared)
+    }};
     ($function:ident [$($arg:ident),*] [consumed [$($o:ident)*] $($generic:tt)*] $declared:expr) => {
         $crate::__swift_call!(@ $function [$($arg),*] [$($o)*] [$($generic)*] $declared)
     };
     ($function:ident [$($arg:ident),*] [$($generic:tt)*] $declared:expr) => {
         $crate::__swift_call!(@ $function [$($arg),*] [] [$($generic)*] $declared)
     };
-    (@ $function:ident [$($arg:ident),*] $o:tt [auto $m:tt $w:tt $slot:tt [$result:ident] $($closures:tt)*] $declared:expr) => {
+    (@ $function:ident [$($arg:ident),*] $o:tt [auto $m:tt $w:tt $slot:tt [$rf:ident $result:ident] $($closures:tt)*] $declared:expr) => {
         $function.call_returning(
-            $crate::swift::__type_of(&$result),
-            $crate::__swift_args!([$($arg),*] $o [auto $m $w $slot [$result] $($closures)*]),
+            $crate::swift::$rf(&$result),
+            $crate::__swift_args!([$($arg),*] $o [auto $m $w $slot [$rf $result] $($closures)*]),
         )
     };
     (@ $function:ident [$($arg:ident),*] $o:tt [$($generic:tt)*] $declared:expr) => {

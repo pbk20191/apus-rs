@@ -454,6 +454,8 @@ direct_ret! {
     // `String?`: nil is the all-zero owner word.
     Option<String>: |ret| (ret.0.gpr[1] != 0).then(|| take_string(ret.0.gpr[0], ret.0.gpr[1])),
     SwiftObject: |ret| SwiftObject::from_raw(ret.0.gpr[0] as *mut c_void),
+    // A thick metatype (`T.Type`, a class's, `Any.Type`): the type's metadata, which is not reference counted.
+    SwiftType: |ret| SwiftType::from_metadata(ret.0.gpr[0] as *const c_void),
     Option<SwiftObject>: |ret| NonNull::new(ret.0.gpr[0] as *mut c_void).map(SwiftObject),
 }
 
