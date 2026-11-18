@@ -181,7 +181,7 @@ pub struct Decl {
     pub mutating: bool,
     /// The declaration's own generic parameters.
     pub generic_params: usize,
-    /// The declaration's own requirements (inline constraints and its `where` clause).
+    /// The declaration's own requirements (inline constraints and its `where` clause); for an enum case, the enum's.
     pub requirements: Vec<Requirement>,
     pub signature: Signature,
 }

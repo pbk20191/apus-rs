@@ -9,3 +9,8 @@ public enum Fn { case call((Int) -> String) }
 // A single labeled payload is a one-element tuple; a nested enum of a generic type binds the outer arguments.
 public enum Notice { case token(token: String), url(destination: Int?) }
 public enum GenOuter<T> { public enum Inner { case a, b(Int) } }
+// Cases of an enum whose generic parameters are constrained: the enum's whole generic signature is in the symbol.
+public protocol Tagged {}
+public enum Keyed<K: Hashable> { case one(K), none }
+public enum Both<A: Tagged, B: Sendable> { case a(A), b }
+public struct Sorting<E: Hashable> { public enum Order { case up, down(E) } }

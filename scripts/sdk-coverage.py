@@ -299,10 +299,14 @@ class Graph:
                     if params:
                         raise Untranslatable("generic type nested in a generic type")
                     params, constraints = own, generics.get("constraints", [])
-                    bound = {c["lhs"]: c for c in constraints if c["kind"] == "conformance" and c["lhs"] in own}
-                    clause = "<" + ", ".join(
-                        f"{p}: {protocol_name(bound[p]['rhs'], bound[p].get('rhsPrecise'))}" if p in bound else p
-                        for p in own) + ">"
+                    bound = collections.defaultdict(list)
+                    for c in constraints:
+                        if c["kind"] == "conformance" and c["lhs"] in own:
+                            bound[c["lhs"]].append(protocol_name(c["rhs"], c.get("rhsPrecise")))
+                        elif sym["kind"]["identifier"] == "swift.enum.case":
+                            # A case's symbol carries the enum's whole generic signature.
+                            raise Untranslatable("enum constraint beyond a conformance")
+                    clause = "<" + ", ".join(f"{p}: {' & '.join(bound[p])}" if p in bound else p for p in own) + ">"
             elif n == len(path) and self.parent.get(sym["identifier"]["precise"]):
                 _, kind = usr_module_kind(self.parent[sym["identifier"]["precise"]])
                 if kind not in ("struct", "class", "enum", "protocol"):

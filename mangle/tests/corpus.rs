@@ -237,6 +237,12 @@ const ENUM_CASES: &[&str] = &[
     "case Cases.Notice(enum).url(destination: Int?)",
     "case Cases.GenOuter(enum)<T>.Inner(enum).a",
     "case Cases.GenOuter(enum)<T>.Inner(enum).b(Int)",
+    "case Cases.Keyed(enum)<K: Hashable>.one(K)",
+    "case Cases.Keyed(enum)<K: Hashable>.none",
+    "case Cases.Both(enum)<A: Tagged, B: Sendable>.a(A)",
+    "case Cases.Both(enum)<A: Tagged, B: Sendable>.b",
+    "case Cases.Sorting(struct)<E: Hashable>.Order(enum).up",
+    "case Cases.Sorting(struct)<E: Hashable>.Order(enum).down(E)",
 ];
 
 /// Compiled once per test process: tests run in parallel and would otherwise write the same library.

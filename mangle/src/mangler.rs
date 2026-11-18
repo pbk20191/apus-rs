@@ -681,6 +681,9 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
             m.ty(&this)?;
             m.push("m");
             if decl.context_params > 0 {
+                for requirement in sorted_requirements(&decl.requirements) {
+                    m.requirement(&requirement)?;
+                }
                 if decl.context_params > 1 {
                     m.push("r");
                     m.push(&index(decl.context_params - 1));

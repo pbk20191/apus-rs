@@ -536,4 +536,13 @@ mod isolation_tests {
         let concrete = super::generic_plan("M.g<T>(_: T) throws(Boom(struct)) -> Int").unwrap_err().to_string();
         assert!(concrete.contains("concrete typed throws") && !concrete.contains("associated"), "{concrete}");
     }
+
+    #[test]
+    fn a_metatype_is_not_a_member_type() {
+        // `T.Type` is T's metatype, never an associated type named `Type`.
+        for declaration in ["M.f<T>(_: T.Type) -> Int", "case M.E(enum)<T>.boom(T.Protocol)"] {
+            let error = super::mangle(declaration).unwrap_err().to_string();
+            assert!(error.contains("metatype"), "{declaration}: {error}");
+        }
+    }
 }

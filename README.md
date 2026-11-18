@@ -190,7 +190,7 @@ static (extension in _Concurrency where Success == Never, Failure == Never)
 ```
 
 - Isolation: `isolated` parameters, `@MainActor`, `nonisolated`, `nonisolated(nonsending)`, `(actor)`, `throws(E)`.
-- Not supported yet: non-ASCII names (and so non-ASCII operators),
+- Not supported yet: metatypes (`T.Type`), non-ASCII names (and so non-ASCII operators),
   more than one generic enclosing type. A declaration that cannot be mangled
   is a compile error; for anything unsupported, pass the symbol itself with `#[symbol]`.
 
@@ -248,6 +248,8 @@ if error.enum_tag() == CORRUPTED.tag() {
 }
 ```
 
+- A case of a generic enum spells out the enum's constraints, which its symbol carries:
+  `case M.Keyed(enum)<K: Hashable>.one(K)`.
 - `SwiftType::enum_cases()`: how many cases have a payload and how many do not; `None` for a type that is not an enum.
 - `enum_tag()`; `enum_payload(ty)` and `indirect_enum_payload(ty)` copy the payload out (a tuple type for several
   associated values; the value is untouched); `SwiftValue::enum_case(ty, tag)` and `enum_case_with(ty, tag, payload)`

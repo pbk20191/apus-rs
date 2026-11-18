@@ -249,7 +249,11 @@ impl<'a> Parser<'a> {
         let first = self.identifier()?;
         if let Some(param) = self.generic_param(&first) {
             if self.eat_path_dot() {
-                return Ok(Ty::Member(param, self.identifier()?));
+                let name = self.identifier()?;
+                if name == "Type" || name == "Protocol" {
+                    return Err(format!("metatypes (`{first}.{name}`) are not supported"));
+                }
+                return Ok(Ty::Member(param, name));
             }
             return Ok(Ty::Param(param));
         }
@@ -509,6 +513,7 @@ impl<'a> Parser<'a> {
         let mut context_params = 0;
         let mut context_generic_level = None;
         let mut context_is_constrained = false;
+        let mut context_requirements = Vec::new();
         let lone_context = segments.len() == 2;
         for segment in segments.drain(1..) {
             let kind = match segment.kind {
@@ -529,8 +534,9 @@ impl<'a> Parser<'a> {
                 }
                 context_params = clause.len();
                 context_generic_level = Some(context.len());
-                let declared = self.declare_generics(clause, 0);
-                context_is_constrained = !declared.is_empty() || standard_type_is_constrained(&self.module, &segment.name);
+                context_requirements = self.declare_generics(clause, 0);
+                context_is_constrained =
+                    !context_requirements.is_empty() || standard_type_is_constrained(&self.module, &segment.name);
             }
             context.push((segment.name, kind));
         }
@@ -563,9 +569,11 @@ impl<'a> Parser<'a> {
             if extension.is_some() || generic_params > 0 || context.last().is_none_or(|(_, kind)| *kind != Kind::Enum) {
                 return Err("expected `case Module.Type(enum).name[(payload…)]`".into());
             }
-            if context_is_constrained {
-                return Err("cases of an enum with constrained generic parameters are not supported".into());
+            // A case's symbol carries the enum's whole generic signature: its constraints must be written out.
+            if context_is_constrained && context_requirements.is_empty() {
+                return Err("write the enum's generic constraints: `Enum<T: P>.case`".into());
             }
+            requirements = std::mem::take(&mut context_requirements);
             let mut payload = Vec::new();
             if self.eat("(") {
                 while !self.eat(")") {
