@@ -329,7 +329,7 @@ def declaration(graph, sym):
         s = f["spelling"].strip()
         if f["kind"] == "keyword" and s in KEPT_MODIFIERS:
             modifiers.append("static" if s == "class" else s)
-        elif f["kind"] == "attribute" and s == "@MainActor":
+        elif f["kind"] == "attribute" and s in ("@MainActor", "@preconcurrency"):
             modifiers.append(s)
     module, parts, ctx_params, ctx_constraints = graph.context(sym)
     head = " ".join(modifiers)

@@ -172,3 +172,7 @@ public func own4(_ a: __shared Own) {}
 public func own5(_ a: consuming String, _ b: Int) {}
 // A constrained extension whose requirement names a type with its kind.
 extension Box where T == Big { public func onlyBig() -> Int { 0 } }
+// An initializer of a type nested in a generic type; @preconcurrency drops concurrency annotations from the symbol.
+public struct GenBox<T> { public struct Item { public init(x: Int) {} } }
+@preconcurrency public func pre(_ f: @escaping @Sendable (Int) -> Bool) {}
+@preconcurrency public func preMain(_ f: @escaping @MainActor () -> Void) {}

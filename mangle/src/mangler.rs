@@ -30,6 +30,9 @@ struct Mangler {
     last_subst_is_standard: bool,
     /// Mangling an initializer's parameters, which are consumed by default.
     in_initializer: bool,
+    /// The declaration's generic enclosing type nested `n` levels deep: its bound form ends with `n` `_` (one per
+    /// non-generic level below the generic one).
+    nested_generic: Option<(Vec<(String, Kind)>, usize)>,
 }
 
 /// `INDEX`: 0 is `_`, n is `<n-1>_`.
@@ -256,6 +259,11 @@ impl Mangler {
                 self.push("y");
                 for arg in args {
                     self.ty(arg)?;
+                }
+                if let Some((nested, levels)) = &self.nested_generic {
+                    if nested == path {
+                        self.push(&"_".repeat(*levels));
+                    }
                 }
                 self.push("G");
                 self.add_substitution(key);
@@ -510,6 +518,8 @@ fn same_types<'a>(requirements: impl Iterator<Item = &'a Requirement>) -> SameTy
 struct SameTypes {
     params: HashMap<GenericParam, Ty>,
     members: HashMap<(GenericParam, String), Ty>,
+    /// A `@preconcurrency` declaration: function types drop `@Sendable` and global actors in its symbol.
+    strip_concurrency: bool,
 }
 
 fn canonical(ty: &Ty, same_types: &SameTypes) -> Ty {
@@ -524,6 +534,8 @@ fn canonical(ty: &Ty, same_types: &SameTypes) -> Ty {
         Ty::Function(function) => Ty::Function(Box::new(FunctionTy {
             params: function.params.iter().map(|param| canonical(param, same_types)).collect(),
             result: canonical(&function.result, same_types),
+            sendable: function.sendable && !same_types.strip_concurrency,
+            main_actor: function.main_actor && !same_types.strip_concurrency,
             ..(**function).clone()
         })),
         Ty::Any | Ty::AnyObject | Ty::Existential(_) => ty.clone(),
@@ -531,7 +543,9 @@ fn canonical(ty: &Ty, same_types: &SameTypes) -> Ty {
 }
 
 fn all_same_types(decl: &Decl) -> SameTypes {
-    same_types(decl.extension.iter().flat_map(|e| e.requirements.iter()).chain(decl.requirements.iter()))
+    let mut map = same_types(decl.extension.iter().flat_map(|e| e.requirements.iter()).chain(decl.requirements.iter()));
+    map.strip_concurrency = decl.preconcurrency;
+    map
 }
 
 /// How a generic signature that adds no parameters to its context ends (ASTMangler::gatherGenericSignatureParts):
@@ -572,6 +586,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
     }
     let is_init = decl.name == "init";
     m.in_initializer = is_init;
+    m.nested_generic = decl.context_generic_level.map(|level| (decl.context.clone(), decl.context.len() - 1 - level));
     if let Some(fixity) = decl.operator {
         // Each operator character as a letter (docs/ABI/Mangling.rst: operator-char), then the fixity.
         let letters: String = decl
@@ -640,19 +655,15 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
             let args = (0..decl.context_params).map(|index| Ty::Param(GenericParam { depth: 0, index })).collect();
             let this = Ty::Nominal { module: decl.module.clone(), path, args };
             m.push("y");
-            if payload.is_empty() {
-                m.ty(&this)?;
-            } else {
-                let function = FunctionTy {
-                    params: payload.clone(),
-                    result: this.clone(),
-                    is_async: false,
-                    throws: false,
-                    sendable: false,
-                    main_actor: false,
-                    escaping: true,
-                };
-                m.function(&function, false)?;
+            m.ty(&this)?;
+            if !payload.is_empty() {
+                // `(Payload) -> Enum`: the payload as the function's parameters, labels included.
+                let params: Vec<Param> = payload
+                    .iter()
+                    .map(|(label, ty)| Param { label: label.clone(), ty: ty.clone(), inout: false, variadic: false, isolated: false, ownership: None })
+                    .collect();
+                m.parameters(&params)?;
+                m.push("c");
             }
             m.ty(&this)?;
             m.push("m");

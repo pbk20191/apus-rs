@@ -414,7 +414,12 @@ impl<'a> Parser<'a> {
         let mut mutating = false;
         let mut fixity = None;
         let mut consumes_self = false;
+        let mut preconcurrency = false;
         loop {
+            if self.eat("@preconcurrency") {
+                preconcurrency = true;
+                continue;
+            }
             if self.eat_keyword("mutating") {
                 mutating = true;
             } else if self.eat_keyword("consuming") || self.eat_keyword("__consuming") {
@@ -499,6 +504,7 @@ impl<'a> Parser<'a> {
         // The enclosing types.
         let mut context = Vec::new();
         let mut context_params = 0;
+        let mut context_generic_level = None;
         let mut context_is_constrained = false;
         let lone_context = segments.len() == 2;
         for segment in segments.drain(1..) {
@@ -519,6 +525,7 @@ impl<'a> Parser<'a> {
                     return Err("only one enclosing type may be generic".into());
                 }
                 context_params = clause.len();
+                context_generic_level = Some(context.len());
                 let declared = self.declare_generics(clause, 0);
                 context_is_constrained = !declared.is_empty() || standard_type_is_constrained(&self.module, &segment.name);
             }
@@ -556,7 +563,6 @@ impl<'a> Parser<'a> {
             if context_is_constrained {
                 return Err("cases of an enum with constrained generic parameters are not supported".into());
             }
-            // The payload's labels are not part of the symbol.
             let mut payload = Vec::new();
             if self.eat("(") {
                 while !self.eat(")") {
@@ -564,17 +570,21 @@ impl<'a> Parser<'a> {
                         self.expect(",")?;
                     }
                     let start = self.position;
-                    if !(self.identifier().is_ok() && self.eat(":")) {
-                        self.position = start;
-                    }
+                    let label = match self.identifier() {
+                        Ok(label) if self.eat(":") => Some(label),
+                        _ => {
+                            self.position = start;
+                            None
+                        }
+                    };
                     // A payload is stored: a function in it escapes.
-                    payload.push(match self.ty()? {
+                    payload.push((label, match self.ty()? {
                         Ty::Function(mut function) => {
                             function.escaping = true;
                             Ty::Function(function)
                         }
                         ty => ty,
-                    });
+                    }));
                 }
             }
             Signature::Case(payload)
@@ -690,6 +700,8 @@ impl<'a> Parser<'a> {
             module: self.module.clone(),
             context,
             context_params,
+            context_generic_level,
+            preconcurrency,
             context_is_constrained,
             extension,
             name: member.name,

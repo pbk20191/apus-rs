@@ -116,8 +116,9 @@ pub enum Signature {
     Setter(Ty),
     /// `subscript(…) -> T { get }` or `{ set }` (`setter`), whose setter takes the new value before the indices.
     Subscript { params: Vec<Param>, result: Ty, setter: bool },
-    /// `case Module.Enum(enum).name(payload…)`: an enum case, mangled to its tag symbol (`…WC`).
-    Case(Vec<Ty>),
+    /// `case Module.Enum(enum).name(payload…)`: an enum case, mangled to its tag symbol (`…WC`). The payload's
+    /// labels count: a single labeled value is a one-element tuple.
+    Case(Vec<(Option<String>, Ty)>),
 }
 
 /// `(extension in Module where …)`: the declaration lives in an extension that needs its own mangling
@@ -133,6 +134,11 @@ pub struct Decl {
     pub context: Vec<(String, Kind)>,
     /// Generic parameters of the enclosing type (1 for a protocol: `Self`).
     pub context_params: usize,
+    /// Which enclosing type (index into `context`) declares those parameters: a type nested in a generic one binds
+    /// them at that level (`Outer<T>.Inner` is `yx_G`).
+    pub context_generic_level: Option<usize>,
+    /// `@preconcurrency`: the symbol leaves out `@Sendable` and global actors in function types.
+    pub preconcurrency: bool,
     /// Whether the enclosing type's own declaration constrains its parameters (`Set<Element: Hashable>`).
     pub context_is_constrained: bool,
     pub extension: Option<Extension>,

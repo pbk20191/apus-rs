@@ -195,6 +195,9 @@ const DECLARATIONS: &[&str] = &[
     "Probe.own4(_: __shared Own(class))",
     "Probe.own5(_: consuming String, _: Int)",
     "(extension in Probe where T == Big(struct)) Probe.Box(struct)<T>.onlyBig() -> Int",
+    "Probe.GenBox(struct)<T>.Item(struct).init(x: Int)",
+    "@preconcurrency Probe.pre(_: @escaping @Sendable (Int) -> Bool)",
+    "@preconcurrency Probe.preMain(_: @escaping @MainActor () -> Void)",
 ];
 
 /// Enum cases: each mangles to the tag symbol a library-evolution module exports for it.
@@ -212,6 +215,10 @@ const ENUM_CASES: &[&str] = &[
     "case Cases.Outer(struct).Inner(enum).x",
     "case Cases.Outer(struct).Inner(enum).y(Int)",
     "case Cases.Fn(enum).call((Int) -> String)",
+    "case Cases.Notice(enum).token(token: String)",
+    "case Cases.Notice(enum).url(destination: Int?)",
+    "case Cases.GenOuter(enum)<T>.Inner(enum).a",
+    "case Cases.GenOuter(enum)<T>.Inner(enum).b(Int)",
 ];
 
 fn compiled_symbols() -> HashSet<String> {
