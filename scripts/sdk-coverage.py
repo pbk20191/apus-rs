@@ -206,8 +206,25 @@ def render(frags):
             out.append(render_chain(chain, continued=continued))
             i = j
             continue
-        if kind == "attribute" and spelling.strip() == "@" and i + 1 < len(frags) and frags[i + 1]["kind"] == "typeIdentifier":
-            i += 2  # a result builder (`@ViewBuilder`): not part of the symbol
+        if kind == "attribute" and spelling.strip() == "@" and i + 1 < len(frags) \
+                and frags[i + 1]["kind"] in ("typeIdentifier", "attribute"):
+            name = frags[i + 1]["spelling"].strip()
+            if frags[i + 1]["kind"] == "attribute" and not name.endswith("Builder"):
+                out.append(f"@{name} ")  # `@` `MainActor`, split in two
+            i += 2  # else a result builder (`@ViewBuilder`): not part of the symbol
+            if not name.endswith("Builder") or i >= len(frags) or not frags[i]["spelling"].startswith("<"):
+                continue
+            # A generic result builder's arguments (`@ResolverSpecificationBuilder<Value>`) go with it.
+            depth = 0
+            while i < len(frags):
+                text = frags[i]["spelling"] if frags[i]["kind"] == "text" else ""
+                depth += text.count("<") - text.count(">")
+                i += 1
+                if depth <= 0:
+                    rest = text[text.rfind(">") + 1:]
+                    if rest.strip():
+                        out.append(rest)
+                    break
             continue
         if kind == "attribute":
             if spelling.strip() not in KEPT_TYPE_ATTRIBUTES:
