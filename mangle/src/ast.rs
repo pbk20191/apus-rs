@@ -72,6 +72,28 @@ pub struct Param {
     pub variadic: bool,
     /// `isolated`: the parameter is the function's actor isolation.
     pub isolated: bool,
+    /// `consuming`/`__owned` or `borrowing`/`__shared`, as written (`None`: the default).
+    pub ownership: Option<Ownership>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ownership {
+    Consuming,
+    Borrowing,
+    /// `__owned`, `__shared`: the older spellings, which always show in the symbol.
+    Owned,
+    Shared,
+}
+
+impl Ownership {
+    /// Whether the callee consumes the argument, given whether it does by default (an initializer's).
+    pub fn consumes(ownership: Option<Ownership>, by_default: bool) -> bool {
+        match ownership {
+            None => by_default,
+            Some(Ownership::Consuming | Ownership::Owned) => true,
+            Some(Ownership::Borrowing | Ownership::Shared) => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,6 +150,8 @@ pub struct Decl {
     pub accessor_throws: bool,
     /// An operator's fixity in the symbol: `oi` (infix), `op` (prefix), `oP` (postfix).
     pub operator: Option<&'static str>,
+    /// `consuming`/`__consuming` before the declaration: the method consumes `self`. The symbol does not show it.
+    pub consumes_self: bool,
     /// `mutating`: the method changes `self` (a struct's or enum's, passed `inout`). The symbol does not show it.
     pub mutating: bool,
     /// The declaration's own generic parameters.

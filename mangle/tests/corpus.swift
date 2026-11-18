@@ -157,3 +157,16 @@ public struct Ops { public var x = 0
 infix operator <*>: AdditionPrecedence
 postfix operator ++
 public func % (a: Ops, b: Ops) -> Ops { a }
+// Ownership modifiers: only a convention other than the default shows (`n` in a function, `h` in an initializer).
+public final class Own {}
+public struct Owner { public var x = 0
+  public consuming func eat() -> Int { x }
+  public borrowing func look() -> Int { x }
+  public init(consuming c: Own) {}
+  public init(borrowing b: borrowing Own) {}
+}
+public func own1(_ a: consuming Own) {}
+public func own2(_ a: borrowing Own) {}
+public func own3(_ a: __owned Own) {}
+public func own4(_ a: __shared Own) {}
+public func own5(_ a: consuming String, _ b: Int) {}

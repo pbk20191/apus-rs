@@ -184,6 +184,16 @@ const DECLARATIONS: &[&str] = &[
     "static Probe.Ops(struct).+=(_: inout Ops(struct), _: Ops(struct))",
     "static Probe.Ops(struct)...<(_: Ops(struct), _: Ops(struct)) -> Int",
     "Probe.%(_: Ops(struct), _: Ops(struct)) -> Ops(struct)",
+    // ownership modifiers on parameters and on self
+    "consuming Probe.Owner(struct).eat() -> Int",
+    "borrowing Probe.Owner(struct).look() -> Int",
+    "Probe.Owner(struct).init(consuming: consuming Own(class))",
+    "Probe.Owner(struct).init(borrowing: borrowing Own(class))",
+    "Probe.own1(_: consuming Own(class))",
+    "Probe.own2(_: borrowing Own(class))",
+    "Probe.own3(_: __owned Own(class))",
+    "Probe.own4(_: __shared Own(class))",
+    "Probe.own5(_: consuming String, _: Int)",
 ];
 
 /// Enum cases: each mangles to the tag symbol a library-evolution module exports for it.

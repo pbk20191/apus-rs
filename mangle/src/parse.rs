@@ -413,9 +413,14 @@ impl<'a> Parser<'a> {
         let mut nonsending = false;
         let mut mutating = false;
         let mut fixity = None;
+        let mut consumes_self = false;
         loop {
             if self.eat_keyword("mutating") {
                 mutating = true;
+            } else if self.eat_keyword("consuming") || self.eat_keyword("__consuming") {
+                consumes_self = true;
+            } else if self.eat_keyword("borrowing") {
+                // The default for `self`.
             } else if self.eat_keyword("prefix") {
                 fixity = Some("op");
             } else if self.eat_keyword("postfix") {
@@ -573,13 +578,17 @@ impl<'a> Parser<'a> {
                 self.expect(":")?;
                 let inout = self.eat_keyword("inout");
                 let isolated = self.eat_keyword("isolated");
+                let ownership = [("consuming", Ownership::Consuming), ("borrowing", Ownership::Borrowing), ("__owned", Ownership::Owned), ("__shared", Ownership::Shared)]
+                    .into_iter()
+                    .find(|(word, _)| self.eat_keyword(word))
+                    .map(|(_, ownership)| ownership);
                 let ty = self.ty()?;
                 let variadic = self.eat("...");
                 // A default value changes nothing in the symbol; `#isolation` is the only one understood.
                 if self.eat("=") && !self.eat("#isolation") {
                     return Err(self.error("only `= #isolation` is understood as a default value"));
                 }
-                params.push(Param { label, ty, inout, variadic, isolated });
+                params.push(Param { label, ty, inout, variadic, isolated, ownership });
             }
             let is_async = self.eat_keyword("async");
             let mut throws = self.eat_keyword("throws");
@@ -678,6 +687,7 @@ impl<'a> Parser<'a> {
             main_actor,
             nonisolated,
             nonsending,
+            consumes_self,
             accessor_async: accessor_effects.0,
             accessor_throws: accessor_effects.1,
             operator,

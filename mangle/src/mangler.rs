@@ -28,6 +28,8 @@ struct Mangler {
     last_subst_size: usize,
     last_num_substs: usize,
     last_subst_is_standard: bool,
+    /// Mangling an initializer's parameters, which are consumed by default.
+    in_initializer: bool,
 }
 
 /// `INDEX`: 0 is `_`, n is `<n-1>_`.
@@ -394,7 +396,7 @@ impl Mangler {
         let params: Vec<Param> = function
             .params
             .iter()
-            .map(|ty| Param { label: None, ty: ty.clone(), inout: false, variadic: false, isolated: false })
+            .map(|ty| Param { label: None, ty: ty.clone(), inout: false, variadic: false, isolated: false, ownership: None })
             .collect();
         self.parameters(&params)?;
         if function.is_async {
@@ -422,6 +424,13 @@ impl Mangler {
             }
             if p.isolated {
                 m.push("Yi");
+            }
+            // `consuming`/`borrowing` show only when not the default (an initializer's parameters are consumed, a
+            // function's borrowed): `n`, `h`. `__owned`/`__shared` always show.
+            match (p.ownership, m.in_initializer) {
+                (Some(Ownership::Consuming), false) | (Some(Ownership::Owned), _) => m.push("n"),
+                (Some(Ownership::Borrowing), true) | (Some(Ownership::Shared), _) => m.push("h"),
+                _ => {}
             }
             if p.inout {
                 m.push("z");
@@ -562,6 +571,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
         m.push("E");
     }
     let is_init = decl.name == "init";
+    m.in_initializer = is_init;
     if let Some(fixity) = decl.operator {
         // Each operator character as a letter (docs/ABI/Mangling.rst: operator-char), then the fixity.
         let letters: String = decl
@@ -607,7 +617,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
             m.ty(&canonical(result, &same_types))?;
             let params: Vec<Param> = params
                 .iter()
-                .map(|p| Param { label: p.label.clone(), ty: canonical(&p.ty, &same_types), inout: p.inout, variadic: p.variadic, isolated: p.isolated })
+                .map(|p| Param { label: p.label.clone(), ty: canonical(&p.ty, &same_types), inout: p.inout, variadic: p.variadic, isolated: p.isolated, ownership: p.ownership })
                 .collect();
             m.parameters(&params)?;
             m.push("c");
@@ -676,7 +686,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
             }
             let params: Vec<Param> = params
                 .iter()
-                .map(|p| Param { label: p.label.clone(), ty: canonical(&p.ty, &same_types), inout: p.inout, variadic: p.variadic, isolated: p.isolated })
+                .map(|p| Param { label: p.label.clone(), ty: canonical(&p.ty, &same_types), inout: p.inout, variadic: p.variadic, isolated: p.isolated, ownership: p.ownership })
                 .collect();
             m.parameters(&params)?;
             if *is_async {
