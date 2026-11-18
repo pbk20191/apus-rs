@@ -95,6 +95,21 @@ pub enum TypeSelf {
     Thin,
     /// A class's or actor's metatype is its metadata, passed as `self`.
     Thick,
+    /// A protocol's static member or initializer: the conforming type's metadata as `self`, then the type and its
+    /// witness table after the arguments (an `OpenedType`).
+    Conformance,
+}
+
+/// A protocol member's `Self` when its extension fixes it (`where Self == Bordered`).
+fn fixed_self(decl: &ast::Decl) -> Option<&ast::Ty> {
+    if !decl.context.last().is_some_and(|(_, kind)| *kind == ast::Kind::Protocol) {
+        return None;
+    }
+    let this = ast::Subject::Param(ast::GenericParam { depth: 0, index: 0 });
+    decl.extension.iter().flat_map(|e| e.requirements.iter()).find_map(|requirement| match requirement {
+        ast::Requirement::SameType(subject, ty) if *subject == this => Some(ty),
+        _ => None,
+    })
 }
 
 /// A formal argument whose Rust type the declaration fixes, because Swift passes it as one pointer where `swift!`
@@ -231,11 +246,32 @@ impl Declaration {
         if !decl.is_static && decl.name != "init" {
             return TypeSelf::NotStatic;
         }
-        match decl.context.last() {
-            Some((_, ast::Kind::Class | ast::Kind::Actor | ast::Kind::TypedefClass)) => TypeSelf::Thick,
-            Some((_, ast::Kind::Struct | ast::Kind::Enum | ast::Kind::TypedefStruct)) => TypeSelf::Thin,
-            _ => TypeSelf::NotStatic,
+        // `where Self == Concrete`: a member of that type (observed: no Self metadata or witness table is passed).
+        let kind = match fixed_self(decl) {
+            Some(ast::Ty::Nominal { path, .. }) => path.last().map(|(_, kind)| *kind),
+            Some(_) => None,
+            None => decl.context.last().map(|(_, kind)| *kind),
+        };
+        match kind {
+            Some(ast::Kind::Class | ast::Kind::Actor | ast::Kind::TypedefClass) => TypeSelf::Thick,
+            Some(ast::Kind::Struct | ast::Kind::Enum | ast::Kind::TypedefStruct) => TypeSelf::Thin,
+            Some(ast::Kind::Protocol) => TypeSelf::Conformance,
+            None => TypeSelf::NotStatic,
         }
+    }
+
+    /// Whether the result is exactly the protocol's `Self` (a requirement's or a protocol extension's): returned by
+    /// address, with the type the call is made on.
+    pub fn returns_self(&self) -> bool {
+        let decl = &self.0;
+        let result = match &decl.signature {
+            ast::Signature::Function { result, .. } | ast::Signature::Getter(result) => result,
+            ast::Signature::Subscript { result, setter: false, .. } => result,
+            _ => return false,
+        };
+        decl.context.last().is_some_and(|(_, kind)| *kind == ast::Kind::Protocol)
+            && fixed_self(decl).is_none()
+            && *result == ast::Ty::Param(ast::GenericParam { depth: 0, index: 0 })
     }
 
     /// Per formal parameter, whether the callee consumes it (+1) instead of borrowing it: every parameter of an
@@ -305,9 +341,6 @@ impl Declaration {
     pub fn check_callable(&self) -> Result<(), Error> {
         if let ast::Signature::Case(_) = &self.0.signature {
             return Err(Error("an enum case is not callable: `mangle!` gives its tag symbol, for `SwiftEnumCase`".into()));
-        }
-        if self.0.is_static && self.0.context.last().is_some_and(|(_, kind)| *kind == ast::Kind::Protocol) {
-            return Err(Error("static protocol requirements are not supported".into()));
         }
         check_lowering(&self.0).map_err(Error)?;
         if let ast::Signature::Function { params, .. } = &self.0.signature {
@@ -631,7 +664,16 @@ mod isolation_tests {
         assert_eq!(of("M.Tally(actor).init()"), TypeSelf::Thick);
         assert_eq!(of("M.Built(class).value: Int { get }"), TypeSelf::NotStatic);
         assert_eq!(of("M.free() -> Int"), TypeSelf::NotStatic);
-        assert!(super::check_callable("static M.Shape(protocol).make() -> Self").is_err(), "a static requirement");
+        assert_eq!(of("static M.Shape(protocol).make() -> Self"), TypeSelf::Conformance);
+        assert_eq!(of("M.Shape(protocol).init(n: Int)"), TypeSelf::Conformance);
+        assert!(Declaration::parse("static M.Shape(protocol).make() -> Self").unwrap().returns_self());
+        assert!(!Declaration::parse("M.Shape(protocol).area() -> Double").unwrap().returns_self());
+        // `where Self == Concrete` (SwiftUI's `.bordered`): a member of that type, not generic over Self.
+        let bordered = "static (extension in M where Self == Bordered(struct)) M.Style(protocol).bordered: Self { get }";
+        assert_eq!(of(bordered), TypeSelf::Thin);
+        assert!(!Declaration::parse(bordered).unwrap().returns_self());
+        assert_eq!(super::result_type(bordered).unwrap().as_deref(), Some("1M8BorderedV"));
+        assert_eq!(of("static (extension in M where Self == Klass(class)) M.Style(protocol).klass: Self { get }"), TypeSelf::Thick);
         assert_eq!(of("M.Tally(actor).init()"), TypeSelf::Thick);
         assert_eq!(super::isolation("M.Tally(actor).init()").unwrap(), Isolation::None, "an actor's init is nonisolated");
     }

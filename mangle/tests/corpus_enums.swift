@@ -23,3 +23,5 @@ extension Holder where T: Tagged {
 }
 extension Holder where T == Int { public enum Plain { case a } }
 extension Holder { public enum Free { case z } }
+// Static protocol requirements and a protocol initializer.
+public protocol Making { static func make(_ n: Int) -> Self; static var label: String { get }; init(n: Int) }

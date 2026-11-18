@@ -184,31 +184,45 @@ pub struct IndirectSlot {
     pub(crate) direct: bool,
     /// A `some P` result whose storage is allocated by [`resolve`](Self::resolve), once the generic arguments are known.
     pub(crate) opaque: Option<&'static super::value::OpaqueResult>,
+    /// A protocol's `Self` result, allocated by [`resolve`](Self::resolve) for the receiver's type.
+    pub(crate) receiver_self: bool,
 }
 
 impl IndirectSlot {
     pub(crate) fn inline() -> IndirectSlot {
-        IndirectSlot { inline: [0; 4], boxed: None, direct: false, opaque: None }
+        IndirectSlot { inline: [0; 4], boxed: None, direct: false, opaque: None, receiver_self: false }
+    }
+
+    pub(crate) fn receiver_self() -> IndirectSlot {
+        IndirectSlot { receiver_self: true, ..IndirectSlot::inline() }
     }
 
     pub(crate) fn boxed(storage: UninitValue, direct: bool) -> IndirectSlot {
         assert!(!direct || storage.ty.size() <= 32, "a type larger than four words is not returned in registers");
-        IndirectSlot { inline: [0; 4], boxed: Some(storage), direct, opaque: None }
+        IndirectSlot { inline: [0; 4], boxed: Some(storage), direct, opaque: None, receiver_self: false }
     }
 
     pub(crate) fn opaque(result: &'static super::value::OpaqueResult) -> IndirectSlot {
-        IndirectSlot { inline: [0; 4], boxed: None, direct: false, opaque: Some(result) }
+        IndirectSlot { inline: [0; 4], boxed: None, direct: false, opaque: Some(result), receiver_self: false }
     }
 
     /// Whether the storage still waits for [`resolve`](Self::resolve).
     pub(crate) fn pending(&self) -> bool {
-        self.opaque.is_some() && self.boxed.is_none()
+        (self.opaque.is_some() || self.receiver_self) && self.boxed.is_none()
     }
 
     /// Allocates a `some P` result's storage for its actual type, given the call's generic arguments.
     pub(crate) fn resolve(&mut self, generic_args: &[*const c_void]) -> Result<(), CallError> {
         if let (Some(opaque), None) = (self.opaque, &self.boxed) {
             self.boxed = Some(UninitValue::new(opaque.metadata(generic_args)?));
+        }
+        if self.receiver_self && self.boxed.is_none() {
+            // A protocol member's generic arguments end with Self's metadata and witness table (the witness-method
+            // convention); binding the receiver adds them last.
+            let [.., self_type, _witness] = generic_args else {
+                return Err(CallError::InvalidArgument("a `Self` result needs an `Opened` or `OpenedType` receiver"));
+            };
+            self.boxed = Some(UninitValue::new(unsafe { super::SwiftType::from_metadata(*self_type) }));
         }
         Ok(())
     }
@@ -516,6 +530,23 @@ impl<R> SwiftCall<R> {
         call.generic_args.extend([opened.ty().as_ptr(), opened.witness().0]);
         call.next_int += 2;
         call.owned.get_mut().unwrap().push(Owned::Value(copy));
+        self
+    }
+
+    /// Calls a protocol's static member or initializer on a conforming type: its metadata (a thick metatype, which
+    /// lives forever) is `self`, and the type and the witness table follow the arguments.
+    pub fn on_opened_type(mut self, opened: &super::value::OpenedType) -> Self {
+        let call = self.configure();
+        if call.next_int + 2 > super::func::INT_REGISTERS {
+            self.invalid.get_or_insert(CallError::InvalidArgument("too many integer arguments for the argument registers"));
+            return self;
+        }
+        let regs = call.regs.get_mut();
+        regs.self_ = opened.ty().as_ptr() as *mut c_void;
+        regs.gpr[call.next_int] = opened.ty().as_ptr() as u64;
+        regs.gpr[call.next_int + 1] = opened.witness().0 as u64;
+        call.generic_args.extend([opened.ty().as_ptr(), opened.witness().0]);
+        call.next_int += 2;
         self
     }
 

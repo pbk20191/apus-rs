@@ -360,13 +360,15 @@ pub(crate) fn hand_over(owned: &mut Vec<Owned>, start: usize) {
 pub struct DeclaredResult {
     pub name: Option<&'static str>,
     pub opaque: Option<&'static super::value::OpaqueResult>,
+    /// The result is the protocol's `Self`: of the type the call is made on (an `Opened`'s or `OpenedType`'s).
+    pub receiver_self: bool,
 }
 
 impl DeclaredResult {
-    pub const UNKNOWN: DeclaredResult = DeclaredResult { name: None, opaque: None };
+    pub const UNKNOWN: DeclaredResult = DeclaredResult { name: None, opaque: None, receiver_self: false };
 
     pub const fn named(name: Option<&'static str>) -> DeclaredResult {
-        DeclaredResult { name, opaque: None }
+        DeclaredResult { name, opaque: None, receiver_self: false }
     }
 }
 
@@ -526,6 +528,10 @@ impl SwiftRet for SwiftValue {
             // `some P`: always by address; the storage is sized once the generic arguments are known.
             return Ok((IndirectSlot::opaque(opaque), true));
         }
+        if result_type.receiver_self {
+            // `Self`: by address, of the receiver's type, which binding the receiver adds.
+            return Ok((IndirectSlot::receiver_self(), true));
+        }
         Ok((IndirectSlot::boxed(UninitValue::new(declared_type(result_type.name)?), false), true))
     }
 }
@@ -540,8 +546,8 @@ impl SwiftRet for DirectValue {
     }
 
     fn result_slot(result_type: DeclaredResult) -> Result<(IndirectSlot, bool), CallError> {
-        if result_type.opaque.is_some_and(|o| o.is_opaque()) {
-            return Err(CallError::InvalidArgument("a `some P` result is returned by address: use SwiftValue"));
+        if result_type.opaque.is_some_and(|o| o.is_opaque()) || result_type.receiver_self {
+            return Err(CallError::InvalidArgument("a `some P` or `Self` result is returned by address: use SwiftValue"));
         }
         let ty = declared_type(result_type.name)?;
         if ty.size() > 32 {
@@ -565,6 +571,15 @@ impl SwiftReceiver for super::value::Opened {
     }
     fn bind_sync<R>(&self, call: super::SwiftSyncCall<R>) -> super::SwiftSyncCall<R> {
         call.on_opened(self)
+    }
+}
+
+impl SwiftReceiver for super::value::OpenedType {
+    fn bind<R>(&self, call: SwiftCall<R>) -> SwiftCall<R> {
+        call.on_opened_type(self)
+    }
+    fn bind_sync<R>(&self, call: super::SwiftSyncCall<R>) -> super::SwiftSyncCall<R> {
+        call.on_opened_type(self)
     }
 }
 

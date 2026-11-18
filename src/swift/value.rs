@@ -96,6 +96,30 @@ impl SwiftType {
         let table = unsafe { rt::swift_conformsToProtocol(self.0, descriptor) };
         (!table.is_null()).then_some(WitnessTable(table))
     }
+
+    /// The type with its conformance to `protocol`, if it conforms: what a protocol's static members and
+    /// initializers are called on.
+    pub fn conforming(self, protocol: &SwiftProtocol) -> Option<OpenedType> {
+        Some(OpenedType { ty: self, witness: self.conformance(protocol)? })
+    }
+}
+
+/// A type with its conformance to a protocol: the receiver of the protocol's static members and initializers
+/// (`self: &OpenedType`), as [`Opened`] is of its instance members. From [`SwiftType::conforming`].
+#[derive(Clone, Copy, Debug)]
+pub struct OpenedType {
+    ty: SwiftType,
+    witness: WitnessTable,
+}
+
+impl OpenedType {
+    pub fn ty(&self) -> SwiftType {
+        self.ty
+    }
+
+    pub(crate) fn witness(&self) -> WitnessTable {
+        self.witness
+    }
 }
 
 impl std::fmt::Debug for SwiftType {

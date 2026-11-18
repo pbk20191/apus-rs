@@ -224,6 +224,7 @@ const DECLARATIONS: &[&str] = &[
     "Probe.mt8(_: Any.Type) -> Int",
     "Probe.mt7(_: any MP.Type) -> Int",
     "Probe.mt9(_: Int.Type?, _: Big(struct).Type) -> Int",
+    "static (extension in Probe where Self == PBordered(struct)) Probe.PStyle(protocol).bordered: Self { get }",
     "Probe.cTypedefs(_: __C.NSDecimal(typedef struct), _: __C.CGColorRef(typedef class)) -> __C.CGColorRef(typedef class)?",
     "Probe.constant(_: _const String, _: Int)",
     "Probe.makeSome(_: Double) -> some Shape",
@@ -276,6 +277,10 @@ const ENUM_CASES: &[&str] = &[
     "(extension in Cases where T: Tagged) Cases.Holder(struct)<T>.mode() -> Holder(struct)<T>.(extension in Cases where T: Tagged) Mode(enum)",
     "case Cases.Holder(struct)<T>.(extension in Cases where T == Int) Plain(enum).a",
     "case Cases.Holder(struct)<T>.Free(enum).z",
+    // Requirements: their dispatch thunks (`…Tj`) are exported.
+    "static Cases.Making(protocol).make(_: Int) -> Self",
+    "static Cases.Making(protocol).label: String { get }",
+    "Cases.Making(protocol).init(n: Int)",
 ];
 
 /// Compiled once per test process: tests run in parallel and would otherwise write the same library.
@@ -323,7 +328,7 @@ fn enum_cases_mangle_to_their_tag_symbols() {
     let mut failures = Vec::new();
     for decl in ENUM_CASES {
         match mangle(decl) {
-            Ok(symbol) if symbols.contains(&symbol) => {}
+            Ok(symbol) if symbols.contains(&symbol) || symbols.contains(&format!("{symbol}Tj")) => {}
             Ok(symbol) => failures.push(format!("{decl}\n    mangled to {symbol}, which swiftc did not emit")),
             Err(error) => failures.push(format!("{decl}\n    error: {error}")),
         }

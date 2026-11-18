@@ -128,3 +128,23 @@ public func anyTypeName(_ t: Any.Type) -> String { "\(t)" }
 public func zero<T: AdditiveArithmetic>(_ t: T.Type) -> T { T.zero }
 public func meters(_ value: Double) -> Measurement<UnitLength> { Measurement(value: value, unit: .meters) }
 public func unitSymbol(_ unit: Unit) -> String { unit.symbol }
+
+// Static protocol requirements and protocol initializers (tests/swift_protocol_static.rs): called on a type and its
+// conformance; `Self` results come back by address.
+public protocol Maker {
+    static func make(_ n: Int) -> Self
+    static var label: String { get }
+    init(n: Int)
+    static func count() async -> Int
+    var n: Int { get }
+    func doubled() -> Self
+}
+public struct Thing: Maker {
+    public var n: Int
+    public init(n: Int) { self.n = n }
+    public static func make(_ n: Int) -> Thing { Thing(n: n) }
+    public static var label: String { "thing" }
+    public static func count() async -> Int { await Task.yield(); return 7 }
+    public func doubled() -> Thing { Thing(n: n * 2) }
+}
+public func thingMetadata() -> Any.Type { Thing.self }

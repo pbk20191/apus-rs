@@ -229,3 +229,7 @@ public func mt8(_ a: Any.Type) -> Int { 0 }
 public func mt9(_ t: Int.Type?, _ s: Big.Type) -> Int { 0 }
 public protocol MP {}
 public func mt7(_ p: any MP.Type) -> Int { 0 }
+// `where Self == Concrete` (SwiftUI's `.bordered`): the result `Self` is the concrete type.
+public protocol PStyle {}
+public struct PBordered: PStyle { public init() {} }
+extension PStyle where Self == PBordered { public static var bordered: Self { PBordered() } }

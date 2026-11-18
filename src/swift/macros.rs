@@ -63,6 +63,17 @@
 /// }
 /// ```
 ///
+/// - A protocol's static member or initializer is called on a conforming type: `self: &OpenedType`
+///   (`SwiftType::conforming`), as an instance member is on an `Opened`. A `Self` result is a `SwiftValue` of that
+///   type. Under `where Self == Concrete` it is a member of that type instead.
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "static Res.Maker(protocol).label: String { get }"]
+///     fn label(self: &apus::swift::SwiftType) -> String; // needs the conformance too
+/// }
+/// ```
+///
 /// - A value of a class-bound generic type (`T: SomeClass`, `T: AnyObject`) is a class reference, not a
 ///   `SwiftValue`: `&SwiftObject` (or `&Retained<T>`) as an argument, `SwiftObject` as a result. A metatype
 ///   (`T.Type`, a class's, `Any.Type`) is a `SwiftType`; a struct's or enum's (passed as nothing) is refused.
@@ -380,7 +391,11 @@ macro_rules! __swift_result_type {
     (literal $symbol:literal) => { $crate::swift::DeclaredResult::UNKNOWN };
     (declared $declaration:literal) => {{
         static OPAQUE: $crate::swift::OpaqueResult = $crate::swift::OpaqueResult::new($crate::__opaque_descriptor!($declaration));
-        $crate::swift::DeclaredResult { name: $crate::result_type!($declaration), opaque: ::core::option::Option::Some(&OPAQUE) }
+        $crate::swift::DeclaredResult {
+            name: $crate::result_type!($declaration),
+            opaque: ::core::option::Option::Some(&OPAQUE),
+            receiver_self: $crate::__returns_self!($declaration),
+        }
     }};
 }
 

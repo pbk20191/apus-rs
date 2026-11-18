@@ -28,7 +28,7 @@ pub use closure::{ClosureArgs, ClosureFn, ClosureOut, DeclaredClosure, ResultKin
 pub use enums::{EnumCases, SwiftEnumCase};
 pub use stream::SwiftStream;
 pub use sync::{HopTo, SwiftFn, SwiftSyncCall};
-pub use value::{IntoSwift, OpaqueResult, Opened, SwiftProtocol, SwiftType, SwiftValue, WitnessTable};
+pub use value::{IntoSwift, OpaqueResult, Opened, OpenedType, SwiftProtocol, SwiftType, SwiftValue, WitnessTable};
 pub use isolation::Isolation;
 #[doc(hidden)]
 pub use generic::{

@@ -139,6 +139,16 @@ impl<R> SwiftSyncCall<R> {
         self
     }
 
+    /// Calls a protocol's static member or initializer on a conforming type: its metadata (a thick metatype, which
+    /// lives forever) is `self`, and the type and the witness table follow the arguments.
+    pub fn on_opened_type(mut self, opened: &super::value::OpenedType) -> Self {
+        self.lowering.regs.self_ = opened.ty().as_ptr() as *mut std::ffi::c_void;
+        self.lowering.int(opened.ty().as_ptr() as u64);
+        self.lowering.int(opened.witness().0 as u64);
+        self.lowering.generic_args.extend([opened.ty().as_ptr(), opened.witness().0]);
+        self
+    }
+
     /// Calls a method of a value passed by address (a large or resilient struct): `value` is `self`.
     pub fn on_value(mut self, value: &SwiftValue) -> Self {
         let copy = value.clone();

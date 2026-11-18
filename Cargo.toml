@@ -179,3 +179,8 @@ required-features = ["test-probe"]
 name = "swift_class_bound"
 harness = false
 required-features = ["test-probe"]
+
+[[test]]
+name = "swift_protocol_static"
+harness = false
+required-features = ["test-probe"]

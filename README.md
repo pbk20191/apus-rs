@@ -159,7 +159,11 @@ the standard library spelled out:
 - Members of generic types name the type's parameters, with the type's own constraints:
   `Shop.Box(struct)<T>.get() -> T?`, `Swift.Array<Element>.first: Element? { get }`, `Keyed(struct)<K: Hashable>`.
 - Protocol members: `Shop.Shape(protocol).area() -> Double`; the conforming type is `Self`. Call them on an
-  `any Shape` value opened with `SwiftValue::open()` (`self: &Opened`).
+  `any Shape` value opened with `SwiftValue::open()` (`self: &Opened`). Static members and initializers
+  (`static Shop.Shape(protocol).make(_: Int) -> Self`, `Shop.Shape(protocol).init(n: Int)`) are called on a type with
+  its conformance, `SwiftType::conforming(&protocol)` (`self: &OpenedType`). A `Self` result is a `SwiftValue` of the
+  receiver's type. Under `where Self == Concrete` (SwiftUI's `.bordered`) a member belongs to that type and is called
+  like that type's own.
 - Initializers: `Shop.Cart(struct).init(items: [String])`, `Shop.Level(enum).init(rawValue: Int) -> Level(enum)?`
   (the result is the type unless written; a failable one returns an optional). An initializer or `static` member of a
   class or actor takes the class as `self` (`self: &SwiftType`, its metadata); a struct's or enum's takes no `self`.

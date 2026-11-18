@@ -119,6 +119,20 @@ pub fn __consumes_self(input: TokenStream) -> TokenStream {
     }
 }
 
+/// Expands to `true` if the declaration's result is exactly the protocol's `Self`, else `false`.
+#[doc(hidden)]
+#[proc_macro]
+pub fn __returns_self(input: TokenStream) -> TokenStream {
+    let tokens = flatten(input);
+    let Some(declaration) = tokens.first().and_then(string_literal) else {
+        return compile_error("expected a Swift declaration as a string literal");
+    };
+    match apus_mangle::Declaration::parse(&declaration) {
+        Ok(parsed) => (if parsed.returns_self() { "true" } else { "false" }).parse().expect("a bool"),
+        Err(error) => compile_error(&format!("cannot mangle `{declaration}`: {error}")),
+    }
+}
+
 /// Picks how `swift!` calls a declaration, then expands `PATH! { binding how KIND rest… }`. Input:
 /// `PATH ; binding how async|sync rest…`, `rest` ending with the declaration. A sync declaration that must run on
 /// an actor (an actor's sync member, `@MainActor`) becomes `hop SelfActor` / `hop Main` when declared `async fn`
@@ -197,6 +211,11 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         match parsed.type_self() {
             apus_mangle::TypeSelf::Thick if !receiver.as_deref().is_some_and(|r| r.ends_with("SwiftType")) => {
                 return item_compile_error(&format!("`{declaration}` takes its class as `self`: declare `self: &SwiftType` first"));
+            }
+            apus_mangle::TypeSelf::Conformance if !receiver.as_deref().is_some_and(|r| r.ends_with("OpenedType")) => {
+                return item_compile_error(&format!(
+                    "`{declaration}` is called on a conforming type: declare `self: &OpenedType` first (`SwiftType::conforming`)"
+                ));
             }
             apus_mangle::TypeSelf::Thin if receiver.is_some() => {
                 return item_compile_error(&format!("`{declaration}` belongs to a struct or enum, which passes no `self`: declare no receiver"));

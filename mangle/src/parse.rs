@@ -869,12 +869,17 @@ impl<'a> Parser<'a> {
             } else if member.name == "init" {
                 // An initializer returns the type itself (written out only for a failable one: `-> T?`).
                 let args = (0..context_params).map(|index| Ty::Param(GenericParam { depth: 0, index })).collect();
-                Ty::Nominal {
-                    module: self.module.clone(),
-                    path: context.clone(),
-                    split: Ty::split(context.len(), context_generic_level.unwrap_or(context.len() - 1), context_params),
-                    args,
-                    extension: context_extension.clone().map(Box::new),
+                if let Some((_, Kind::Protocol)) = context.last() {
+                    // A protocol's initializer makes a `Self`.
+                    Ty::Param(GenericParam { depth: 0, index: 0 })
+                } else {
+                    Ty::Nominal {
+                        module: self.module.clone(),
+                        path: context.clone(),
+                        split: Ty::split(context.len(), context_generic_level.unwrap_or(context.len() - 1), context_params),
+                        args,
+                        extension: context_extension.clone().map(Box::new),
+                    }
                 }
             } else {
                 Ty::Tuple(Vec::new())
@@ -950,7 +955,6 @@ impl<'a> Parser<'a> {
         if member.name == "init" {
             match context.last() {
                 None => return Err("`init` belongs to a type: `Module.Type(kind).init(…)`".into()),
-                Some((_, Kind::Protocol)) => return Err("protocol initializers are not supported".into()),
                 _ if is_static => return Err("an initializer is not `static`".into()),
                 _ if !matches!(signature, Signature::Function { .. }) => return Err("expected `init(…)`".into()),
                 _ if generic_params == 0 && !requirements.is_empty() => {
