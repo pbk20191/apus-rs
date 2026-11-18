@@ -16,6 +16,8 @@ xlto = ["swift", "apus-sys/xlto"]
 dispatch = ["dep:async-task", "dep:dispatch2"]
 # objc2 objects (`Retained<T>`) as Swift class references: arguments, results, receivers, conversions.
 objc2 = ["swift", "dep:objc2"]
+# block2 blocks (`&Block<F>`, `RcBlock<F>`) as Swift `@convention(block)` functions.
+block2 = ["objc2", "dep:block2"]
 test-probe = ["swift"]
 # `impl futures_core::Stream for SwiftStream`
 stream = ["swift", "dep:futures-core"]
@@ -27,6 +29,7 @@ apus-macros = { path = "macros", optional = true }
 apus-sys = { path = "sys", version = "=0.1.0", optional = true }
 dispatch2 = { version = "0.3.1", default-features = false, features = ["std"], optional = true }
 objc2 = { version = "0.6", optional = true }
+block2 = { version = "0.6", optional = true }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFRunLoop", "CFString", "CFDate"] }
 libc = "0.2"
 
@@ -114,6 +117,11 @@ required-features = ["test-probe"]
 
 [[test]]
 name = "swift_isolation"
+harness = false
+required-features = ["test-probe"]
+
+[[test]]
+name = "swift_conventions"
 harness = false
 required-features = ["test-probe"]
 

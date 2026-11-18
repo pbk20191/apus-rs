@@ -115,12 +115,16 @@ fn fixed_self(decl: &ast::Decl) -> Option<&ast::Ty> {
 
 /// A formal argument whose Rust type the declaration fixes, because Swift passes it as one pointer where `swift!`
 /// would otherwise pass a value by address.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ArgumentKind {
     /// A value of a class-bound generic type (`T: SomeClass`, `T: AnyObject`): a class reference.
     ClassBound,
     /// A metatype (`T.Type`, a class's, `Any.Type`): the type's metadata, a `SwiftType`.
     Metatype,
+    /// `@convention(c)`, optional or not: a C function pointer, of the shape given (see [`foreign_shape`]).
+    CFunction(String),
+    /// `@convention(block)`, optional or not: an Objective-C block, of the shape given.
+    Block(String),
 }
 
 /// A result whose Rust type the declaration fixes, for the same reason as [`ArgumentKind`].
@@ -130,6 +134,52 @@ pub enum ResultKind {
     ClassReference,
     /// A metatype, returned as the type's metadata.
     Metatype,
+    /// A C function pointer.
+    CFunction,
+    /// An Objective-C block (+1).
+    Block,
+}
+
+/// A `@convention(c)` or `@convention(block)` function type, itself or optional.
+fn foreign_function(ty: &ast::Ty) -> Option<&ast::FunctionTy> {
+    match ty {
+        ast::Ty::Optional(wrapped) => match &**wrapped {
+            ast::Ty::Function(function) if function.convention != ast::Convention::Swift => Some(function),
+            _ => None,
+        },
+        ast::Ty::Function(function) if function.convention != ast::Convention::Swift => Some(function),
+        _ => None,
+    }
+}
+
+/// The parameter and result types of a C function or block as Objective-C type encodings, which the Rust function
+/// pointer or block is checked against: `(id)q` takes an `Int32` and a `Double` and returns an `Int`. `?` is any
+/// other type (a pointer, an object), `v` no result.
+fn foreign_shape(function: &ast::FunctionTy) -> String {
+    fn code(ty: &ast::Ty) -> char {
+        match ty {
+            ast::Ty::Tuple(elements) if elements.is_empty() => 'v',
+            ast::Ty::Nominal { module, path, args, .. } if module == "Swift" && path.len() == 1 && args.is_empty() => {
+                match path[0].0.as_str() {
+                    "Int" | "Int64" => 'q',
+                    "UInt" | "UInt64" => 'Q',
+                    "Int32" => 'i',
+                    "UInt32" => 'I',
+                    "Int16" => 's',
+                    "UInt16" => 'S',
+                    "Int8" => 'c',
+                    "UInt8" => 'C',
+                    "Double" => 'd',
+                    "Float" => 'f',
+                    "Bool" => 'B',
+                    _ => '?',
+                }
+            }
+            _ => '?',
+        }
+    }
+    let params: String = function.params.iter().map(code).collect();
+    format!("({params}){}", code(&function.result))
 }
 
 /// The generic parameters (the declaration's, its enclosing type's, its extension's) that are class-bound: Swift
@@ -188,6 +238,17 @@ fn check_lowering(decl: &ast::Decl) -> Result<(), String> {
                 At::Top | At::Argument => Ok(()),
                 _ => Err("a class-bound generic parameter's value is supported only as a parameter or result itself".into()),
             },
+            // A C function or block is one pointer as a parameter or result, or the optional of one (null is nil),
+            // and as a closure's parameter or result; elsewhere `swift!` would not lower it.
+            Ty::Function(function) if function.convention != ast::Convention::Swift => {
+                if !matches!(at, At::Top | At::Optional | At::Closure | At::Argument) {
+                    return Err("a C function or block is supported only as a parameter or result itself, or its optional".into());
+                }
+                function.params.iter().chain([&function.result]).try_for_each(|ty| walk(ty, At::Closure, class_bound))
+            }
+            Ty::Optional(wrapped) if at == At::Optional && matches!(&**wrapped, Ty::Function(f) if f.convention != ast::Convention::Swift) => {
+                Err("a C function or block is supported only as a parameter or result itself, or its optional".into())
+            }
             Ty::Optional(wrapped) => walk(wrapped, inner(if at == At::Top { At::Optional } else { at }), class_bound),
             Ty::Tuple(elements) => elements.iter().try_for_each(|(_, element)| walk(element, inner(At::Tuple), class_bound)),
             Ty::Function(function) => {
@@ -361,7 +422,10 @@ impl Declaration {
         let kind = |ty: &ast::Ty| match ty {
             ast::Ty::Param(param) if class_bound.contains(param) => Some(ArgumentKind::ClassBound),
             ast::Ty::Metatype(_) => Some(ArgumentKind::Metatype),
-            _ => None,
+            ty => foreign_function(ty).map(|function| match function.convention {
+                ast::Convention::C => ArgumentKind::CFunction(foreign_shape(function)),
+                _ => ArgumentKind::Block(foreign_shape(function)),
+            }),
         };
         Ok(match &decl.signature {
             ast::Signature::Function { params, .. } => params.iter().map(|p| if p.inout { None } else { kind(&p.ty) }).collect(),
@@ -385,7 +449,10 @@ impl Declaration {
         match result {
             ast::Ty::Param(param) if class_bound_params(decl).contains(param) => Some(ResultKind::ClassReference),
             ast::Ty::Metatype(_) => Some(ResultKind::Metatype),
-            _ => None,
+            ty => foreign_function(ty).map(|function| match function.convention {
+                ast::Convention::C => ResultKind::CFunction,
+                _ => ResultKind::Block,
+            }),
         }
     }
 
@@ -410,7 +477,9 @@ impl Declaration {
         params
             .iter()
             .map(|param| match &param.ty {
-                ast::Ty::Function(function) => closure_shape(function).map(Some).map_err(Error),
+                ast::Ty::Function(function) if function.convention == ast::Convention::Swift => {
+                    closure_shape(function).map(Some).map_err(Error)
+                }
                 _ => Ok(None),
             })
             .collect()
@@ -521,6 +590,8 @@ fn closure_shape(function: &ast::FunctionTy) -> Result<String, String> {
             Ty::Existential(protocol) if protocol.module == "Swift" && protocol.name == "Error" => 'd',
             Ty::Existential(_) => '?',
             Ty::AnyObject => 'd',
+            // A C function pointer or block: one pointer.
+            ty if foreign_function(ty).is_some() => 'd',
             Ty::Nominal { module, path, args, .. } if module == "Swift" && path.len() == 1 && args.is_empty()
                 && (DIRECT.contains(&path[0].0.as_str()) || path[0].0 == "String") => 'd',
             Ty::Nominal { path, args, .. } if args.is_empty() && matches!(path.last(), Some((_, ast::Kind::Class | ast::Kind::Actor | ast::Kind::TypedefClass))) => 'd',
@@ -804,6 +875,27 @@ mod isolation_tests {
         ] {
             let error = super::check_callable(declaration).unwrap_err().to_string();
             assert!(error.contains("metatype"), "{declaration}: {error}");
+        }
+    }
+
+    #[test]
+    fn c_functions_and_blocks_are_single_pointers_of_a_checked_shape() {
+        use super::{ArgumentKind, Declaration, ResultKind};
+        let parsed = |d: &str| Declaration::parse(d).unwrap();
+        let f = parsed("M.f(_: @convention(c) (Int32, Double) -> Int, _: (@convention(block) (String) -> Bool)?, _: () -> Int)");
+        assert_eq!(
+            f.argument_kinds().unwrap(),
+            vec![Some(ArgumentKind::CFunction("(id)q".into())), Some(ArgumentKind::Block("(?)B".into())), None]
+        );
+        assert_eq!(f.closure_shapes().unwrap(), vec![None, None, Some("s()d".into())]);
+        assert_eq!(parsed("M.f() -> @convention(c) () -> Void").result_kind(), Some(ResultKind::CFunction));
+        assert_eq!(parsed("M.f() -> (@convention(block) () -> Void)?").result_kind(), Some(ResultKind::Block));
+        // An autoclosure is a Swift closure.
+        assert_eq!(parsed("M.f(_: @autoclosure () -> Int)").closure_shapes().unwrap(), vec![Some("s()d".into())]);
+        // Passed one pointer as themselves or optional; deeper, apus would not lower them.
+        for declaration in ["M.f(_: (Int, @convention(c) () -> Void))", "M.f() -> (@convention(c) () -> Void)??"] {
+            let error = super::check_callable(declaration).unwrap_err().to_string();
+            assert!(error.contains("C function or block"), "{declaration}: {error}");
         }
     }
 

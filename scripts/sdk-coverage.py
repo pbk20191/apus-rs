@@ -31,7 +31,7 @@ TYPE_KINDS = {"swift.struct": "struct", "swift.class": "class", "swift.enum": "e
 USR_KIND = {"V": "struct", "C": "class", "O": "enum", "P": "protocol"}
 KEPT_MODIFIERS = {"static", "class", "mutating", "consuming", "borrowing", "__consuming", "nonisolated", "prefix",
                   "postfix"}
-KEPT_TYPE_ATTRIBUTES = {"@escaping", "@Sendable", "@MainActor"}
+KEPT_TYPE_ATTRIBUTES = {"@escaping", "@Sendable", "@MainActor", "@autoclosure"}
 
 
 class Untranslatable(Exception):
@@ -714,14 +714,31 @@ def measure(module):
                 row["outcome"], row["reason"], row["mangled"] = "mismatch", "mangled differently", value
         elif value == row["expected"]:
             row["outcome"] = "callable"
-        elif "Yt" in row["expected"] and row["expected"].replace("Yt", "") == value:
-            # Only `_const` (`Yt`, a parameter flag) differs: symbol graphs do not show it; written, it is mangled.
-            row["outcome"], row["reason"], row["mangled"] = "const", "`_const` parameters the symbol graph hides", value
+        elif only_hidden_flags(row["expected"], value):
+            # Only `_const` (`Yt`) or `__shared` (`h`), parameter flags, differ: symbol graphs do not show them;
+            # written, they are mangled.
+            row["outcome"], row["reason"], row["mangled"] = "const", "`_const`/`__shared` parameters the symbol graph hides", value
         else:
             row["outcome"], row["reason"], row["mangled"] = "mismatch", "mangled differently", value
     with open(os.path.join(CACHE, f"{module}.details.json"), "w") as f:
         json.dump(rows, f, indent=1)
     return rows
+
+
+def only_hidden_flags(expected, mangled):
+    """Whether `expected` is `mangled` with `_const` (`Yt`) or `__shared` (`h`) parameter flags added."""
+    i = j = 0
+    skipped = False
+    while i < len(expected):
+        if j < len(mangled) and expected[i] == mangled[j]:
+            i, j = i + 1, j + 1
+        elif expected.startswith("Yt", i):
+            i, skipped = i + 2, True
+        elif expected[i] == "h":
+            i, skipped = i + 1, True
+        else:
+            return False
+    return skipped and j == len(mangled)
 
 
 def main():
@@ -732,7 +749,7 @@ def main():
               "subscripts, operators and enum cases. *Callable*: exported and mangled exactly; *not exported*: no symbol",
               "to call (inlinable); *mangled only*: `mangle!` names the symbol, `swift!` refuses to call it; the rest are",
               "apus's gaps.", "",
-              "*With `_const`*: also those that differ only by `_const` parameters, which symbol graphs do not show (the",
+              "*With `_const`*: also those that differ only by `_const` or `__shared` parameters, which symbol graphs do not show (the",
               "declaration must write them, as the module's .swiftinterface does).", "",
               "| Module | Declarations | Exported | Callable | Callable of exported | With `_const` |",
               "|---|---|---|---|---|---|"]

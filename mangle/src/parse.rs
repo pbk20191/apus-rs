@@ -219,7 +219,8 @@ impl<'a> Parser<'a> {
     }
 
     fn primary_type(&mut self) -> Parsed<Ty> {
-        let (mut escaping, mut sendable, mut main_actor) = (false, false, false);
+        let (mut escaping, mut sendable, mut main_actor, mut autoclosure) = (false, false, false, false);
+        let mut convention = None;
         loop {
             if self.eat("@escaping") {
                 escaping = true;
@@ -227,11 +228,25 @@ impl<'a> Parser<'a> {
                 sendable = true;
             } else if self.eat("@MainActor") {
                 main_actor = true;
+            } else if self.eat("@autoclosure") {
+                autoclosure = true;
+            } else if self.eat("@convention") {
+                self.expect("(")?;
+                let name = self.identifier()?;
+                convention = Some(match name.as_str() {
+                    "swift" => Convention::Swift,
+                    "c" => Convention::C,
+                    "block" => Convention::Block,
+                    "thin" => return Err("`@convention(thin)` is not supported: no public API takes one".into()),
+                    _ => return Err(format!("unknown function convention `{name}`: write `c`, `block` or `swift`")),
+                });
+                self.expect(")")?;
             } else {
                 break;
             }
         }
-        let attributed = escaping || sendable || main_actor;
+        let attributed = escaping || sendable || main_actor || autoclosure || convention.is_some();
+        let convention = convention.unwrap_or(Convention::Swift);
         if attributed && !self.rest().trim_start().starts_with('(') {
             return Err(self.error("expected a function type after its attributes"));
         }
@@ -277,9 +292,25 @@ impl<'a> Parser<'a> {
                 if elements.iter().any(|(label, _)| label.is_some()) {
                     return Err("a function type's parameters take no labels".into());
                 }
+                if convention != Convention::Swift && (is_async || throws) {
+                    return Err("a C function or block type cannot be async or throw".into());
+                }
+                if convention != Convention::Swift && autoclosure {
+                    return Err("an `@autoclosure` is a Swift closure".into());
+                }
                 let params = elements.into_iter().map(|(_, ty)| ty).collect();
                 let result = self.ty()?;
-                return Ok(Ty::Function(Box::new(FunctionTy { params, result, is_async, throws, sendable, main_actor, escaping })));
+                return Ok(Ty::Function(Box::new(FunctionTy {
+                    params,
+                    result,
+                    is_async,
+                    throws,
+                    sendable,
+                    main_actor,
+                    escaping,
+                    autoclosure,
+                    convention,
+                })));
             }
             if attributed {
                 return Err(self.error("expected a function type after its attributes"));

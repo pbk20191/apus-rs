@@ -347,12 +347,15 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             .iter()
             .zip(&rust_args)
             .filter_map(|(kind, name)| {
-                let wrapper = match (*kind)? {
-                    apus_mangle::ArgumentKind::ClassBound => "ClassBound",
-                    apus_mangle::ArgumentKind::Metatype => "Metatype",
+                let (wrapper, shape) = match kind.as_ref()? {
+                    apus_mangle::ArgumentKind::ClassBound => ("ClassBound", None),
+                    apus_mangle::ArgumentKind::Metatype => ("Metatype", None),
+                    apus_mangle::ArgumentKind::CFunction(shape) => ("CFunctionArg", Some(shape)),
+                    apus_mangle::ArgumentKind::Block(shape) => ("BlockArg", Some(shape)),
                 };
-                let pair = [TokenTree::Ident(name.clone()), TokenTree::Ident(proc_macro::Ident::new(wrapper, proc_macro::Span::call_site()))];
-                Some(TokenTree::Group(Group::new(Delimiter::Parenthesis, pair.into_iter().collect())))
+                let mut tokens = vec![TokenTree::Ident(name.clone()), TokenTree::Ident(proc_macro::Ident::new(wrapper, proc_macro::Span::call_site()))];
+                tokens.extend(shape.map(|shape| TokenTree::Literal(Literal::string(shape))));
+                Some(TokenTree::Group(Group::new(Delimiter::Parenthesis, tokens.into_iter().collect())))
             })
             .collect();
         if !wrapped.is_empty() {
@@ -375,6 +378,16 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             }
             Some(apus_mangle::ResultKind::Metatype) if ret != "SwiftType" => {
                 return item_compile_error(&format!("`{declaration}` returns a metatype, the type's metadata: declare `-> SwiftType`"))
+            }
+            Some(apus_mangle::ResultKind::CFunction) if !ret.contains("extern \"C\" fn") => {
+                return item_compile_error(&format!(
+                    "`{declaration}` returns a C function pointer: declare `-> extern \"C\" fn(…)` (`Option<…>` if optional)"
+                ))
+            }
+            Some(apus_mangle::ResultKind::Block) if !ret.contains("RcBlock") => {
+                return item_compile_error(&format!(
+                    "`{declaration}` returns an Objective-C block (+1): declare `-> RcBlock<dyn Fn(…)>` (feature `block2`; `Option<…>` if optional)"
+                ))
             }
             _ => {}
         }

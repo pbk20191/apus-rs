@@ -25,6 +25,7 @@ apus = { path = "…", default-features = false, features = ["dispatch"] }
 | `macos15` | raises the deployment floor from macOS 14 to 15: macOS 15 runtime functions become required instead of looked up at run time |
 | `xlto` | compiles apus's C side as LLVM bitcode for cross-language LTO (see below) |
 | `objc2` | [`objc2`](https://crates.io/crates/objc2) objects (`Retained<T>`) as Swift class references (see below) |
+| `block2` | [`block2`](https://crates.io/crates/block2) blocks as Swift `@convention(block)` functions (implies `objc2`) |
 | `test-probe` | test-only Swift probes (needs `swiftc`) |
 
 ## API
@@ -423,6 +424,31 @@ let plus_one = SwiftClosure::new_sync(|x: ByAddress<i64>| ByAddress(x.0 + 1));  
   belong to that Task. A `@MainActor` closure moves to the main actor itself, as Swift's callers expect.
 - The closure may run many times, at once, on any thread (`Fn + Send + Sync`). A panic in it aborts the process.
 - Reflection (`Mirror`) of the closure's context shows no captures.
+- An `@autoclosure` parameter is a closure like any other: pass a `SwiftClosure` (`@autoclosure () -> Int` takes
+  `SwiftClosure::new_sync(|| 41i64)`).
+
+Swift's other function conventions are one pointer each:
+
+```rust
+apus::swift! {
+    #[swift = "M.call(_: @convention(c) (Int32, Double) -> Int32) -> Int32"]
+    fn call(f: extern "C" fn(i32, f64) -> i32) -> i32;
+    #[swift = "M.each(_: @convention(block) (Int) -> Int) -> Int"]
+    fn each(f: &block2::Block<dyn Fn(isize) -> isize>) -> i64;            // feature `block2`
+    #[swift = "M.adder(_: Int) -> @convention(block) (Int) -> Int"]
+    fn adder(k: i64) -> block2::RcBlock<dyn Fn(isize) -> isize>;
+}
+```
+
+- `@convention(c)`: an `extern "C" fn(…)`, as argument or result; `Option<…>` when optional (nil is null).
+- `@convention(block)`: a block2 `&Block<dyn Fn(…) -> R>` argument (an `RcBlock` or a `StackBlock`; apus passes a
+  `_Block_copy` of it, held until the call is over or handed to an initializer that consumes it), an `RcBlock<…>`
+  result (+1); `Option<…>` when optional.
+- Their parameter and result types are checked against the declared ones before the call
+  (`CallError::ClosureMismatch`), as Objective-C type encodings: Swift's integers, `Double`, `Float` and `Bool` exactly,
+  any other type (a pointer, an object) unchecked. A block result's type is not checked.
+- Only as a parameter or result itself, its optional, or a closure's parameter. `@convention(thin)` is refused: no
+  public API takes one.
 
 ## How it works, and what it relies on
 

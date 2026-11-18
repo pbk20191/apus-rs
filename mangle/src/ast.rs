@@ -113,6 +113,20 @@ pub struct FunctionTy {
     /// `@escaping` was written. A closure type is non-escaping only as a parameter without it; anywhere else
     /// (inside an optional, a result) it escapes.
     pub escaping: bool,
+    /// `@autoclosure`: a parameter's closure the caller writes as an expression; passed like any closure.
+    pub autoclosure: bool,
+    pub convention: Convention,
+}
+
+/// A function type's representation (`@convention(…)`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Convention {
+    /// A Swift closure: the function and its context.
+    Swift,
+    /// `@convention(c)`: a C function pointer.
+    C,
+    /// `@convention(block)`: an Objective-C block object.
+    Block,
 }
 
 pub struct Param {

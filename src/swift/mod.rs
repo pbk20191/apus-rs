@@ -5,6 +5,7 @@ pub(crate) mod call;
 mod closure;
 mod current;
 mod enums;
+mod foreign;
 mod func;
 mod isolation;
 mod generic;
@@ -26,6 +27,9 @@ pub use closure::{ByAddress, ClosureParam, ClosureResult, SwiftClosure};
 #[doc(hidden)]
 pub use closure::{ClosureArgs, ClosureFn, ClosureOut, DeclaredClosure, ResultKind, Shaped};
 pub use enums::{EnumCases, SwiftEnumCase};
+pub use foreign::{AsBlock, AsCFunction, CFunctionPointer, CReturn, CType};
+#[doc(hidden)]
+pub use foreign::{BlockArg, CFunctionArg};
 pub use stream::SwiftStream;
 pub use sync::{HopTo, SwiftFn, SwiftSyncCall};
 pub use value::{IntoSwift, OpaqueResult, Opened, OpenedType, SwiftProtocol, SwiftType, SwiftValue, WitnessTable};

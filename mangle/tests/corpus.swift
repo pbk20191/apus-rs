@@ -243,3 +243,16 @@ public func k3<V>(_ p: Pk<V>, _ q: Pk<V>) {}
 public func k4(_ p: PMixed<Int, String, Bool>) {}
 public func k5(_ p: [Pk<Int>]) -> Pk<Int>? { nil }
 public func k6<V>(_ p: Predicate<V>) {}
+
+public func cv0(_ f: @autoclosure () -> Int) {}
+public func cv1(_ f: @escaping @autoclosure () -> Int) {}
+public func cv2(_ f: @autoclosure () throws -> Int) throws {}
+public func cv3(_ f: @autoclosure @Sendable () async -> String) async {}
+public func cv4(_ f: @convention(c) (Int32, Double) -> Int32) {}
+public func cv5(_ f: (@convention(c) () -> Void)?) {}
+public func cv6() -> @convention(c) (Int) -> Int { { $0 } }
+public func cv7(_ f: @convention(block) (Int) -> Int) {}
+public func cv8(_ f: @escaping @Sendable @convention(block) () -> Void) {}
+public func cv9(_ f: (@convention(block) (String) -> Bool)?) -> @convention(block) () -> Int { { 0 } }
+public func cv10(_ f: (@convention(c) (Int) -> Int, Int) -> Int) {}
+extension Made { public init(cv: @escaping @autoclosure () -> Int, b: @escaping @convention(block) () -> Void) { self.init(x: 0) } }

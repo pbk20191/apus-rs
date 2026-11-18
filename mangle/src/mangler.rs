@@ -518,7 +518,16 @@ impl Mangler {
             self.nominal("_Concurrency", &[("MainActor".into(), Kind::Class)], None)?;
             self.push("Yc");
         }
-        self.push(if in_parameter && !function.escaping { "XE" } else { "c" });
+        let escaping = !in_parameter || function.escaping;
+        self.push(match (function.convention, function.autoclosure, escaping) {
+            (Convention::C, ..) => "XC",
+            (Convention::Block, ..) => "XB",
+            (Convention::Swift, true, _) if !in_parameter => return Err("`@autoclosure` is only for a parameter".into()),
+            (Convention::Swift, true, false) => "XK",
+            (Convention::Swift, true, true) => "XA",
+            (Convention::Swift, false, false) => "XE",
+            (Convention::Swift, false, true) => "c",
+        });
         Ok(())
     }
 

@@ -99,6 +99,25 @@
 /// }
 /// ```
 ///
+/// - An `@autoclosure` parameter takes a `SwiftClosure`, like any closure. A `@convention(c)` function is an
+///   `extern "C" fn(…)`, a `@convention(block)` one a block2 `&Block<dyn Fn(…)>` (feature `block2`), each `Option`
+///   when optional; as results, `extern "C" fn(…)` and `RcBlock<…>` (+1). Their parameter and result types are checked
+///   against the declared ones when the call is made (`CallError::ClosureMismatch`).
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "Res.callBlock(_: @convention(block) (Int) -> Int) -> Int"]
+///     fn call_block(f: &apus::swift::SwiftClosure) -> i64; // a Swift closure is two words, a block one
+/// }
+/// ```
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "Res.cDoubler() -> @convention(c) (Int) -> Int"]
+///     fn c_doubler() -> i64; // a function pointer comes back
+/// }
+/// ```
+///
 /// - A struct's setter (`name: T { set }`, `subscript(…) -> T { set }`) or `mutating` method changes `self` in place:
 ///   declare `self: &mut SwiftValue`; an `inout` parameter is a `&mut SwiftValue`. Both only in a synchronous
 ///   `fn` (an async call would outlive the borrow). A setter's new value comes first, then a subscript's indices.
@@ -362,9 +381,11 @@ macro_rules! __swift_args {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __swift_call {
-    // `wrapped [(argument Wrapper)…]`: arguments whose Rust type the declaration fixes (`ClassBound`, `Metatype`).
-    ($function:ident [$($arg:ident),*] [wrapped [$(($wa:ident $wk:ident))*] $($generic:tt)*] $declared:expr) => {{
-        $(let $wa = $crate::swift::$wk($wa);)*
+    // `wrapped [(argument Wrapper)…]`: arguments whose Rust type the declaration fixes (`ClassBound`, `Metatype`,
+    // `CFunctionArg`, `BlockArg`).
+    // A C function's or block's wrapper also takes the declared shape.
+    ($function:ident [$($arg:ident),*] [wrapped [$(($wa:ident $wk:ident $($ws:literal)?))*] $($generic:tt)*] $declared:expr) => {{
+        $(let $wa = $crate::swift::$wk($wa $(, $ws)?);)*
         $crate::__swift_call!($function [$($arg),*] [$($generic)*] $declared)
     }};
     ($function:ident [$($arg:ident),*] [consumed [$($o:ident)*] $($generic:tt)*] $declared:expr) => {

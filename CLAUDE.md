@@ -21,7 +21,8 @@ Judge every change by two questions, in this order:
   thunks `…Tj`, async function pointers `…Tu`, enum case tags `…WC`). Name the header/declaration mirrored in a comment.
 - Accepted by the owner (2026-11-18), though observed rather than documented: a class-bound generic parameter's value
   and a thick metatype (`T.Type`, a class's, `Any.Type`) are passed and returned as one pointer; a struct's or enum's
-  metatype is thin (passed as nothing). Apple's frameworks are compiled this way, so ABI stability fixes it.
+  metatype is thin (passed as nothing); an `@autoclosure` parameter is passed as the closure it is (2026-11-18). Apple's
+  frameworks are compiled this way, so ABI stability fixes it.
 - Anything else (runtime internals, compiler-computed layouts of non-resilient types, private SPI, behavior observed
   but not documented) is **not** built on silently: stop and tell the owner what is unguaranteed and the alternatives,
   and let them decide.
@@ -55,7 +56,7 @@ README.md documents every user-facing rule; keep it in step with behavior change
   which compare against what `swiftc` emits.
 - Tests: few, but each written first and seen failing. Add one where it guards something fragile (an ABI or
   ownership rule, a fixed bug); no mutation runs. Full suite:
-  `cargo test --workspace --features dispatch,test-probe,stream` (plain `cargo test --workspace` skips most of it),
+  `cargo test --workspace --features dispatch,test-probe,stream,block2` (plain `cargo test --workspace` skips most of it),
   and `cargo test --no-default-features --features dispatch` for the dispatch-only build. Zero warnings.
 - Probes: a type nothing references is dead-stripped from the static `Probe` archive (return its metadata from a
   function); tests in one binary run in parallel (no shared counters); never release objects under a lock their

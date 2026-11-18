@@ -108,6 +108,9 @@ pub(crate) enum Owned {
     Storage(#[allow(dead_code)] UninitValue),
     /// Shared storage the callee works on in place (an `inout` self).
     Shared(#[allow(dead_code)] Arc<dyn std::any::Any + Send + Sync>),
+    /// An Objective-C block (a `_Block_copy`), released with `_Block_release`.
+    #[cfg(feature = "block2")]
+    Block(*mut c_void),
     /// What a consumed argument keeps alive, handed over to the callee when the call starts ([`start_all`]);
     /// released as usual if the call never runs (refused, or its future dropped first).
     Pending(Box<Owned>),
@@ -126,6 +129,8 @@ impl Owned {
     pub(crate) fn pending(self) -> Owned {
         match self {
             Owned::Object(_) | Owned::Native(_) | Owned::Bridge(_) | Owned::Value(_) => Owned::Pending(Box::new(self)),
+            #[cfg(feature = "block2")]
+            Owned::Block(_) => Owned::Pending(Box::new(self)),
             other => other,
         }
     }
@@ -150,6 +155,11 @@ impl Owned {
                 std::mem::forget(self);
                 None
             }
+            #[cfg(feature = "block2")]
+            Owned::Block(_) => {
+                std::mem::forget(self);
+                None
+            }
             Owned::Value(_) => {
                 let this = std::mem::ManuallyDrop::new(self);
                 let Owned::Value(value) = &*this else { unreachable!() };
@@ -169,6 +179,8 @@ impl Drop for Owned {
                 Owned::Object(object) => rt::swift_unknownObjectRelease(object),
                 Owned::Native(object) => rt::swift_release(object),
                 Owned::Bridge(word) => rt::swift_bridgeObjectRelease(word as *mut c_void),
+                #[cfg(feature = "block2")]
+                Owned::Block(block) => block2::ffi::_Block_release(block),
                 Owned::Value(_) | Owned::Storage(_) | Owned::Shared(_) | Owned::Pending(_) => {} // release themselves
             }
         }

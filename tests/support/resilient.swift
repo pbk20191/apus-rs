@@ -148,3 +148,22 @@ public struct Thing: Maker {
     public func doubled() -> Thing { Thing(n: n * 2) }
 }
 public func thingMetadata() -> Any.Type { Thing.self }
+
+// Function conventions (tests/swift_conventions.rs): an `@autoclosure` is a Swift closure; a `@convention(c)` function
+// is a C function pointer; a `@convention(block)` function an Objective-C block (borrowed as an argument, +1 as a result,
+// consumed by an initializer).
+public func autoValue(_ f: @autoclosure () -> Int) -> Int { f() + 1 }
+public func autoLater(_ f: @escaping @autoclosure () -> String) -> String { let g = f; return g() + "!" }
+public func callC(_ f: @convention(c) (Int32, Double) -> Int32, _ x: Int32) -> Int32 { f(x, 0.5) }
+public func callMaybeC(_ f: (@convention(c) (Int) -> Int)?) -> Int { f?(20) ?? -1 }
+public func cDoubler() -> @convention(c) (Int) -> Int { { $0 * 2 } }
+public func callBlock(_ f: @convention(block) (Int) -> Int) -> Int { f(21) }
+nonisolated(unsafe) var keptBlock: (@convention(block) () -> Int)?
+public func keepBlock(_ f: (@convention(block) () -> Int)?) { keptBlock = f }
+public func callKeptBlock() -> Int { keptBlock?() ?? -1 }
+public func adder(_ k: Int) -> @convention(block) (Int) -> Int { { $0 + k } }
+public struct BlockHolder {
+    let f: @convention(block) () -> Int
+    public init(f: @escaping @convention(block) () -> Int) { self.f = f }
+    public func call() -> Int { f() }
+}
