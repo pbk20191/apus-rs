@@ -143,7 +143,6 @@ extern "C" fn rs_cancelled(rust: *mut c_void) {
     wakers.into_iter().for_each(Waker::wake);
 }
 
-/// Creates the Swift Task. `on_finish` runs when the Task completes (after any children).
 /// The Rust side of a task, before any Swift Task runs it.
 fn new_task(main: bool, future: BoxFuture, on_finish: Box<dyn FnOnce() + Send>) -> Arc<Task> {
     Arc::new(Task {
@@ -170,6 +169,7 @@ pub(crate) fn closure_task(main: bool, future: BoxFuture) -> *mut c_void {
     Arc::into_raw(new_task(main, future, Box::new(|| {}))) as *mut c_void
 }
 
+/// Creates the Swift Task. `on_finish` runs when the Task completes (after any children).
 pub(crate) fn create(options: SpawnOptions, future: BoxFuture, on_finish: Box<dyn FnOnce() + Send>) -> *mut c_void {
     let task = new_task(options.main, future, on_finish);
     let mut flags = options.priority.raw() as usize | rt::CREATE_ENQUEUE_JOB as usize | rt::CREATE_IS_TASK_FUNCTION_CONSUMED as usize;

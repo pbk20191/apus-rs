@@ -21,8 +21,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 
-const INT_REGISTERS: usize = if cfg!(target_arch = "aarch64") { 8 } else { 6 };
-const FLOAT_REGISTERS: usize = 8;
+use super::func::{FLOAT_REGISTERS, INT_REGISTERS};
 
 type BoxFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 
