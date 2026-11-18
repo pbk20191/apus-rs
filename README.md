@@ -193,6 +193,11 @@ static (extension in _Concurrency where Success == Never, Failure == Never)
   `case __C.NSScanner(class).(extension in Foundation) NumberRepresentation(enum).decimal`, and a constrained one
   `case M.Holder(struct)<T>.(extension in M where T: Tagged) Mode(enum).on`. A parameter or result type may carry an
   unconstrained one.
+- An associated type of a parameter that has several protocols (marker protocols such as `Sendable` aside) names
+  the protocol that declares it, as its symbol does: `T.Value(of Opening)` in
+  `M.f<T: Opening & Hashable>(_: T, _: T.Value(of Opening))`; without it the declaration is refused.
+- `@preconcurrency` declarations: their symbols leave out `@Sendable`, global actors in function types and `Sendable`
+  requirements.
 - Isolation: `isolated` parameters, `@MainActor`, `nonisolated`, `nonisolated(nonsending)`, `(actor)`, `throws(E)`.
 - Not supported yet: metatypes (`T.Type`), non-ASCII names (and so non-ASCII operators),
   more than one generic enclosing type. A declaration that cannot be mangled

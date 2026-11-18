@@ -35,6 +35,10 @@ struct Mangler {
     nested_generic: Option<(Vec<(String, Kind)>, usize)>,
     /// A `@preconcurrency` declaration: its symbol leaves out marker protocols.
     strip_markers: bool,
+    /// How many protocols the signature requires of each generic parameter, and the protocols written for
+    /// associated types (`T.Value(of P)`).
+    protocol_counts: HashMap<GenericParam, usize>,
+    associated: HashMap<(GenericParam, String), Protocol>,
 }
 
 fn is_sendable(protocol: &Protocol) -> bool {
@@ -360,6 +364,7 @@ impl Mangler {
                     return Ok(());
                 }
                 self.identifier(name)?;
+                self.associated_protocol(*param, name)?;
                 if *param == (GenericParam { depth: 0, index: 0 }) {
                     self.push("Qz");
                 } else {
@@ -393,6 +398,18 @@ impl Mangler {
     }
 
     /// ASTMangler::appendRequirement
+    /// ASTMangler::appendAssociatedTypeName: an associated type of a parameter that the signature requires to
+    /// conform to more than one protocol is followed by the protocol that declares it.
+    fn associated_protocol(&mut self, param: GenericParam, name: &str) -> Result<(), String> {
+        if self.protocol_counts.get(&param).copied().unwrap_or(0) < 2 {
+            return Ok(());
+        }
+        let protocol = self.associated.get(&(param, name.to_string())).cloned().ok_or_else(|| {
+            format!("`{name}` belongs to a parameter with several protocols: write the one that declares it, `.{name}(of P)`")
+        })?;
+        self.nominal(&protocol.module, &[(protocol.name.clone(), Kind::Protocol)], None)
+    }
+
     /// A signature's requirements in canonical order; under `@preconcurrency`, without the marker protocol
     /// `Sendable` (ASTMangler's AllowMarkerProtocols).
     fn requirements(&mut self, requirements: &[Requirement]) -> Result<(), String> {
@@ -427,6 +444,7 @@ impl Mangler {
                     self.push(with_substitution);
                 } else {
                     self.identifier(name)?;
+                    self.associated_protocol(*param, name)?;
                     self.add_substitution(key);
                     self.push(on_associated_type);
                     self.generic_param_index(*param);
@@ -624,9 +642,42 @@ pub(crate) fn protocol_descriptor(protocol: &Protocol) -> Result<String, String>
     Ok(m.buffer)
 }
 
+/// The protocols (not marker protocols) the declaration's whole generic signature requires of each parameter.
+fn protocol_counts(decl: &Decl) -> HashMap<GenericParam, usize> {
+    let mut conformances = std::collections::HashSet::new();
+    if let Some((_, Kind::Protocol)) = decl.context.last() {
+        conformances.insert((GenericParam { depth: 0, index: 0 }, None));
+    }
+    let requirements = decl
+        .context_requirements
+        .iter()
+        .chain(decl.context_extension.iter().flat_map(|e| e.requirements.iter()))
+        .chain(decl.extension.iter().flat_map(|e| e.requirements.iter()))
+        .chain(decl.requirements.iter());
+    for requirement in requirements {
+        match requirement {
+            Requirement::Conforms(Subject::Param(param), protocol) if !protocol.is_marker() => {
+                conformances.insert((*param, Some(protocol.clone())));
+            }
+            _ => {}
+        }
+    }
+    let mut counts = HashMap::new();
+    for (param, _) in conformances {
+        *counts.entry(param).or_insert(0) += 1;
+    }
+    counts
+}
+
 pub fn mangle(decl: &Decl) -> Result<String, String> {
     let same_types = all_same_types(decl);
-    let mut m = Mangler { buffer: "$s".into(), strip_markers: decl.preconcurrency, ..Default::default() };
+    let mut m = Mangler {
+        buffer: "$s".into(),
+        strip_markers: decl.preconcurrency,
+        protocol_counts: protocol_counts(decl),
+        associated: decl.associated_protocols.iter().cloned().collect(),
+        ..Default::default()
+    };
     if decl.context.is_empty() {
         m.module(&decl.module)?;
     } else {

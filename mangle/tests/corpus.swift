@@ -195,3 +195,11 @@ public func cTypedefs(_ d: Decimal, _ c: CGColor) -> CGColor? { nil }
 // `@preconcurrency`: marker protocols (Sendable) leave the symbol's generic signature and existentials.
 public struct PQ<T> {}
 @preconcurrency public func pw<T1: Sendable, T2: Sendable & Hashable>(_ a: PQ<T1>, _ b: T2, _ c: any Sendable) {}
+// An associated type of a parameter with several protocols names its protocol.
+public protocol Opening { associatedtype Value }
+public protocol Leafy {}
+public protocol Showing {}
+extension Showing where Self: Opening, Self.Value: Leafy { public func perform() {} }
+public func mixw<T: Opening>(_ t: T, _ v: T.Value) where T: Leafy, T.Value: Leafy {}
+public func seqw<T: Sequence>(_ t: T, _ e: T.Element) where T: Hashable, T.Element: Hashable {}
+public func amark<T: Opening & Sendable>(_ t: T, _ v: T.Value) {}

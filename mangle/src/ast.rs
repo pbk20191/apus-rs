@@ -40,6 +40,14 @@ pub struct Protocol {
     pub name: String,
 }
 
+impl Protocol {
+    /// A marker protocol: no witness table, and it does not make an associated type ambiguous.
+    pub fn is_marker(&self) -> bool {
+        self.module == "Swift"
+            && matches!(self.name.as_str(), "Sendable" | "SendableMetatype" | "Copyable" | "Escapable" | "BitwiseCopyable")
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
     /// `Module.Outer.Inner<Args>`; `args` belong to the last path element. `extension`: one element of the path is
@@ -203,6 +211,10 @@ pub struct Decl {
     pub mutating: bool,
     /// The declaration's own generic parameters.
     pub generic_params: usize,
+    /// The enclosing generic type's constraints (`Outer<T: P>`).
+    pub context_requirements: Vec<Requirement>,
+    /// `T.Value(of P)`: which protocol declares an associated type.
+    pub associated_protocols: Vec<((GenericParam, String), Protocol)>,
     /// The declaration's own requirements (inline constraints and its `where` clause); for an enum case, the enum's.
     pub requirements: Vec<Requirement>,
     pub signature: Signature,

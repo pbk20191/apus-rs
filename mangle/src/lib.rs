@@ -38,6 +38,7 @@ impl std::error::Error for Error {}
 /// … ([label|_]: [_const] [inout | consuming | borrowing | __owned | __shared] Type, …)   (`_const`: AppIntents' compile-time constants)
 /// @preconcurrency …   (its symbol leaves out @Sendable, global actors in function types and `Sendable` requirements)
 /// [(extension in Module [where …])] Module.Type(kind)[<T, …>]….init[<U: P>]([label|_]: Type, …) [async] [throws] [-> Type?]
+/// … T.Value(of P) …   (an associated type of a parameter with several protocols names its protocol)
 /// Module.Outer(kind).(extension in Module [where …]) Inner(kind)….member   (a type declared in an extension that is
 ///     part of its context: a constrained one, or one in another module than the extended type's)
 /// case Module.Type(kind)[<T, …>]….Enum(enum).name[([label:] Type, …)]
@@ -410,7 +411,7 @@ fn generic_plan_of(decl: &ast::Decl) -> Result<Option<GenericPlan>, Error> {
         }
     }
     // Marker protocols take no witness table.
-    let marker = |p: &ast::Protocol| p.module == "Swift" && matches!(p.name.as_str(), "Sendable" | "SendableMetatype" | "Copyable" | "Escapable" | "BitwiseCopyable");
+    let marker = ast::Protocol::is_marker;
     let mut witnesses = Vec::new();
     let mut conformances_per_param = vec![0usize; decl.generic_params];
     for requirement in mangler::sorted_requirements(&decl.requirements) {

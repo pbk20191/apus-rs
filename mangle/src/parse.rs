@@ -19,6 +19,8 @@ pub struct Parser<'a> {
     /// The module a bare name belongs to: the extension's when there is one, else the declaration's.
     home: String,
     generics: Vec<(String, GenericParam)>,
+    /// `T.Value(of P)`: the protocol that declares an associated type.
+    associated: Vec<((GenericParam, String), Protocol)>,
 }
 
 type Parsed<T> = Result<T, String>;
@@ -267,6 +269,7 @@ impl<'a> Parser<'a> {
                 if name == "Type" || name == "Protocol" {
                     return Err(format!("metatypes (`{first}.{name}`) are not supported"));
                 }
+                self.associated_protocol(param, &name)?;
                 return Ok(Ty::Member(param, name));
             }
             return Ok(Ty::Param(param));
@@ -360,9 +363,32 @@ impl<'a> Parser<'a> {
         let name = self.identifier()?;
         let param = self.generic_param(&name).ok_or_else(|| format!("`{name}` is not a generic parameter"))?;
         if self.eat_path_dot() {
-            return Ok(Subject::Member(param, self.identifier()?));
+            let name = self.identifier()?;
+            self.associated_protocol(param, &name)?;
+            return Ok(Subject::Member(param, name));
         }
         Ok(Subject::Param(param))
+    }
+
+    /// `(of P)` after an associated type's name: the protocol that declares it, which its symbol names when the
+    /// parameter has several protocols.
+    fn associated_protocol(&mut self, param: GenericParam, name: &str) -> Parsed<()> {
+        if !self.rest().starts_with("(of ") {
+            return Ok(());
+        }
+        self.position += 1;
+        self.eat_keyword("of");
+        let protocol = self.protocol()?;
+        self.expect(")")?;
+        let key = (param, name.to_string());
+        match self.associated.iter().find(|(known, _)| *known == key) {
+            Some((_, known)) if *known != protocol => Err(format!("`{name}` is declared by one protocol")),
+            Some(_) => Ok(()),
+            None => {
+                self.associated.push((key, protocol));
+                Ok(())
+            }
+        }
     }
 
     /// `P & Q`
@@ -653,7 +679,7 @@ impl<'a> Parser<'a> {
                 return Err("write the enum's generic constraints: `Enum<T: P>.case`".into());
             }
             // The enum's signature: its own constraints and those of the extension it is declared in.
-            requirements = std::mem::take(&mut context_requirements);
+            requirements = context_requirements.clone();
             requirements.extend(context_extension.iter().flat_map(|e: &ContextExtension| e.requirements.iter().cloned()));
             let mut payload = Vec::new();
             if self.eat("(") {
@@ -833,6 +859,8 @@ impl<'a> Parser<'a> {
             operator,
             mutating,
             generic_params,
+            context_requirements,
+            associated_protocols: std::mem::take(&mut self.associated),
             requirements,
             signature,
         })
@@ -894,5 +922,6 @@ fn anonymous_generics(ty: &Ty, depth: usize, count: &mut usize, requirements: &m
 const OPERATOR_CHARS: &str = "/=-+!*%<>&|^~?.";
 
 pub fn parse(text: &str) -> Parsed<Decl> {
-    Parser { text, position: 0, module: String::new(), home: String::new(), generics: Vec::new() }.declaration()
+    Parser { text, position: 0, module: String::new(), home: String::new(), generics: Vec::new(), associated: Vec::new() }
+        .declaration()
 }

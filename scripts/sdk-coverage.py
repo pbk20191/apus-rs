@@ -113,12 +113,24 @@ def protocol_name(spelling, usr):
     return spelling if module is None or "." in spelling else f"{module}.{spelling}"
 
 
+def associated_type(name, usr):
+    """`Value(of Module.P)` for an associated type whose USR names its protocol (`s:…P5ValueQa`)."""
+    if not usr or not usr.endswith("Qa") or GRAPH is None:
+        return name
+    protocol = GRAPH.by_usr.get(usr[:-len(f"{len(name)}{name}Qa")])
+    if protocol is None or protocol["kind"]["identifier"] != "swift.protocol":
+        return name
+    return f"{name}(of {protocol_name(protocol['names']['title'], protocol['identifier']['precise'])})"
+
+
 def render_chain(chain, extended=False):
     """`extended`: the chain continues a type it extends from another module (an imported one)."""
     first = chain[0]
     usr = first.get("preciseIdentifier")
     names = [c["spelling"] for c in chain]
     if usr is None:  # a generic parameter (or Self), possibly with an associated type after it
+        if len(chain) == 2:
+            return names[0] + "." + associated_type(chain[1]["spelling"], chain[1].get("preciseIdentifier"))
         return ".".join(names)
     # Standard types spelled by substitution (`s:SS`, `s:Si`, `s:ScS`): the parser knows them by name.
     if len(chain) == 1 and re.fullmatch(r"s:S[a-zA-Z]|s:Sc[a-zA-Z]", usr):
@@ -398,7 +410,16 @@ def type_text(graph, text, usr):
     return "".join(out)
 
 
+def constraint_lhs(graph, lhs):
+    """`Self.Value` with the protocol of its associated type, when the graph links that name to a single one."""
+    if lhs.count(".") != 1:
+        return lhs
+    base, name = lhs.split(".")
+    return f"{base}.{associated_type(name, graph.usr_by_name.get(name))}"
+
+
 def constraint_text(graph, c):
+    c = dict(c, lhs=constraint_lhs(graph, c["lhs"]))
     if c["kind"] == "conformance":
         return f"{c['lhs']}: {protocol_name(c['rhs'], c.get('rhsPrecise'))}"
     if c["kind"] == "sameType":
