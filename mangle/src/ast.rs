@@ -38,6 +38,8 @@ pub struct GenericParam {
 pub struct Protocol {
     pub module: String,
     pub name: String,
+    /// Written `P(AnyObject)`: a class-bound protocol. Not part of the symbol.
+    pub class_bound: bool,
 }
 
 impl Ty {

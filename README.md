@@ -113,7 +113,10 @@ let text = greet("Kim", 2).await?;          // a SwiftCall<String>: `.child()` a
 - `#[swift = "…"]` resolves the function at run time (missing → `CallError::Unavailable`), `#[swift_linked = "…"]`
   at link time. `#[symbol = "$s…"]` / `#[linked = "$s…"]` take a mangled symbol as is.
 - **Methods and properties**: a leading `self: &SwiftObject` (a class instance) or `self: &SwiftValue` (a struct
-  passed by address) is the receiver.
+  passed by address) is the receiver. A class's own members are called through their dispatch thunks (`…Tj`) when
+  the process has them (`#[swift]`): a library-evolution class (every Apple framework's) exports a non-final member
+  only that way, and the thunk dispatches to an override as Swift does. A standard library struct's or enum's
+  instance member (`Array`'s, `String`'s) is refused: the type is frozen and Swift passes `self` in registers.
 - **Opaque results**: `-> SwiftValue` (returned by address: large and framework structs) and `-> DirectValue`
   (returned in registers: an array or dictionary whose elements stay opaque) take their Swift type from the
   declaration.
@@ -158,7 +161,10 @@ the standard library spelled out:
   the declaration's module, `Other.Name(kind)` in another; nested types are `Outer(kind).Inner(kind)`; generic
   arguments follow the kind: `Box(struct)<Int>`.
 - Members of generic types name the type's parameters, with the type's own constraints:
-  `Shop.Box(struct)<T>.get() -> T?`, `Swift.Array<Element>.first: Element? { get }`, `Keyed(struct)<K: Hashable>`.
+  `Shop.Box(struct)<T>.get() -> T?`, `Keyed(struct)<K: Hashable>`. An instance member of a generic struct or enum
+  takes `Self`'s metadata after its arguments, which `swift!` takes from the receiver; a result of the type's own
+  parameter (`Box<T>.item: T`) gets its type from there too. Its static members and initializers take the type's
+  generic arguments after their own (each parameter's `SwiftType`, then witness tables), passed explicitly.
 - Protocol members: `Shop.Shape(protocol).area() -> Double`; the conforming type is `Self`. Call them on an
   `any Shape` value opened with `SwiftValue::open()` (`self: &Opened`). Static members and initializers
   (`static Shop.Shape(protocol).make(_: Int) -> Self`, `Shop.Shape(protocol).init(n: Int)`) are called on a type with
@@ -209,14 +215,17 @@ static (extension in _Concurrency where Success == Never, Failure == Never)
   constrained extension in the path (`Outer(struct)<T>.(extension in M where T: P) Inner(struct)`) must be the one
   the declaration or its enclosing type is declared in: its `where` clause speaks of that type's parameters.
 - A superclass constraint names the class with its kind, `<T: __C.NSObject(class)>`; `T: AnyObject` is written as
-  such. A value of a class-bound generic type (the declaration's, its type's: `Measurement<UnitType: NSUnit>`) is a
+  such. A protocol declared `: AnyObject` is marked so in a constraint, `<T: PersistentModel(AnyObject)>` (its symbol
+  is the same): only the protocol's descriptor tells, which the call checks (`CallError::InvalidArgument` for a
+  missing or wrong mark). A value of a class-bound generic type (the declaration's, its type's: `Measurement<UnitType: NSUnit>`) is a
   class reference, not a `SwiftValue`: `&SwiftObject` (or `&Retained<T>`) as an argument, `SwiftObject` as a
   result (+1); T is then the object's own class. Anywhere else (`T?`, a tuple, a closure) it is refused.
 - Metatypes: `T.Type`, a class's `Base(class).Type` and `Any.Type` are `SwiftType`s, as arguments and results; a
   `T.Type` argument also gives T (`decode<T: Decodable>(_: T.Type, from: …) -> T`). A struct's or enum's metatype
   (Swift passes nothing for it), an optional one and `any P.Type` are refused.
 - Both rest on swiftc's type lowering (one pointer each), which the calling-convention document does not spell out;
-  Apple's frameworks export functions compiled that way, so ABI stability keeps it.
+  Apple's frameworks export functions compiled that way, so ABI stability keeps it. So does a generic struct's
+  members taking `Self`'s metadata.
 - A variadic generic type's pack argument is written as Swift's demangler prints it, since the use site does not
   show that the type is variadic: `Foundation.Predicate(struct)<Pack{T}>` for `Predicate<T>`,
   `M.Mixed(struct)<Int, Pack{String, Bool}>`. Declarations with packs of their own (`<each T>`) are not supported.
@@ -254,7 +263,8 @@ println!("{}", products.description());                                     // S
 
 - `SwiftType`: `of::<T>()` for the built-in mappings, `from_mangled_name("8StoreKit7ProductV")` for any type in
   the process (`None` if absent), `.conformance(&protocol)` for witness tables.
-- `SwiftValue`: `new(rust_value)` (integers, `bool`, `f64`, strings, `Vec`s), `get::<T>()`, `description()`, `clone()`.
+- `SwiftValue`: `new(rust_value)` (integers, `bool`, `f64`, strings, `Vec`s), `get::<T>()`, `description()`, `clone()`,
+  `into_object()` (a value whose type is a class, such as a generic collection's element, as a `SwiftObject`).
 - Results: `call::<R>` for the types listed above; `call_returning(ty, args)` for a value returned by address
   (generic, large or resilient); `call_direct(ty, args)` for an opaque value returned in registers (arrays,
   dictionaries, structs of up to four integer words).
@@ -310,6 +320,36 @@ let bigger = enlarged(&square)?;
 
 A `some P` parameter is an anonymous generic parameter (pass its type metadata and witness table like any other).
 One `some P` per result, without primary associated types (`some Collection<Int>`).
+
+### SwiftData
+
+A model is Swift: `@Model` is a macro that writes the `PersistentModel` conformance, and a container's schema takes
+`any PersistentModel.Type` values, whose lowering apus does not rely on. The rest is called from Rust
+(tests/swift_data.rs, with the model in tests/support/notes.swift):
+
+```swift
+@Model public final class Note { public var title: String; public init(title: String) { self.title = title } }
+public func noteContainer() throws -> ModelContainer {
+    try ModelContainer(for: Note.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+}
+```
+
+```rust
+apus::swift! {
+    #[swift = "SwiftData.ModelContext(class).init(_: ModelContainer(class))"]
+    fn new_context(self: &SwiftType, container: &SwiftObject) -> SwiftObject;
+    #[swift = "SwiftData.ModelContext(class).insert<T: PersistentModel(AnyObject)>(_: T)"]
+    fn insert(self: &SwiftObject, model: &SwiftObject);
+    #[swift = "SwiftData.ModelContext(class).save() throws"]
+    fn save(self: &SwiftObject) throws;
+    #[swift = "SwiftData.FetchResultsCollection(struct)<Element>.subscript(_: Int) -> Element { get }"]
+    fn element(self: &SwiftValue, index: i64) -> SwiftValue;     // `.into_object()` for the model
+}
+```
+
+`fetch<T>(_:batchSize:) -> FetchResultsCollection<T>` takes its generic arguments explicitly, and `swift!` cannot
+name a result built from them: call it with `SwiftFn::call_returning`, giving the result's type. Sort descriptors
+and predicates take key paths and `#Predicate`, which only the compiler makes: they come from Swift too.
 
 ### Async sequences
 

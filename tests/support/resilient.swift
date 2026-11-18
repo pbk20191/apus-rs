@@ -128,6 +128,12 @@ public func anyTypeName(_ t: Any.Type) -> String { "\(t)" }
 public func zero<T: AdditiveArithmetic>(_ t: T.Type) -> T { T.zero }
 public func meters(_ value: Double) -> Measurement<UnitLength> { Measurement(value: value, unit: .meters) }
 public func unitSymbol(_ unit: Unit) -> String { unit.symbol }
+// A class-bound protocol (`Named: AnyObject`): its parameter is one reference; `Tagged` is not class-bound.
+public protocol Named: AnyObject { var label: String { get } }
+public protocol Tagged {}
+extension Dog: Named, Tagged { public var label: String { "named \(name)" } }
+public func labelOf<T: Named>(_ x: T) -> String { x.label }
+public func isTagged<T: Tagged>(_ x: T) -> Bool { true }
 
 // Static protocol requirements and protocol initializers (tests/swift_protocol_static.rs): called on a type and its
 // conformance; `Self` results come back by address.
@@ -174,3 +180,16 @@ nonisolated(unsafe) weak var adoptedWatch: Dog?
 public func adopt(_ d: sending Dog) { adopted = d; adoptedWatch = d }
 public func releaseAdopted() { adopted = nil }
 public func adoptedAlive() -> Bool { adoptedWatch != nil }
+
+// Members of a generic struct (tests/swift_generic_auto.rs): an instance member takes `Self`'s metadata after its
+// arguments; a static member the type's generic arguments. `count`'s offset depends on T, so the callee needs them.
+public struct Tray<T> {
+    public var item: T
+    public var count: Int
+    public var doubled: Int { count * 2 }
+    public mutating func add(_ n: Int) { count += n }
+    public func describe<U>(_ u: U, _ n: Int) -> String { "\(T.self) \(U.self) \(count + n)" }
+    public func later(_ n: Int) async -> Int { count + n }
+    public static func size(plus n: Int) -> Int { MemoryLayout<T>.size + n }
+}
+public func pearTray(count: Int) -> Tray<String> { Tray(item: "pear", count: count) }

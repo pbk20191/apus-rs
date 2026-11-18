@@ -18,6 +18,8 @@ const KIND_INDIRECT: i32 = 2;
 /// A synchronous Swift function, named by its mangled symbol.
 pub struct SwiftFn {
     symbol: &'static str,
+    /// A class member's dispatch thunk, tried first; empty if none.
+    thunk: &'static str,
     fixed: *const c_void,
     looked_up: OnceLock<usize>,
 }
@@ -28,20 +30,29 @@ unsafe impl Sync for SwiftFn {}
 impl SwiftFn {
     /// A function identified by its mangled symbol name (`$s…`), resolved with `dlsym` on first use.
     pub const fn new(symbol: &'static str) -> SwiftFn {
-        SwiftFn { symbol, fixed: std::ptr::null(), looked_up: OnceLock::new() }
+        SwiftFn { symbol, thunk: "", fixed: std::ptr::null(), looked_up: OnceLock::new() }
+    }
+
+    /// A class member: its dispatch thunk (`…Tj`) if the process has it, else its own symbol.
+    #[doc(hidden)]
+    pub const fn __dispatched(symbol: &'static str, thunk: &'static str) -> SwiftFn {
+        SwiftFn { symbol, thunk, fixed: std::ptr::null(), looked_up: OnceLock::new() }
     }
 
     /// # Safety
     /// `address` must be the entry point of a synchronous Swift function.
     pub const unsafe fn from_address(address: *const c_void) -> SwiftFn {
-        SwiftFn { symbol: "<address>", fixed: address, looked_up: OnceLock::new() }
+        SwiftFn { symbol: "<address>", thunk: "", fixed: address, looked_up: OnceLock::new() }
     }
 
     fn resolve(&self) -> Option<*const c_void> {
         if !self.fixed.is_null() {
             return Some(self.fixed);
         }
-        let address = *self.looked_up.get_or_init(|| lookup(self.symbol));
+        let address = *self.looked_up.get_or_init(|| match self.thunk {
+            "" => lookup(self.symbol),
+            thunk => Some(lookup(thunk)).filter(|&a| a != 0).unwrap_or_else(|| lookup(self.symbol)),
+        });
         (address != 0).then_some(address as *const c_void)
     }
 

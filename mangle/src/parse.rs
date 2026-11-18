@@ -177,10 +177,17 @@ impl<'a> Parser<'a> {
     }
 
     fn protocol(&mut self) -> Parsed<Protocol> {
+        let mut protocol = self.protocol_name()?;
+        // `(AnyObject)`: a class-bound protocol (`protocol P: AnyObject`), whose conforming types are classes.
+        protocol.class_bound = self.eat("(AnyObject)");
+        Ok(protocol)
+    }
+
+    fn protocol_name(&mut self) -> Parsed<Protocol> {
         let first = self.identifier()?;
         // `any P.Type` is `(any P).Type`.
         if !self.at_metatype_suffix() && self.eat_path_dot() {
-            return Ok(Protocol { module: first, name: self.identifier()? });
+            return Ok(Protocol { module: first, name: self.identifier()?, class_bound: false });
         }
         let module = if names::standard_protocol(&first).is_some() || names::swift_protocol(&first) {
             "Swift"
@@ -189,7 +196,7 @@ impl<'a> Parser<'a> {
         } else {
             &self.home
         };
-        Ok(Protocol { module: module.to_string(), name: first })
+        Ok(Protocol { module: module.to_string(), name: first, class_bound: false })
     }
 
     /// `.Type` or `.Protocol` next: a metatype of the type before it, not a member type.
@@ -327,10 +334,10 @@ impl<'a> Parser<'a> {
             return Ok(Ty::Tuple(elements));
         }
         if self.eat_keyword("any") {
-            return Ok(Ty::Existential(self.protocol()?));
+            return Ok(Ty::Existential(self.unmarked(Self::protocol)?));
         }
         if self.eat_keyword("some") {
-            return Ok(Ty::Opaque(self.protocol_list()?));
+            return Ok(Ty::Opaque(self.unmarked(Self::protocol_list)?));
         }
         if self.eat_keyword("AnyObject") {
             return Ok(Ty::AnyObject);
@@ -511,6 +518,16 @@ impl<'a> Parser<'a> {
                 Ok(())
             }
         }
+    }
+
+    /// Protocols of an existential or opaque type, where Swift's lowering of a class-bound one is not supported.
+    fn unmarked<T>(&mut self, parse: fn(&mut Self) -> Parsed<T>) -> Parsed<T> {
+        let start = self.position;
+        let parsed = parse(self)?;
+        if self.text[start..self.position].contains("(AnyObject)") {
+            return Err(self.error("a class-bound protocol `(AnyObject)` is supported only as a generic constraint"));
+        }
+        Ok(parsed)
     }
 
     /// `P & Q`

@@ -74,6 +74,29 @@ impl SwiftType {
         Layout::from_size_align(witnesses.size.max(1), (witnesses.flags as usize & 0xff) + 1).unwrap()
     }
 
+    /// The metadata of a generic struct's or enum's argument `index`: TargetStructMetadata's and TargetEnumMetadata's
+    /// generic arguments follow their kind and description words (`getGenericArgumentOffset`,
+    /// include/swift/ABI/Metadata.h), the parameters' metadata first.
+    #[doc(hidden)]
+    pub fn generic_argument(self, index: usize) -> SwiftType {
+        let kind = unsafe { *(self.0 as *const usize) } as u32;
+        assert!(
+            matches!(kind, rt::METADATA_KIND_STRUCT | rt::METADATA_KIND_ENUM | rt::METADATA_KIND_OPTIONAL),
+            "{} is not a generic struct or enum",
+            self.name()
+        );
+        unsafe { SwiftType(*(self.0 as *const *const c_void).add(2 + index)) }
+    }
+
+    /// Whether this is a class: a Swift class, an Objective-C class or a Core Foundation type
+    /// (include/swift/ABI/MetadataKind.def; a Swift class's kind word is its isa pointer).
+    pub(crate) fn is_class(self) -> bool {
+        let kind = unsafe { *(self.0 as *const usize) };
+        kind == rt::METADATA_KIND_CLASS as usize
+            || kind > rt::METADATA_KIND_LAST_ENUMERATED as usize
+            || matches!(kind as u32, rt::METADATA_KIND_OBJC_CLASS_WRAPPER | rt::METADATA_KIND_FOREIGN_CLASS)
+    }
+
     /// `Optional<Self>`.
     pub fn optional(self) -> SwiftType {
         SwiftType(unsafe { rt::optional_metadata(0, self.0) }.metadata)
@@ -147,6 +170,15 @@ impl SwiftProtocol {
     /// Whether the descriptor is in the process (a protocol of a framework the OS lacks is not).
     pub fn is_available(&self) -> bool {
         self.descriptor().is_some()
+    }
+
+    /// Whether the protocol is class-bound (`protocol P: AnyObject`), from its descriptor; `None` if it is not in the
+    /// process. ContextDescriptorFlags' kind-specific flags (the high 16 bits) of a protocol are
+    /// ProtocolContextDescriptorFlags, whose bit 0 is the ProtocolClassConstraint: 0 for `Class`
+    /// (include/swift/ABI/MetadataValues.h).
+    pub(crate) fn is_class_bound(&self) -> Option<bool> {
+        let flags = unsafe { *(self.descriptor()? as *const u32) };
+        Some((flags >> 16) & 1 == 0)
     }
 
     fn descriptor(&self) -> Option<*const c_void> {
@@ -249,6 +281,17 @@ impl SwiftValue {
     /// Copies the value out as `T` if it is exactly that Swift type.
     pub fn get<T: FromSwiftAny>(&self) -> Option<T> {
         (self.ty.0 == T::swift_metadata()).then(|| unsafe { T::from_value(self.as_ptr()) })
+    }
+
+    /// The class instance this value is, when its type is a class (a generic result such as an array's element):
+    /// a class-typed value is one reference (TypeLayout.rst), which the object takes over. Any other value back.
+    pub fn into_object(self) -> Result<super::SwiftObject, SwiftValue> {
+        if !self.ty.is_class() {
+            return Err(self);
+        }
+        let object = unsafe { *(self.as_ptr() as *const *mut c_void) };
+        drop(self.into_uninit()); // the reference moved to the object
+        Ok(unsafe { super::SwiftObject::from_raw(object) })
     }
 
     /// Gives up the value: the storage, no longer initialized (after something consumed the value in place).

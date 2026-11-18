@@ -272,10 +272,12 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
                 let witnesses = plan
                     .witnesses
                     .iter()
-                    .map(|(i, p)| {
-                        let mut triple = source(*i);
-                        triple.push(TokenTree::Literal(Literal::string(p)));
-                        paren(triple)
+                    .zip(&plan.witness_layouts)
+                    .map(|((i, p), layout)| {
+                        let mut entry = source(*i);
+                        entry.push(TokenTree::Literal(Literal::string(p)));
+                        entry.push(TokenTree::Ident(proc_macro::Ident::new(&format!("{layout:?}"), proc_macro::Span::call_site())));
+                        paren(entry)
                     })
                     .collect();
                 let slot = plan.error_slot_from.map(source).unwrap_or_default();
@@ -392,6 +394,54 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             _ => {}
         }
     }
+    // A member of a generic struct or enum: an instance member takes `Self`'s metadata (from the receiver) right after
+    // its formal arguments; a static member or initializer takes the type's generic arguments, passed explicitly.
+    if let Some((declaration, parsed)) = &declared {
+        let formal = parsed.formal_count();
+        match parsed.value_context() {
+            apus_mangle::ValueContext::SelfMetadata => {
+                let Some(this) = rust_receiver_name(tail) else {
+                    return item_compile_error(&format!("`{declaration}` is an instance member: declare its receiver, `self: &SwiftValue`"));
+                };
+                if parsed.nonsending() {
+                    return item_compile_error(&format!("`{declaration}`: nonisolated(nonsending) members of generic types are not supported"));
+                }
+                if rust_args.len() < formal {
+                    return item_compile_error(&format!("`{declaration}`: the Rust signature lists fewer arguments than the declaration"));
+                }
+                let names = |range: std::ops::Range<usize>| -> TokenStream {
+                    let mut tokens = Vec::new();
+                    for (n, i) in range.enumerate() {
+                        if n > 0 {
+                            tokens.push(TokenTree::Punct(proc_macro::Punct::new(',', proc_macro::Spacing::Alone)));
+                        }
+                        tokens.push(TokenTree::Ident(rust_args[i].clone()));
+                    }
+                    tokens.into_iter().collect()
+                };
+                let mut front: TokenStream = [
+                    TokenTree::Ident(proc_macro::Ident::new("selftype", proc_macro::Span::call_site())),
+                    TokenTree::Ident(this),
+                    TokenTree::Group(Group::new(Delimiter::Bracket, names(0..formal))),
+                    TokenTree::Group(Group::new(Delimiter::Bracket, names(formal..rust_args.len()))),
+                    TokenTree::Group(Group::new(
+                        Delimiter::Bracket,
+                        parsed.result_from_self().map(|n| TokenTree::Literal(Literal::usize_unsuffixed(n))).into_iter().collect(),
+                    )),
+                ]
+                .into_iter()
+                .collect();
+                front.extend(generic);
+                generic = front;
+            }
+            apus_mangle::ValueContext::GenericArguments if rust_args.len() == formal => {
+                return item_compile_error(&format!(
+                    "`{declaration}` belongs to a generic struct or enum: after its arguments, pass the type's generic arguments (each parameter's `SwiftType`, then witness tables)"
+                ))
+            }
+            _ => {}
+        }
+    }
     // A typed-throws declaration whose error slot is neither passed nor filled automatically.
     if let Some((declaration, parsed)) = &declared {
         if parsed.typed_throws().unwrap_or(false) && !rust_error_slot && !automatic {
@@ -476,6 +526,18 @@ fn rust_receiver(tail: &[TokenTree]) -> Option<String> {
     (!ty.is_empty()).then(|| ty.to_string())
 }
 
+/// The Rust signature's receiver name (`self`), if it has one.
+fn rust_receiver_name(tail: &[TokenTree]) -> Option<proc_macro::Ident> {
+    let receiver = tail.iter().filter_map(|t| match t {
+        TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket => Some(g),
+        _ => None,
+    }).nth(2)?;
+    match receiver.stream().into_iter().next()? {
+        TokenTree::Ident(this) => Some(this),
+        _ => None,
+    }
+}
+
 /// The Rust signature's return type as text (the sixth bracket group: docs, visibility, name… arguments, throws,
 /// return), `""` when there is none.
 fn rust_return(tail: &[TokenTree]) -> String {
@@ -505,6 +567,23 @@ fn rust_argument_names(tail: &[TokenTree]) -> Vec<proc_macro::Ident> {
         }
     }
     names
+}
+
+/// A class member's dispatch thunk (`…Tj`), which apus tries before its own symbol; `""` for anything else.
+#[doc(hidden)]
+#[proc_macro]
+pub fn __dispatch_thunk(input: TokenStream) -> TokenStream {
+    let tokens = flatten(input);
+    let Some(declaration) = (match tokens.as_slice() {
+        [declaration] => string_literal(declaration),
+        _ => None,
+    }) else {
+        return compile_error("expected a Swift declaration as a string literal");
+    };
+    match apus_mangle::dispatch_thunk(&declaration) {
+        Ok(thunk) => TokenTree::Literal(Literal::string(&thunk.unwrap_or_default())).into(),
+        Err(error) => compile_error(&format!("cannot mangle `{declaration}`: {error}")),
+    }
 }
 
 /// Like `mangle!`, with the symbol apus calls: a protocol requirement's dispatch thunk (`…Tj`).

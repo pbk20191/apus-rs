@@ -5,7 +5,7 @@ mod common;
 #[path = "common/probe.rs"]
 mod probe;
 
-use apus::swift::{SwiftObject, SwiftType, SwiftValue};
+use apus::swift::{CallError, SwiftObject, SwiftType, SwiftValue};
 use common::{check, Failed, Trial};
 
 apus::swift! {
@@ -29,6 +29,13 @@ apus::swift! {
     fn zero(ty: SwiftType) -> SwiftValue;
     #[swift_linked = "Res.meters(_: Double) -> Foundation.Measurement(struct)<__C.NSUnitLength(class)>"]
     fn meters(value: f64) -> SwiftValue;
+    #[swift_linked = "Res.labelOf<T: Named(AnyObject)>(_: T) -> String"]
+    fn label_of(named: &SwiftObject) -> String;
+    // The same function declared without the mark, and a protocol wrongly marked: refused before the call.
+    #[swift_linked = "Res.labelOf<T: Named>(_: T) -> String"]
+    fn label_of_unmarked(named: &SwiftValue) -> String;
+    #[swift_linked = "Res.isTagged<T: Tagged(AnyObject)>(_: T) -> Bool"]
+    fn is_tagged_marked(tagged: &SwiftObject) -> bool;
     #[swift_linked = "Res.unitSymbol(_: __C.NSUnit(class)) -> String"]
     fn unit_symbol(unit: &SwiftObject) -> String;
     // Foundation's own: a member of a generic type whose parameter is class-bound.
@@ -53,6 +60,18 @@ fn class_bound_values_are_references() -> Result<(), Failed> {
     check(same(&rex).unwrap().as_ptr() == rex.as_ptr(), "the same reference back")
 }
 
+/// A protocol declared `: AnyObject` makes its parameter a reference; only its descriptor says so, so the declaration
+/// marks it and the call checks the mark.
+fn class_bound_protocols_are_checked() -> Result<(), Failed> {
+    let rex = dog("Rex").unwrap();
+    check(label_of(&rex).unwrap() == "named Rex", "marked")?;
+    let boxed = SwiftValue::new(7i64);
+    let unmarked = label_of_unmarked(&boxed);
+    check(matches!(unmarked, Err(CallError::InvalidArgument(_))), format!("unmarked: {unmarked:?}"))?;
+    let mismarked = is_tagged_marked(&rex);
+    check(matches!(mismarked, Err(CallError::InvalidArgument(_))), format!("mismarked: {mismarked:?}"))
+}
+
 fn metatypes_are_metadata() -> Result<(), Failed> {
     check(describe_type(SwiftType::of::<i64>()).unwrap() == "Int", "T.Type")?;
     check(any_type_name(SwiftType::of::<String>()).unwrap() == "String", "Any.Type")?;
@@ -67,6 +86,7 @@ fn main() {
     common::run(vec![
         Trial::test("class_bound_values_are_references", class_bound_values_are_references),
         Trial::test("metatypes_are_metadata", metatypes_are_metadata),
+        Trial::test("class_bound_protocols_are_checked", class_bound_protocols_are_checked),
         Trial::test("members_of_class_bound_generic_types", members_of_class_bound_generic_types),
     ]);
 }

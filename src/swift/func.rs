@@ -28,6 +28,8 @@ pub(crate) const FLOAT_REGISTERS: usize = 8;
 /// ```
 pub struct SwiftAsyncFn {
     symbol: &'static str,
+    /// A class member's dispatch thunk, tried first; empty if none.
+    thunk: &'static str,
     fixed: *const AsyncFunctionPointer,
     looked_up: OnceLock<usize>,
 }
@@ -41,7 +43,13 @@ impl SwiftAsyncFn {
     /// A function identified by its mangled symbol name (`$s…`), resolved with `dlsym` on first use.
     /// If the symbol is missing, calls yield `CallError::Unavailable` instead of failing to launch.
     pub const fn new(symbol: &'static str) -> SwiftAsyncFn {
-        SwiftAsyncFn { symbol, fixed: std::ptr::null(), looked_up: OnceLock::new() }
+        SwiftAsyncFn { symbol, thunk: "", fixed: std::ptr::null(), looked_up: OnceLock::new() }
+    }
+
+    /// A class member: its dispatch thunk's async function pointer (`…TjTu`) if the process has it, else its own.
+    #[doc(hidden)]
+    pub const fn __dispatched(symbol: &'static str, thunk: &'static str) -> SwiftAsyncFn {
+        SwiftAsyncFn { symbol, thunk, fixed: std::ptr::null(), looked_up: OnceLock::new() }
     }
 
     /// A function identified by its async function pointer (the symbol with the `Tu` suffix).
@@ -49,7 +57,7 @@ impl SwiftAsyncFn {
     /// # Safety
     /// `pointer` must be a Swift async function pointer.
     pub const unsafe fn from_pointer(pointer: &'static AsyncFunctionPointer) -> SwiftAsyncFn {
-        SwiftAsyncFn { symbol: "<pointer>", fixed: pointer, looked_up: OnceLock::new() }
+        SwiftAsyncFn { symbol: "<pointer>", thunk: "", fixed: pointer, looked_up: OnceLock::new() }
     }
 
     fn resolve(&self) -> Option<*const AsyncFunctionPointer> {
@@ -57,8 +65,14 @@ impl SwiftAsyncFn {
             return Some(self.fixed);
         }
         let address = *self.looked_up.get_or_init(|| {
-            let name = CString::new(format!("{}Tu", self.symbol)).expect("symbol contains a NUL byte");
-            unsafe { dlsym(RTLD_DEFAULT, name.as_ptr()) as usize }
+            let pointer = |symbol: &str| {
+                let name = CString::new(format!("{symbol}Tu")).expect("symbol contains a NUL byte");
+                unsafe { dlsym(RTLD_DEFAULT, name.as_ptr()) as usize }
+            };
+            match self.thunk {
+                "" => pointer(self.symbol),
+                thunk => Some(pointer(thunk)).filter(|&a| a != 0).unwrap_or_else(|| pointer(self.symbol)),
+            }
         });
         (address != 0).then_some(address as *const AsyncFunctionPointer)
     }
@@ -362,13 +376,20 @@ pub struct DeclaredResult {
     pub opaque: Option<&'static super::value::OpaqueResult>,
     /// The result is the protocol's `Self`: of the type the call is made on (an `Opened`'s or `OpenedType`'s).
     pub receiver_self: bool,
+    /// The result's type, read at run time: a generic struct's parameter, from the receiver's metadata.
+    pub ty: Option<SwiftType>,
 }
 
 impl DeclaredResult {
-    pub const UNKNOWN: DeclaredResult = DeclaredResult { name: None, opaque: None, receiver_self: false };
+    pub const UNKNOWN: DeclaredResult = DeclaredResult { name: None, opaque: None, receiver_self: false, ty: None };
 
     pub const fn named(name: Option<&'static str>) -> DeclaredResult {
-        DeclaredResult { name, opaque: None, receiver_self: false }
+        DeclaredResult { name, opaque: None, receiver_self: false, ty: None }
+    }
+
+    /// The same, with the result's type known at run time.
+    pub fn of_type(self, ty: SwiftType) -> DeclaredResult {
+        DeclaredResult { ty: Some(ty), ..self }
     }
 }
 
@@ -503,8 +524,11 @@ impl SwiftRet for SwiftAny {
     }
 }
 
-fn declared_type(result_type: Option<&'static str>) -> Result<SwiftType, CallError> {
-    let name = result_type.ok_or(CallError::InvalidArgument(
+fn declared_type(result_type: DeclaredResult) -> Result<SwiftType, CallError> {
+    if let Some(ty) = result_type.ty {
+        return Ok(ty);
+    }
+    let name = result_type.name.ok_or(CallError::InvalidArgument(
         "an opaque result needs its Swift type: declare the function with #[swift = \"…\"], or use call_returning / call_direct",
     ))?;
     SwiftType::from_mangled_name(name).ok_or(CallError::Unavailable(name))
@@ -532,7 +556,7 @@ impl SwiftRet for SwiftValue {
             // `Self`: by address, of the receiver's type, which binding the receiver adds.
             return Ok((IndirectSlot::receiver_self(), true));
         }
-        Ok((IndirectSlot::boxed(UninitValue::new(declared_type(result_type.name)?), false), true))
+        Ok((IndirectSlot::boxed(UninitValue::new(declared_type(result_type)?), false), true))
     }
 }
 
@@ -549,7 +573,7 @@ impl SwiftRet for DirectValue {
         if result_type.opaque.is_some_and(|o| o.is_opaque()) || result_type.receiver_self {
             return Err(CallError::InvalidArgument("a `some P` or `Self` result is returned by address: use SwiftValue"));
         }
-        let ty = declared_type(result_type.name)?;
+        let ty = declared_type(result_type)?;
         if ty.size() > 32 {
             return Err(CallError::InvalidArgument("a type larger than four words is returned by address: use SwiftValue"));
         }

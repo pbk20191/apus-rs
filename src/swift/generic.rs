@@ -22,6 +22,29 @@ impl<T: HasSwiftType + ?Sized> HasSwiftType for &T {
     }
 }
 
+/// The receiver of a generic struct's or enum's instance member: its type is the `Self` metadata the member takes.
+#[doc(hidden)]
+pub trait ValueReceiver {
+    fn value_type(&self) -> SwiftType;
+}
+
+impl ValueReceiver for &SwiftValue {
+    fn value_type(&self) -> SwiftType {
+        self.ty()
+    }
+}
+
+impl ValueReceiver for &mut SwiftValue {
+    fn value_type(&self) -> SwiftType {
+        self.ty()
+    }
+}
+
+#[doc(hidden)]
+pub fn __self_type<R: ValueReceiver>(receiver: &R) -> SwiftType {
+    receiver.value_type()
+}
+
 #[doc(hidden)]
 pub fn __type_of<T: HasSwiftType + ?Sized>(value: &T) -> SwiftType {
     value.swift_type()
@@ -96,13 +119,43 @@ pub fn __metatype_of<A: AsMetatype>(value: &Metatype<A>) -> SwiftType {
 #[doc(hidden)]
 pub struct GenericArgs {
     metadata: Vec<SwiftType>,
-    witnesses: Vec<(SwiftType, &'static SwiftProtocol)>,
+    witnesses: Vec<(SwiftType, &'static SwiftProtocol, ProtocolLayout)>,
     error_slot: Option<SwiftType>,
 }
 
 #[doc(hidden)]
-pub fn __generic_args(metadata: &[SwiftType], witnesses: &[(SwiftType, &'static SwiftProtocol)], error_slot: Option<SwiftType>) -> GenericArgs {
+pub fn __generic_args(
+    metadata: &[SwiftType],
+    witnesses: &[(SwiftType, &'static SwiftProtocol, ProtocolLayout)],
+    error_slot: Option<SwiftType>,
+) -> GenericArgs {
     GenericArgs { metadata: metadata.to_vec(), witnesses: witnesses.to_vec(), error_slot }
+}
+
+/// What the declaration says of a required protocol (`apus_mangle::ProtocolLayout`): a parameter is passed as a
+/// reference exactly when Swift knows its conforming types are classes, which for a protocol only its descriptor tells.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub enum ProtocolLayout {
+    /// Marked `P(AnyObject)`: the parameter is passed as a reference, so P must be class-bound.
+    Class,
+    /// The parameter is passed by address, so P must not be class-bound.
+    Any,
+    /// The parameter is class-bound anyway.
+    Either,
+}
+
+impl ProtocolLayout {
+    /// Why the declared lowering is not Swift's, if it is not.
+    fn mismatch(self, protocol: &SwiftProtocol) -> Option<&'static str> {
+        match (self, protocol.is_class_bound()?) {
+            (ProtocolLayout::Class, false) => Some("a protocol marked `(AnyObject)` is not class-bound: remove the mark"),
+            (ProtocolLayout::Any, true) => {
+                Some("the protocol is class-bound (`: AnyObject`): mark it `P(AnyObject)`, and pass the value as a class reference")
+            }
+            _ => None,
+        }
+    }
 }
 
 impl SwiftArg for GenericArgs {
@@ -110,7 +163,12 @@ impl SwiftArg for GenericArgs {
         for ty in &self.metadata {
             ty.lower(into);
         }
-        for (ty, protocol) in &self.witnesses {
+        for (ty, protocol, layout) in &self.witnesses {
+            if let Some(why) = layout.mismatch(protocol) {
+                into.fail(CallError::InvalidArgument(why));
+                into.int(0);
+                continue;
+            }
             match ty.conformance(protocol) {
                 Some(witness) => witness.lower(into),
                 None => {
@@ -140,7 +198,7 @@ mod tests {
         static MISSING: SwiftProtocol = SwiftProtocol::new("$s9NoSuchMod7MissingMp");
         let int = SwiftType::of::<i64>();
         let mut into = ArgLowering::new(false);
-        __generic_args(&[int], &[(int, &MISSING)], None).lower(&mut into);
+        __generic_args(&[int], &[(int, &MISSING, ProtocolLayout::Any)], None).lower(&mut into);
         assert!(matches!(into.failure, Some(CallError::Unavailable("$s9NoSuchMod7MissingMp"))), "{:?}", into.failure);
     }
 }

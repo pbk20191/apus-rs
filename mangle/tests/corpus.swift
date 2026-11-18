@@ -263,3 +263,7 @@ public func sd2() -> sending Counter { Counter() }
 public func sd3(_ f: @escaping @MainActor () async throws -> sending Counter) {}
 public func sd4(_ f: @escaping @Sendable () -> sending Counter) -> sending Counter { f() }
 extension Made { public init(sd: sending Counter) { self.init(x: 0) } }
+// A class-bound protocol, marked `(AnyObject)`: the symbol is the unmarked one's.
+public protocol Owning: AnyObject {}
+public func cb0<T: Owning>(_ x: T) {}
+public func cb1<T: Owning & Hashable>(_ x: T, _ y: [T]) -> T { x }

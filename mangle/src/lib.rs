@@ -194,6 +194,7 @@ fn class_bound_params(decl: &ast::Decl) -> std::collections::HashSet<ast::Generi
             ast::Requirement::Superclass(ast::Subject::Param(param), _) | ast::Requirement::AnyObject(ast::Subject::Param(param)) => {
                 Some(*param)
             }
+            ast::Requirement::Conforms(ast::Subject::Param(param), protocol) if protocol.class_bound => Some(*param),
             _ => None,
         })
         .collect()
@@ -400,10 +401,66 @@ impl Declaration {
         }
     }
 
+    /// What a member of a generic struct or enum is passed besides its arguments (see [`ValueContext`]).
+    pub fn value_context(&self) -> ValueContext {
+        let decl = &self.0;
+        let value = matches!(decl.context.last(), Some((_, ast::Kind::Struct | ast::Kind::Enum)));
+        // An extension that fixes every parameter (`where Success == Never, Failure == Never`) makes it concrete.
+        let fixed: std::collections::HashSet<ast::GenericParam> = extension_requirements(decl)
+            .filter_map(|r| match r {
+                ast::Requirement::SameType(ast::Subject::Param(param), _) => Some(*param),
+                _ => None,
+            })
+            .collect();
+        let generic = decl.context_params > fixed.len();
+        match (value && generic, decl.is_static || decl.name == "init") {
+            (false, _) => ValueContext::None,
+            (true, false) => ValueContext::SelfMetadata,
+            (true, true) => ValueContext::GenericArguments,
+        }
+    }
+
+    /// For an instance member of a generic struct or enum whose result is one of the type's own (outermost)
+    /// parameters: its index among `Self`'s generic arguments, where the result's type is read at run time.
+    pub fn result_from_self(&self) -> Option<usize> {
+        let decl = &self.0;
+        let result = match &decl.signature {
+            ast::Signature::Function { result, .. } | ast::Signature::Getter(result) => result,
+            ast::Signature::Subscript { result, setter: false, .. } => result,
+            _ => return None,
+        };
+        match result {
+            ast::Ty::Param(param) if param.depth == 0 && self.value_context() == ValueContext::SelfMetadata => {
+                (!class_bound_params(decl).contains(param)).then_some(param.index)
+            }
+            _ => None,
+        }
+    }
+
     /// See [`check_callable`].
     pub fn check_callable(&self) -> Result<(), Error> {
         if let ast::Signature::Case(_) = &self.0.signature {
             return Err(Error("an enum case is not callable: `mangle!` gives its tag symbol, for `SwiftEnumCase`".into()));
+        }
+        // A conformance an extension adds (`where T: P`) is one more witness table after `Self`'s metadata.
+        let added = extension_requirements(&self.0).any(|r| match r {
+            ast::Requirement::Conforms(_, protocol) => !protocol.is_marker() && !self.0.context_requirements.contains(r),
+            _ => false,
+        });
+        if added && self.value_context() == ValueContext::SelfMetadata {
+            return Err(Error(
+                "a member of a generic struct or enum in an extension that adds a conformance (`where T: P`) is not \
+                 supported: it takes that conformance's witness table too"
+                    .into(),
+            ));
+        }
+        let value = matches!(self.0.context.last(), Some((_, ast::Kind::Struct | ast::Kind::Enum)));
+        if value && self.0.module == "Swift" && !self.0.is_static && self.0.name != "init" {
+            return Err(Error(
+                "an instance member of a standard library struct or enum is not supported: the type is frozen, and Swift \
+                 passes `self` in registers (an array as its one reference), not by address"
+                    .into(),
+            ));
         }
         check_lowering(&self.0).map_err(Error)?;
         if let ast::Signature::Function { params, .. } = &self.0.signature {
@@ -553,6 +610,16 @@ pub fn call_symbol(declaration: &str) -> Result<String, Error> {
     Ok(if requirement { format!("{symbol}Tj") } else { symbol })
 }
 
+/// The dispatch thunk (`…Tj`) of a class's own member, which apus calls when the process has it: a library-evolution
+/// module exports a non-final member of a class only as its thunk, which dispatches to the override as Swift would
+/// (docs/ABI/Mangling.rst). A final member has none, and is called by its own symbol. `None` for anything else.
+pub fn dispatch_thunk(declaration: &str) -> Result<Option<String>, Error> {
+    let decl = parse::parse(declaration).map_err(Error)?;
+    let symbol = mangler::mangle(&decl).map_err(Error)?;
+    let member = decl.extension.is_none() && decl.context.last().is_some_and(|(_, kind)| *kind == ast::Kind::Class);
+    Ok((member && decl.name != "init").then(|| format!("{symbol}Tj")))
+}
+
 /// The number of formal parameters of a function declaration (0 for a getter).
 pub fn formal_count(declaration: &str) -> Result<usize, Error> {
     Ok(Declaration::parse(declaration)?.formal_count())
@@ -634,6 +701,39 @@ pub struct GenericPlan {
     /// Per formal parameter, the function of `apus::swift` that gives the Swift type it names or holds:
     /// `__type_of` (a value), `__object_type_of` (a class reference), `__metatype_of` (a metatype).
     pub type_functions: Vec<&'static str>,
+    /// Per witness table, what the protocol's descriptor must say for the declared lowering to be Swift's.
+    pub witness_layouts: Vec<ProtocolLayout>,
+}
+
+/// The requirements of the extension a declaration is in.
+fn extension_requirements(decl: &ast::Decl) -> impl Iterator<Item = &ast::Requirement> {
+    decl.extension.iter().flat_map(|e| e.requirements.iter())
+}
+
+/// What a member of a generic struct or enum takes besides its arguments (observed in what swiftc emits, as Apple's
+/// frameworks are compiled; the calling-convention documents do not spell it out).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ValueContext {
+    /// Not a member of a generic value type.
+    None,
+    /// An instance member: the metadata of `Self` (the value's type), after the formal arguments and before the
+    /// member's own generic arguments. apus takes it from the receiver.
+    SelfMetadata,
+    /// A static member or initializer: the type's generic arguments (each parameter's metadata, then witness tables),
+    /// after the formal arguments, which the caller passes explicitly.
+    GenericArguments,
+}
+
+/// Whether a required protocol must be class-bound: a parameter is passed as a reference exactly when Swift knows its
+/// conforming types are classes, which for a protocol only its descriptor tells (checked before the call).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProtocolLayout {
+    /// Marked `(AnyObject)`: the protocol must be class-bound.
+    Class,
+    /// The parameter goes by address: the protocol must not be class-bound.
+    Any,
+    /// The parameter is class-bound anyway (a superclass, `AnyObject`): either.
+    Either,
 }
 
 /// The generic arguments a call to `declaration` needs and where their values come from, or `None` when it is not
@@ -680,6 +780,7 @@ fn generic_plan_of(decl: &ast::Decl) -> Result<Option<GenericPlan>, Error> {
     // Marker protocols take no witness table.
     let marker = ast::Protocol::is_marker;
     let mut witnesses = Vec::new();
+    let mut witness_layouts = Vec::new();
     let mut conformances_per_param = vec![0usize; decl.generic_params];
     for requirement in mangler::sorted_requirements(&decl.requirements) {
         match requirement {
@@ -694,6 +795,11 @@ fn generic_plan_of(decl: &ast::Decl) -> Result<Option<GenericPlan>, Error> {
                     return explicit("Objective-C protocol requirements (they take no witness table)".into());
                 }
                 witnesses.push((metadata_from[param.index], mangler::protocol_descriptor(&protocol).map_err(Error)?));
+                witness_layouts.push(match (protocol.class_bound, class_bound.contains(&param)) {
+                    (true, _) => ProtocolLayout::Class,
+                    (false, false) => ProtocolLayout::Any,
+                    (false, true) => ProtocolLayout::Either,
+                });
             }
             Requirement::Conforms(Subject::Member(..), _) => return explicit("requirements on associated types".into()),
             Requirement::SameType(Subject::Param(_), _) => return explicit("generic parameters fixed to a type".into()),
@@ -712,7 +818,7 @@ fn generic_plan_of(decl: &ast::Decl) -> Result<Option<GenericPlan>, Error> {
         Ty::Param(param) if !class_bound.contains(param) => Some(metadata_from[param.index]),
         _ => None,
     };
-    Ok(Some(GenericPlan { formal_count: params.len(), metadata_from, witnesses, error_slot_from, result_from, type_functions }))
+    Ok(Some(GenericPlan { formal_count: params.len(), metadata_from, witnesses, error_slot_from, result_from, type_functions, witness_layouts }))
 }
 
 #[cfg(test)]
@@ -819,6 +925,68 @@ mod isolation_tests {
     }
 
     #[test]
+    fn generic_value_types_pass_their_metadata() {
+        use super::{Declaration, ValueContext};
+        let context = |d: &str| Declaration::parse(d).unwrap().value_context();
+        // An instance member of a generic struct or enum takes `Self`'s metadata after its formal arguments; a
+        // static member or initializer takes the type's generic arguments, which the caller passes explicitly.
+        for member in [
+            "M.D(struct)<T: P>.v: Int { get }",
+            "M.D(struct)<T: P>.v: Int { set }",
+            "mutating M.D(struct)<T>.bump(_: Int)",
+            "M.D(struct)<T>.subscript(_: Int) -> Int { get }",
+            "M.K(enum)<T>.tag: Int { get }",
+            "(extension in N) M.D(struct)<T>.f()",
+        ] {
+            assert_eq!(context(member), ValueContext::SelfMetadata, "{member}");
+        }
+        // A result of the type's own parameter: its metadata is among `Self`'s generic arguments.
+        let result = |d: &str| Declaration::parse(d).unwrap().result_from_self();
+        assert_eq!(result("M.D(struct)<K: Hashable, V>.subscript(_: Int) -> V { get }"), Some(1));
+        assert_eq!(result("M.D(struct)<T>.first: T { get }"), Some(0));
+        assert_eq!(result("M.D(struct)<T>.first: T? { get }"), None);
+        assert_eq!(result("M.D(struct)<T: AnyObject>.first: T { get }"), None);
+        assert_eq!(result("M.C(class)<T>.first: T { get }"), None);
+        assert_eq!(context("static M.D(struct)<T: P>.make(_: Int) -> Int"), ValueContext::GenericArguments);
+        // An extension that fixes every parameter makes the member concrete: nothing more is passed. One that fixes
+        // some still takes `Self`; one that adds a conformance would take its witness table too: refused.
+        let sleep = "static (extension in _Concurrency where Success == Never, Failure == Never) \
+                     _Concurrency.Task<Success, Failure>.sleep(nanoseconds: UInt64) async throws";
+        assert_eq!(context(sleep), ValueContext::None);
+        assert_eq!(context("(extension in M where T == Int, U == String) M.D(struct)<T, U>.a: Int { get }"), ValueContext::None);
+        assert_eq!(context("(extension in M where T == Int) M.D(struct)<T, U>.b: Int { get }"), ValueContext::SelfMetadata);
+        let error = super::check_callable("(extension in M where T: P) M.D(struct)<T>.c: Int { get }").unwrap_err().to_string();
+        assert!(error.contains("witness"), "{error}");
+        assert!(super::check_callable("(extension in M where T: P) M.D(struct)<T: P>.c: Int { get }").is_ok());
+        assert_eq!(context("M.D(struct)<T>.init(x: Int)"), ValueContext::GenericArguments);
+        for plain in ["M.S(struct).v: Int { get }", "M.C(class)<T>.f()", "M.f<T>(_: T)", "M.P(protocol).f()"] {
+            assert_eq!(context(plain), ValueContext::None, "{plain}");
+        }
+        // A standard-library struct or enum is frozen: Swift passes `self` in registers (an array as its one
+        // reference), not by address.
+        for frozen in ["Swift.Array<Element>.count: Int { get }", "Swift.Optional<Wrapped>.f()", "Swift.String.count: Int { get }"] {
+            let error = super::check_callable(frozen).unwrap_err().to_string();
+            assert!(error.contains("standard library"), "{frozen}: {error}");
+        }
+        assert!(super::check_callable("static Swift.Array<Element>.f() -> Int").is_ok());
+    }
+
+    #[test]
+    fn class_members_have_dispatch_thunks() {
+        use super::dispatch_thunk;
+        // A class's own members may be dispatched (non-final members of a library-evolution class export only their
+        // dispatch thunk); initializers, extension members, and other kinds' members are not.
+        assert_eq!(
+            dispatch_thunk("SwiftData.ModelContext(class).save() throws").unwrap().as_deref(),
+            Some("$s9SwiftData12ModelContextC4saveyyKFTj")
+        );
+        assert!(dispatch_thunk("M.C(class).count: Int { get }").unwrap().is_some());
+        for direct in ["M.C(class).init(x: Int)", "(extension in N) M.C(class).f()", "M.S(struct).f()", "M.f()", "M.A(actor).f()"] {
+            assert_eq!(dispatch_thunk(direct).unwrap(), None, "{direct}");
+        }
+    }
+
+    #[test]
     fn class_bound_values_are_references() {
         use super::{ArgumentKind, Declaration, ResultKind};
         let parsed = |d: &str| Declaration::parse(d).unwrap();
@@ -839,6 +1007,24 @@ mod isolation_tests {
         assert_eq!(init.argument_kinds().unwrap(), vec![None, Some(ArgumentKind::ClassBound)]);
         let constrained = parsed("(extension in M where T: Base(class)) M.Box(struct)<T>.put(_: T)");
         assert_eq!(constrained.argument_kinds().unwrap(), vec![Some(ArgumentKind::ClassBound)]);
+        // A class-bound protocol (`protocol PersistentModel: AnyObject`) is marked `(AnyObject)`, which the
+        // declaration cannot show otherwise; its symbol is the unmarked one's. The witness entry says what the
+        // protocol's descriptor must say at run time.
+        let insert = parsed("SwiftData.ModelContext(class).insert<T: PersistentModel(AnyObject)>(_: T)");
+        assert_eq!(insert.argument_kinds().unwrap(), vec![Some(ArgumentKind::ClassBound)]);
+        assert_eq!(
+            super::mangle("SwiftData.ModelContext(class).insert<T: PersistentModel(AnyObject)>(_: T)").unwrap(),
+            "$s9SwiftData12ModelContextC6insertyyxAA010PersistentC0RzlF"
+        );
+        let plan = insert.generic_plan().unwrap().unwrap();
+        assert_eq!(plan.type_functions, vec!["__object_type_of"]);
+        assert_eq!(plan.witness_layouts, vec![super::ProtocolLayout::Class]);
+        let plain = parsed("M.f<T: Hashable>(_: T)").generic_plan().unwrap().unwrap();
+        assert_eq!(plain.witness_layouts, vec![super::ProtocolLayout::Any]);
+        let based = parsed("M.f<T: Base(class) & Hashable>(_: T)").generic_plan().unwrap().unwrap();
+        assert_eq!(based.witness_layouts, vec![super::ProtocolLayout::Either]);
+        let error = super::check_callable("M.f(_: any P(AnyObject))").unwrap_err().to_string();
+        assert!(error.contains("AnyObject"), "{error}");
         // Where Swift would lower it otherwise, refused.
         for declaration in [
             "M.f<T: AnyObject>(_: T?)",

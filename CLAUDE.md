@@ -21,8 +21,9 @@ Judge every change by two questions, in this order:
   thunks `…Tj`, async function pointers `…Tu`, enum case tags `…WC`). Name the header/declaration mirrored in a comment.
 - Accepted by the owner (2026-11-18), though observed rather than documented: a class-bound generic parameter's value
   and a thick metatype (`T.Type`, a class's, `Any.Type`) are passed and returned as one pointer; a struct's or enum's
-  metatype is thin (passed as nothing); an `@autoclosure` parameter is passed as the closure it is (2026-11-18). Apple's
-  frameworks are compiled this way, so ABI stability fixes it.
+  metatype is thin (passed as nothing); an `@autoclosure` parameter is passed as the closure it is; an instance member
+  of a generic struct or enum takes `Self`'s metadata after its formal arguments, and a static member or initializer
+  the type's generic arguments. Apple's frameworks are compiled this way, so ABI stability fixes it.
 - Anything else (runtime internals, compiler-computed layouts of non-resilient types, private SPI, behavior observed
   but not documented) is **not** built on silently: stop and tell the owner what is unguaranteed and the alternatives,
   and let them decide.
@@ -43,7 +44,7 @@ Judge every change by two questions, in this order:
 | `sys/` | `apus-sys`: the whole runtime ABI in `sys/include/apus/abi.h`, C funclets/thunks in `sys/csrc/`, bindings generated from the header and committed |
 | `mangle/` | `apus-mangle`: Swift declaration → symbol, call kind, ownership, generic plan |
 | `macros/` | `swift!`'s routing (`__swift_route`), `mangle!`, `result_type!` |
-| `tests/support/*.swift` | Swift probes: `probe.swift`/`fns.swift` (module `Probe`, no library evolution), `resilient.swift` (module `Res`, library evolution, like Apple's frameworks) |
+| `tests/support/*.swift` | Swift probes: `probe.swift`/`fns.swift` (module `Probe`, no library evolution), `resilient.swift` (module `Res`, library evolution, like Apple's frameworks), `notes.swift` (module `Notes`: a SwiftData model) |
 | `docs/superpowers/` | dated specs (Korean), plans and spikes; `docs/prior-art.md` |
 
 README.md documents every user-facing rule; keep it in step with behavior changes.

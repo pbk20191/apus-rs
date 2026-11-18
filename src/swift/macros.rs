@@ -74,9 +74,35 @@
 /// }
 /// ```
 ///
-/// - A value of a class-bound generic type (`T: SomeClass`, `T: AnyObject`) is a class reference, not a
-///   `SwiftValue`: `&SwiftObject` (or `&Retained<T>`) as an argument, `SwiftObject` as a result. A metatype
-///   (`T.Type`, a class's, `Any.Type`) is a `SwiftType`; a struct's or enum's (passed as nothing) is refused.
+/// - A value of a class-bound generic type (`T: SomeClass`, `T: AnyObject`, `T: P(AnyObject)` for a protocol declared
+///   `: AnyObject`) is a class reference, not a `SwiftValue`: `&SwiftObject` (or `&Retained<T>`) as an argument,
+///   `SwiftObject` as a result. A metatype (`T.Type`, a class's, `Any.Type`) is a `SwiftType`; a struct's or enum's
+///   (passed as nothing) is refused.
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "SwiftData.ModelContext(class).insert<T: PersistentModel(AnyObject)>(_: T)"]
+///     fn insert(self: &apus::swift::SwiftObject, model: &apus::swift::SwiftValue); // a model is a class reference
+/// }
+/// ```
+///
+/// - A generic struct's or enum's instance member gets `Self`'s metadata from its receiver; its static members and
+///   initializers take the type's generic arguments after their own. A standard library struct's or enum's instance
+///   member is refused: Swift passes that `self` in registers.
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "static Res.Tray(struct)<T>.size(plus: Int) -> Int"]
+///     fn size(n: i64) -> i64; // T's metadata goes after `n`
+/// }
+/// ```
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "Swift.Array<Element>.count: Int { get }"]
+///     fn count(self: &apus::swift::SwiftValue) -> i64; // an array is passed as its one reference
+/// }
+/// ```
 ///
 /// ```compile_fail
 /// apus::swift! {
@@ -238,7 +264,7 @@ macro_rules! __swift_item {
     (runtime $how:ident async [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
-            static FUNCTION: $crate::swift::SwiftAsyncFn = $crate::swift::SwiftAsyncFn::new($crate::__swift_symbol!($how $spec));
+            static FUNCTION: $crate::swift::SwiftAsyncFn = $crate::swift::SwiftAsyncFn::__dispatched($crate::__swift_symbol!($how $spec), $crate::__swift_thunk!($how $spec));
             let call = $crate::__swift_call!(FUNCTION [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::__bind($this, call, $crate::__swift_consumes_self!($how $spec));)?
             $(let call = $crate::__swift_throws!($throws, call);)?
@@ -248,7 +274,7 @@ macro_rules! __swift_item {
     (runtime $how:ident nonsending [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
-            static FUNCTION: $crate::swift::SwiftAsyncFn = $crate::swift::SwiftAsyncFn::new($crate::__swift_symbol!($how $spec));
+            static FUNCTION: $crate::swift::SwiftAsyncFn = $crate::swift::SwiftAsyncFn::__dispatched($crate::__swift_symbol!($how $spec), $crate::__swift_thunk!($how $spec));
             // The caller's isolation is the hidden first argument; closures are checked like any call's.
             let isolation = $crate::swift::Isolation::current();
             let call = $crate::__swift_call!(FUNCTION [isolation $(, $arg)*] [$($generic)*] $crate::__swift_result_type!($how $spec));
@@ -290,7 +316,7 @@ macro_rules! __swift_item {
     (runtime $how:ident sync [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
-            static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::new($crate::__swift_symbol!($how $spec));
+            static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::__dispatched($crate::__swift_symbol!($how $spec), $crate::__swift_thunk!($how $spec));
             let call = $crate::__swift_call!(FUNCTION [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::__bind_sync($this, call, $crate::__swift_consumes_self!($how $spec));)?
             $(let call = $crate::__swift_throws!($throws, call);)?
@@ -315,7 +341,7 @@ macro_rules! __swift_item {
     (runtime $how:ident hop $target:ident [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
-            static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::new($crate::__swift_symbol!($how $spec));
+            static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::__dispatched($crate::__swift_symbol!($how $spec), $crate::__swift_thunk!($how $spec));
             let call = $crate::__swift_call!(FUNCTION [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::__bind_sync($this, call, $crate::__swift_consumes_self!($how $spec));)?
             $(let call = $crate::__swift_throws!($throws, call);)?
@@ -356,13 +382,13 @@ macro_rules! __swift_args {
         $(let $o = $crate::swift::Consumed($o);)*
         ($($arg,)*)
     }};
-    ([$($arg:ident),*] [$($o:ident)*] [auto [$(($mf:ident $m:ident))*] [$(($wf:ident $w:ident $p:literal))*] [$($sf:ident $slot:ident)?] [$($rf:ident $result:ident)?] $(closures [$(($c:ident $shape:literal))*])?]) => {{
+    ([$($arg:ident),*] [$($o:ident)*] [auto [$(($mf:ident $m:ident))*] [$(($wf:ident $w:ident $p:literal $pl:ident))*] [$($sf:ident $slot:ident)?] [$($rf:ident $result:ident)?] $(closures [$(($c:ident $shape:literal))*])?]) => {{
         let generic = $crate::swift::__generic_args(
             &[$($crate::swift::$mf(&$m)),*],
             &[$(($crate::swift::$wf(&$w), {
                 static PROTOCOL: $crate::swift::SwiftProtocol = $crate::swift::SwiftProtocol::new($p);
                 &PROTOCOL
-            })),*],
+            }, $crate::swift::ProtocolLayout::$pl)),*],
             {
                 #[allow(unused_mut)]
                 let mut slot = ::core::option::Option::None;
@@ -381,6 +407,15 @@ macro_rules! __swift_args {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __swift_call {
+    // `selftype this [formal…] [rest…]`: a generic struct's or enum's instance member, which takes the receiver's type
+    // metadata right after its formal arguments.
+    // `[n]`: the result is the type's parameter n, whose metadata is among the receiver type's generic arguments.
+    ($function:ident [$($arg:ident),*] [selftype $this:ident [$($f:ident),*] [$($g:ident),*] [$($n:literal)?] $($generic:tt)*] $declared:expr) => {{
+        let __apus_self_type = $crate::swift::__self_type(&$this);
+        let declared = $declared;
+        $(let declared = declared.of_type(__apus_self_type.generic_argument($n));)?
+        $crate::__swift_call!($function [$($f,)* __apus_self_type $(, $g)*] [$($generic)*] declared)
+    }};
     // `wrapped [(argument Wrapper)…]`: arguments whose Rust type the declaration fixes (`ClassBound`, `Metatype`,
     // `CFunctionArg`, `BlockArg`).
     // A C function's or block's wrapper also takes the declared shape.
@@ -416,6 +451,7 @@ macro_rules! __swift_result_type {
             name: $crate::result_type!($declaration),
             opaque: ::core::option::Option::Some(&OPAQUE),
             receiver_self: $crate::__returns_self!($declaration),
+            ty: ::core::option::Option::None,
         }
     }};
 }
@@ -434,6 +470,14 @@ macro_rules! __swift_consumes_self {
 macro_rules! __swift_symbol {
     (literal $symbol:literal) => { $symbol };
     (declared $declaration:literal) => { $crate::__call_symbol!($declaration) };
+}
+
+/// A class member's dispatch thunk (`…Tj`), tried before its own symbol; empty for anything else.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __swift_thunk {
+    (literal $symbol:literal) => { "" };
+    (declared $declaration:literal) => { $crate::__dispatch_thunk!($declaration) };
 }
 
 /// The symbol of the function's async function pointer (`…Tu`).

@@ -197,6 +197,13 @@ typedef struct { const void *function; void *indirect; SerialExecutorRef executo
 // MetadataKind::Enum = 1 | NonHeap; MetadataKind::Optional = 2 | NonHeap.
 #define METADATA_KIND_ENUM 0x201u
 #define METADATA_KIND_OPTIONAL 0x202u
+// include/swift/ABI/MetadataKind.def: a class's metadata. MetadataKind::Class = 0, but a class's metadata on Apple
+// platforms starts with its isa pointer, any value above LastEnumeratedMetadataKind (Metadata.h: getKind);
+// ObjCClassWrapper = 5 | RuntimePrivate | NonHeap; ForeignClass = 3 | NonHeap.
+#define METADATA_KIND_CLASS 0x0u
+#define METADATA_KIND_LAST_ENUMERATED 0x7FFu
+#define METADATA_KIND_OBJC_CLASS_WRAPPER 0x305u
+#define METADATA_KIND_FOREIGN_CLASS 0x203u
 
 // include/swift/ABI/Metadata.h: TargetEnumMetadata (TargetValueMetadata) and TargetEnumDescriptor
 // (TargetTypeContextDescriptor, then the enum's counts). Fields are relative pointers.
