@@ -30,8 +30,8 @@ struct Mangler {
     last_subst_is_standard: bool,
     /// Mangling an initializer's parameters, which are consumed by default.
     in_initializer: bool,
-    /// The declaration's generic enclosing type nested `n` levels deep: its bound form ends with `n` `_` (one per
-    /// non-generic level below the generic one).
+    /// The declaration's enclosing type and the level of it that declares the generic parameters: its bound form
+    /// puts the arguments at that level, not the last.
     nested_generic: Option<(Vec<(String, Kind)>, usize)>,
 }
 
@@ -256,13 +256,18 @@ impl Mangler {
                     return Ok(());
                 }
                 self.nominal(module, path)?;
-                self.push("y");
-                for arg in args {
-                    self.ty(arg)?;
-                }
-                if let Some((nested, levels)) = &self.nested_generic {
-                    if nested == path {
-                        self.push(&"_".repeat(*levels));
+                // One argument list per type level, outermost first (`y`, then `_` before each next level), the
+                // arguments at the level that declares them: `PE.Pair<Int, String>` is `y_SiSSG`.
+                let level = match &self.nested_generic {
+                    Some((nested, level)) if nested == path => *level,
+                    _ => path.len() - 1,
+                };
+                for l in 0..path.len() {
+                    self.push(if l == 0 { "y" } else { "_" });
+                    if l == level {
+                        for arg in args {
+                            self.ty(arg)?;
+                        }
                     }
                 }
                 self.push("G");
@@ -404,7 +409,7 @@ impl Mangler {
         let params: Vec<Param> = function
             .params
             .iter()
-            .map(|ty| Param { label: None, ty: ty.clone(), inout: false, variadic: false, isolated: false, ownership: None })
+            .map(|ty| Param { label: None, ty: ty.clone(), inout: false, variadic: false, isolated: false, ownership: None, compile_time_const: false })
             .collect();
         self.parameters(&params)?;
         if function.is_async {
@@ -429,6 +434,9 @@ impl Mangler {
             match &p.ty {
                 Ty::Function(function) => m.function(function, true)?,
                 ty => m.ty(ty)?,
+            }
+            if p.compile_time_const {
+                m.push("Yt");
             }
             if p.isolated {
                 m.push("Yi");
@@ -586,7 +594,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
     }
     let is_init = decl.name == "init";
     m.in_initializer = is_init;
-    m.nested_generic = decl.context_generic_level.map(|level| (decl.context.clone(), decl.context.len() - 1 - level));
+    m.nested_generic = decl.context_generic_level.map(|level| (decl.context.clone(), level));
     if let Some(fixity) = decl.operator {
         // Each operator character as a letter (docs/ABI/Mangling.rst: operator-char), then the fixity.
         let letters: String = decl
@@ -632,7 +640,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
             m.ty(&canonical(result, &same_types))?;
             let params: Vec<Param> = params
                 .iter()
-                .map(|p| Param { label: p.label.clone(), ty: canonical(&p.ty, &same_types), inout: p.inout, variadic: p.variadic, isolated: p.isolated, ownership: p.ownership })
+                .map(|p| Param { label: p.label.clone(), ty: canonical(&p.ty, &same_types), inout: p.inout, variadic: p.variadic, isolated: p.isolated, ownership: p.ownership, compile_time_const: p.compile_time_const })
                 .collect();
             m.parameters(&params)?;
             m.push("c");
@@ -660,7 +668,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
                 // `(Payload) -> Enum`: the payload as the function's parameters, labels included.
                 let params: Vec<Param> = payload
                     .iter()
-                    .map(|(label, ty)| Param { label: label.clone(), ty: ty.clone(), inout: false, variadic: false, isolated: false, ownership: None })
+                    .map(|(label, ty)| Param { label: label.clone(), ty: ty.clone(), inout: false, variadic: false, isolated: false, ownership: None, compile_time_const: false })
                     .collect();
                 m.parameters(&params)?;
                 m.push("c");
@@ -697,7 +705,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
             }
             let params: Vec<Param> = params
                 .iter()
-                .map(|p| Param { label: p.label.clone(), ty: canonical(&p.ty, &same_types), inout: p.inout, variadic: p.variadic, isolated: p.isolated, ownership: p.ownership })
+                .map(|p| Param { label: p.label.clone(), ty: canonical(&p.ty, &same_types), inout: p.inout, variadic: p.variadic, isolated: p.isolated, ownership: p.ownership, compile_time_const: p.compile_time_const })
                 .collect();
             m.parameters(&params)?;
             if *is_async {

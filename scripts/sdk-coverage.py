@@ -92,6 +92,12 @@ def usr_module_kind(usr):
     return module, USR_KIND.get(usr[-1], "typealias" if usr.endswith("a") else None)
 
 
+def objc_name(usr):
+    """The C/ObjC name in a Clang USR (`c:objc(cs)NSString`, `c:@E@NSComparisonResult`): what Swift mangles."""
+    m = re.match(r"c:(?:objc\((?:cs|pl)\)|@(?:E|S|EA|SA)@)([A-Za-z0-9_]+)$", usr)
+    return m.group(1) if m else None
+
+
 def protocol_name(spelling, usr):
     module, _ = usr_module_kind(usr) if usr else (None, None)
     return spelling if module is None or "." in spelling else f"{module}.{spelling}"
@@ -108,6 +114,12 @@ def render_chain(chain):
         return first["spelling"]
     if usr.startswith("c:@SA@") or usr.startswith("c:@T@"):
         raise Untranslatable("C typedef")
+    if usr.startswith("c:"):
+        name = objc_name(usr)
+        module, kind = usr_module_kind(usr)
+        if len(chain) != 1 or name is None or kind is None:
+            raise Untranslatable("imported type unknown")
+        return f"__C.{name}" if kind == "protocol" else f"__C.{name}({kind})"
     if len(chain) >= 1 and chain[-1].get("preciseIdentifier", "").endswith("a") and GRAPH is not None:
         alias = GRAPH.by_usr.get(chain[-1]["preciseIdentifier"])
         if alias is not None and alias["kind"]["identifier"] == "swift.typealias" and not alias.get("swiftGenerics"):
@@ -144,6 +156,9 @@ def render(frags):
                 j += 2
             out.append(render_chain(chain))
             i = j
+            continue
+        if kind == "attribute" and spelling.strip() == "@" and i + 1 < len(frags) and frags[i + 1]["kind"] == "typeIdentifier":
+            i += 2  # a result builder (`@ViewBuilder`): not part of the symbol
             continue
         if kind == "attribute":
             if spelling.strip() not in KEPT_TYPE_ATTRIBUTES:
@@ -266,6 +281,14 @@ class Graph:
         path = sym["pathComponents"][:-1]
         if not path:
             return self.module, [], [], []
+        target = self.parent.get(sym["identifier"]["precise"], "")
+        if target.startswith("c:"):
+            # An imported type: Swift mangles it flat, under its C/ObjC name.
+            name = objc_name(target)
+            _, kind = usr_module_kind(target)
+            if name is None or kind is None:
+                raise Untranslatable("imported context unknown")
+            return "__C", [(name, kind, "")], [], []
         parts, params, constraints = [], [], []
         for n in range(1, len(path) + 1):
             t = self.types_by_path.get(tuple(path[:n]))
@@ -301,6 +324,8 @@ def constraint_text(graph, c):
         return f"{c['lhs']}: {protocol_name(c['rhs'], c.get('rhsPrecise'))}"
     if c["kind"] == "sameType":
         rhs = c["rhs"]
+        if "<" in rhs:
+            raise Untranslatable("same-type requirement on a generic type")
         if c.get("rhsPrecise"):
             module, kind = usr_module_kind(c["rhsPrecise"])
             if module not in ("Swift", "_Concurrency"):
@@ -377,6 +402,7 @@ def declaration(graph, sym):
     start = intro if kind in ("swift.init", "swift.subscript", "swift.type.subscript") else \
         next(i for i, f in enumerate(frags) if i > intro and f["kind"] == "identifier")
     text = signature(frags[start:]).replace("rethrows", "throws")
+    text = re.sub(r"^(init|subscript)\s+([<?!(])", r"\1\2", text)
     text = re.sub(r"\bthrows\s+-> Never\b", "throws -> Never", text)
     if kind == "swift.init":
         failable = re.match(r"init\s*[?!]", text) is not None

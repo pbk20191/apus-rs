@@ -596,6 +596,7 @@ impl<'a> Parser<'a> {
                 }
                 let label = if self.eat_keyword("_") { None } else { Some(self.identifier()?) };
                 self.expect(":")?;
+                let compile_time_const = self.eat_keyword("_const");
                 let inout = self.eat_keyword("inout");
                 let isolated = self.eat_keyword("isolated");
                 let ownership = [("consuming", Ownership::Consuming), ("borrowing", Ownership::Borrowing), ("__owned", Ownership::Owned), ("__shared", Ownership::Shared)]
@@ -608,7 +609,7 @@ impl<'a> Parser<'a> {
                 if self.eat("=") && !self.eat("#isolation") {
                     return Err(self.error("only `= #isolation` is understood as a default value"));
                 }
-                params.push(Param { label, ty, inout, variadic, isolated, ownership });
+                params.push(Param { label, ty, inout, variadic, isolated, ownership, compile_time_const });
             }
             let is_async = self.eat_keyword("async");
             let mut throws = self.eat_keyword("throws");

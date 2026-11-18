@@ -198,6 +198,9 @@ const DECLARATIONS: &[&str] = &[
     "Probe.GenBox(struct)<T>.Item(struct).init(x: Int)",
     "@preconcurrency Probe.pre(_: @escaping @Sendable (Int) -> Bool)",
     "@preconcurrency Probe.preMain(_: @escaping @MainActor () -> Void)",
+    "Probe.PE(enum).Pair(struct)<A, B>.init(a: A, b: B)",
+    "Probe.usePair(_: PE(enum).Pair(struct)<Int, String>)",
+    "Probe.constant(_: _const String, _: Int)",
 ];
 
 /// Enum cases: each mangles to the tag symbol a library-evolution module exports for it.

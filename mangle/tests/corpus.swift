@@ -176,3 +176,7 @@ extension Box where T == Big { public func onlyBig() -> Int { 0 } }
 public struct GenBox<T> { public struct Item { public init(x: Int) {} } }
 @preconcurrency public func pre(_ f: @escaping @Sendable (Int) -> Bool) {}
 @preconcurrency public func preMain(_ f: @escaping @MainActor () -> Void) {}
+// A generic type nested in a non-generic one: bound arguments go to their level (`y_xq_G`); `_const` parameters.
+public enum PE { public struct Pair<A, B> { public init(a: A, b: B) {} } }
+public func usePair(_ p: PE.Pair<Int, String>) {}
+public func constant(_ id: _const String, _ n: Int) {}

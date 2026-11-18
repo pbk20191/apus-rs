@@ -35,7 +35,8 @@ impl std::error::Error for Error {}
 /// [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….subscript[<U: P>]([label|_]: Type, …) -> Type { get [async] [throws] | set }
 /// [static] [prefix | postfix] [Module.Type(kind)….]+(_: Type[, _: Type]) -> Type   (an operator: infix with two parameters)
 /// [mutating | consuming | borrowing] … (how the method takes `self`; the symbol does not show it)
-/// … ([label|_]: [inout | consuming | borrowing | __owned | __shared] Type, …)
+/// … ([label|_]: [_const] [inout | consuming | borrowing | __owned | __shared] Type, …)   (`_const`: AppIntents' compile-time constants)
+/// @preconcurrency …   (its symbol leaves out @Sendable and global actors in function types)
 /// [(extension in Module [where …])] Module.Type(kind)[<T, …>]….init[<U: P>]([label|_]: Type, …) [async] [throws] [-> Type?]
 /// case Module.Type(kind)[<T, …>]….Enum(enum).name[([label:] Type, …)]
 /// ```

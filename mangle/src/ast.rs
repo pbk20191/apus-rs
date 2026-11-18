@@ -74,6 +74,8 @@ pub struct Param {
     pub isolated: bool,
     /// `consuming`/`__owned` or `borrowing`/`__shared`, as written (`None`: the default).
     pub ownership: Option<Ownership>,
+    /// `_const`: a compile-time constant argument (`Yt`); passed like any other.
+    pub compile_time_const: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
