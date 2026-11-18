@@ -5,8 +5,8 @@ mod common;
 #[path = "common/probe.rs"]
 mod probe;
 
-use apus::swift::{SwiftObject, SwiftType, SwiftValue};
-use common::{check, Failed, Trial};
+use apus::swift::{spawn, CallError, SwiftObject, SwiftType, SwiftValue};
+use common::{block, check, Failed, Trial};
 
 apus::swift! {
     #[swift_linked = "Res.Bag(struct).init()"]
@@ -39,6 +39,22 @@ apus::swift! {
     fn shelf_item(self: &SwiftObject, key: &str) -> String;
     #[swift_linked = "Res.Shelf(class).subscript(_: String) -> String { set }"]
     fn set_shelf_item(self: &SwiftObject, value: &str, key: &str);
+    #[swift_linked = "Res.Meter(struct).init(_: Double)"]
+    fn meter(value: f64) -> SwiftValue;
+    #[swift_linked = "Res.Meter(struct).value: Double { get }"]
+    fn meter_value(self: &SwiftValue) -> f64;
+    #[swift_linked = "Res.Meter(struct).slowDouble: Double { get async }"]
+    async fn slow_double(self: &SwiftValue) -> f64;
+    #[swift_linked = "Res.Meter(struct).checked: Double { get throws }"]
+    fn checked(self: &SwiftValue) throws -> f64;
+    #[swift_linked = "Res.Meter(struct).subscript(scale: Double) -> Double { get async throws }"]
+    async fn scaled(self: &SwiftValue, s: f64) throws -> f64;
+    #[swift_linked = "static Res.Meter(struct).+(_: Meter(struct), _: Meter(struct)) -> Meter(struct)"]
+    fn plus(a: &SwiftValue, b: &SwiftValue) -> SwiftValue;
+    #[swift_linked = "static prefix Res.Meter(struct).-(_: Meter(struct)) -> Meter(struct)"]
+    fn negate(a: &SwiftValue) -> SwiftValue;
+    #[swift_linked = "Res.~~(_: Meter(struct), _: Meter(struct)) -> Bool"]
+    fn about(a: &SwiftValue, b: &SwiftValue) -> bool;
 }
 
 const LONG: &str = "a string too long to be stored inline in the String itself";
@@ -71,9 +87,26 @@ fn class_setters_and_inout_arguments() -> Result<(), Failed> {
     check(a.get::<i64>() == Some(2) && b.get::<i64>() == Some(1), "swapped in place")
 }
 
+fn effectful_getters_and_operators() -> Result<(), Failed> {
+    let (one, two) = (meter(1.5).unwrap(), meter(2.0).unwrap());
+    let sum = plus(&one, &two).unwrap();
+    check(meter_value(&sum).unwrap() == 3.5, "1.5 + 2.0")?;
+    let negative = negate(&sum).unwrap();
+    check(meter_value(&negative).unwrap() == -3.5, "-(3.5)")?;
+    check(about(&sum, &meter(3.5004).unwrap()).unwrap(), "3.5 ~~ 3.5004")?;
+    check(checked(&sum).unwrap() == 3.5, "checked")?;
+    check(matches!(checked(&negative), Err(CallError::Swift(_))), "a negative meter throws")?;
+    let (slow, scaled_ok, scaled_err) = block(spawn(async move {
+        (slow_double(&sum).await.unwrap(), scaled(&sum, 2.0).await.unwrap(), scaled(&sum, 0.0).await.is_err())
+    }))
+    .unwrap();
+    check(slow == 7.0 && scaled_ok == 7.0 && scaled_err, "get async, subscript get async throws")
+}
+
 fn main() {
     common::run(vec![
         Trial::test("struct_setters_change_the_value", struct_setters_change_the_value),
         Trial::test("class_setters_and_inout_arguments", class_setters_and_inout_arguments),
+        Trial::test("effectful_getters_and_operators", effectful_getters_and_operators),
     ]);
 }

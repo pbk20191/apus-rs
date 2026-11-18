@@ -123,6 +123,11 @@ pub struct Decl {
     /// `nonisolated(nonsending)`: an async function that runs on its caller's isolation, passed as a hidden first
     /// argument. The symbol does not show it.
     pub nonsending: bool,
+    /// A getter's (or a subscript getter's) effects: `{ get async throws }`. The symbol does not show them.
+    pub accessor_async: bool,
+    pub accessor_throws: bool,
+    /// An operator's fixity in the symbol: `oi` (infix), `op` (prefix), `oP` (postfix).
+    pub operator: Option<&'static str>,
     /// `mutating`: the method changes `self` (a struct's or enum's, passed `inout`). The symbol does not show it.
     pub mutating: bool,
     /// The declaration's own generic parameters.

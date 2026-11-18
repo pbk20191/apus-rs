@@ -31,8 +31,9 @@ impl std::error::Error for Error {}
 /// ```text
 /// [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name[<U: P>]([label|_]: Type, …)
 ///     [async] [throws] [-> Type] [where …]
-/// [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name: Type { get | set }
-/// [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….subscript[<U: P>]([label|_]: Type, …) -> Type { get | set }
+/// [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name: Type { get [async] [throws] | set }
+/// [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….subscript[<U: P>]([label|_]: Type, …) -> Type { get [async] [throws] | set }
+/// [static] [prefix | postfix] [Module.Type(kind)….]+(_: Type[, _: Type]) -> Type   (an operator: infix with two parameters)
 /// [mutating] … (a struct's or enum's method that changes `self`; the symbol does not show it)
 /// [(extension in Module [where …])] Module.Type(kind)[<T, …>]….init[<U: P>]([label|_]: Type, …) [async] [throws] [-> Type?]
 /// case Module.Type(kind)[<T, …>]….Enum(enum).name[([label:] Type, …)]
@@ -55,7 +56,7 @@ impl std::error::Error for Error {}
 ///   (`-> Level(enum)?` for a failable one). Protocol initializers are not supported.
 /// - `case …` gives an enum case's tag symbol (`…WC`), which library-evolution modules export.
 /// - Subscript labels are the ones the call site writes: `subscript(_: Int)` for `v[i]`.
-/// - Not supported: operators, non-ASCII names,
+/// - Not supported: non-ASCII names (and so non-ASCII operators),
 ///   isolation and ownership attributes, more than one generic enclosing type, parameter packs.
 pub fn mangle(declaration: &str) -> Result<String, Error> {
     let decl = parse::parse(declaration).map_err(Error)?;
@@ -103,7 +104,7 @@ impl Declaration {
     pub fn isolation(&self) -> Isolation {
         let decl = &self.0;
         let sync = match &decl.signature {
-            ast::Signature::Getter(_) | ast::Signature::Setter(_) | ast::Signature::Subscript { .. } => true,
+            ast::Signature::Getter(_) | ast::Signature::Setter(_) | ast::Signature::Subscript { .. } => !decl.accessor_async,
             ast::Signature::Function { is_async, .. } => !is_async,
             ast::Signature::Case(_) => return Isolation::None,
         };
@@ -140,6 +141,22 @@ impl Declaration {
                 consumed
             }
             _ => vec![self.0.name == "init"; self.formal_count()],
+        }
+    }
+
+    /// Whether the callee is async: an `async` function, or a `{ get async }` getter.
+    pub fn is_async(&self) -> bool {
+        match &self.0.signature {
+            ast::Signature::Function { is_async, .. } => *is_async,
+            _ => self.0.accessor_async,
+        }
+    }
+
+    /// Whether the callee throws `any Error` (`throws`, or `{ get throws }`); typed throws is [`typed_throws`].
+    pub fn throws_any_error(&self) -> bool {
+        match &self.0.signature {
+            ast::Signature::Function { throws, typed_error, .. } => *throws && typed_error.is_none(),
+            _ => self.0.accessor_throws,
         }
     }
 

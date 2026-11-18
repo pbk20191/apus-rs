@@ -113,6 +113,28 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         },
         _ => None,
     };
+    // The Rust signature's `throws`: a bracket group holding just that word.
+    let rust_throws = tail.iter().any(|t| matches!(t, TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket && g.stream().to_string() == "throws"));
+    // The Rust signature's `async` and `throws` must be the declaration's: an async callee called the sync way, or a
+    // thrown error left unread, is undefined behavior. A sync member that must run on its actor is `async` in Rust
+    // (apus hops there); a typed-throws declaration takes an `ErrorSlot` instead of `throws` (checked below).
+    if let Some((declaration, parsed)) = &declared {
+        let rust_async = asyncness.to_string() == "async";
+        let hops = parsed.isolation() != apus_mangle::Isolation::None;
+        if parsed.is_async() && !rust_async {
+            return item_compile_error(&format!("`{declaration}` is async: declare it `async fn`"));
+        }
+        if !parsed.is_async() && rust_async && !hops {
+            return item_compile_error(&format!("`{declaration}` is synchronous: declare it `fn`"));
+        }
+        if parsed.throws_any_error() != rust_throws && !matches!(parsed.typed_throws(), Ok(true)) {
+            return item_compile_error(&format!(
+                "`{declaration}` {}: {} `throws` after the Rust signature",
+                if rust_throws { "does not throw" } else { "throws" },
+                if rust_throws { "remove" } else { "write" }
+            ));
+        }
+    }
     // `&mut` borrows a Rust value for the call: only a struct's setter or mutating method takes `self` that way,
     // `inout` parameters take one, and only a synchronous call may hold the borrow.
     let receiver = rust_receiver(tail);
@@ -152,8 +174,6 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             _ => {}
         }
     }
-    // The Rust signature's `throws`: a bracket group holding just that word.
-    let rust_throws = tail.iter().any(|t| matches!(t, TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket && g.stream().to_string() == "throws"));
     // The Rust signature's `ErrorSlot` argument (an identifier anywhere in its groups).
     fn mentions(stream: TokenStream, name: &str) -> bool {
         stream.into_iter().any(|t| match t {

@@ -46,6 +46,23 @@
 /// }
 /// ```
 ///
+/// - `async` and `throws` must be the declaration's (a getter's too: `{ get async throws }`); a mismatch is a compile
+///   error. A sync member that runs on its actor is `async fn` (apus hops there).
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "Res.Meter(struct).slowDouble: Double { get async }"]
+///     fn slow_double(self: &apus::swift::SwiftValue) -> f64; // async in Swift
+/// }
+/// ```
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "Res.Meter(struct).checked: Double { get throws }"]
+///     fn checked(self: &apus::swift::SwiftValue) -> f64; // its error would go unread
+/// }
+/// ```
+///
 /// - A struct's setter (`name: T { set }`, `subscript(…) -> T { set }`) or `mutating` method changes `self` in place:
 ///   declare `self: &mut SwiftValue`; an `inout` parameter is a `&mut SwiftValue`. Both only in a synchronous
 ///   `fn` (an async call would outlive the borrow). A setter's new value comes first, then a subscript's indices.

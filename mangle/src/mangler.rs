@@ -562,7 +562,25 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
         m.push("E");
     }
     let is_init = decl.name == "init";
-    if !is_init && !matches!(decl.signature, Signature::Subscript { .. }) {
+    if let Some(fixity) = decl.operator {
+        // Each operator character as a letter (docs/ABI/Mangling.rst: operator-char), then the fixity.
+        let letters: String = decl
+            .name
+            .chars()
+            .map(|c| match c {
+                '&' => 'a', '@' => 'c', '/' => 'd', '=' => 'e', '>' => 'g', '<' => 'l', '*' => 'm', '!' => 'n',
+                '|' => 'o', '+' => 'p', '?' => 'q', '%' => 'r', '-' => 's', '~' => 't', '^' => 'x', '.' => 'z',
+                other => other,
+            })
+            .collect();
+        // An operator name is an identifier for substitutions.
+        let key = Key::Identifier(decl.name.clone());
+        if !m.try_substitution(&key) {
+            m.add_substitution(key);
+            m.push(&format!("{}{letters}", letters.len()));
+        }
+        m.push(fixity);
+    } else if !is_init && !matches!(decl.signature, Signature::Subscript { .. }) {
         m.identifier(&decl.name)?;
     }
     match &decl.signature {

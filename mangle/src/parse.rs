@@ -379,17 +379,31 @@ impl<'a> Parser<'a> {
         requirements
     }
 
-    /// `get }` or `set }` after a `{`: whether it is the setter.
-    fn accessor(&mut self) -> Parsed<bool> {
-        let setter = if self.eat_keyword("get") {
-            false
+    /// `get [async] [throws] }` or `set }` after a `{`: whether it is the setter, and the getter's effects.
+    fn accessor(&mut self) -> Parsed<(bool, bool, bool)> {
+        let accessor = if self.eat_keyword("get") {
+            let is_async = self.eat_keyword("async");
+            (false, is_async, self.eat_keyword("throws"))
         } else if self.eat_keyword("set") {
-            true
+            (true, false, false)
         } else {
             return Err(self.error("expected `get` or `set`"));
         };
         self.expect("}")?;
-        Ok(setter)
+        Ok(accessor)
+    }
+
+    /// An operator's name after the `.` before it: `+`, `==`, `..<`.
+    fn operator_name(&mut self) -> Option<String> {
+        let rest = self.rest();
+        let rest = rest.strip_prefix('.')?;
+        let length = rest.find(|c: char| !OPERATOR_CHARS.contains(c)).unwrap_or(rest.len());
+        if length == 0 {
+            return None;
+        }
+        let name = rest[..length].to_string();
+        self.position += 1 + length;
+        Some(name)
     }
 
     fn declaration(&mut self) -> Parsed<Decl> {
@@ -398,9 +412,14 @@ impl<'a> Parser<'a> {
         let mut nonisolated = false;
         let mut nonsending = false;
         let mut mutating = false;
+        let mut fixity = None;
         loop {
             if self.eat_keyword("mutating") {
                 mutating = true;
+            } else if self.eat_keyword("prefix") {
+                fixity = Some("op");
+            } else if self.eat_keyword("postfix") {
+                fixity = Some("oP");
             } else if self.eat("@MainActor") {
                 main_actor = true;
             } else if self.eat("nonisolated(nonsending)") {
@@ -416,6 +435,12 @@ impl<'a> Parser<'a> {
             return Err("an enum case takes no isolation attributes".into());
         }
         let is_static = !is_case && self.eat_keyword("static");
+        // `static prefix …` as Swift writes it.
+        if self.eat_keyword("prefix") {
+            fixity = Some("op");
+        } else if self.eat_keyword("postfix") {
+            fixity = Some("oP");
+        }
 
         // `(extension in Module [where …])`: its `where` clause is parsed once the generic parameters are known.
         let mut extension: Option<(String, Option<usize>)> = None;
@@ -441,6 +466,12 @@ impl<'a> Parser<'a> {
         self.home = extension.as_ref().map_or_else(|| self.module.clone(), |(module, _)| module.clone());
         while self.eat_path_dot() {
             segments.push(self.segment()?);
+        }
+        let operator = self.operator_name();
+        if let Some(name) = &operator {
+            segments.push(Segment { name: name.clone(), kind: None, generics: None });
+        } else if fixity.is_some() {
+            return Err("`prefix` and `postfix` mark an operator".into());
         }
         if segments.len() < 2 {
             return Err("expected `Module.name…`".into());
@@ -502,6 +533,7 @@ impl<'a> Parser<'a> {
             None => None,
         };
 
+        let mut accessor_effects = (false, false);
         let signature = if is_case {
             if extension.is_some() || generic_params > 0 || context.last().is_none_or(|(_, kind)| *kind != Kind::Enum) {
                 return Err("expected `case Module.Type(enum).name[(payload…)]`".into());
@@ -579,7 +611,8 @@ impl<'a> Parser<'a> {
         } else if self.eat(":") {
             let ty = self.ty()?;
             self.expect("{")?;
-            let setter = self.accessor()?;
+            let (setter, is_async, throws) = self.accessor()?;
+            accessor_effects = (is_async, throws);
             if setter {
                 Signature::Setter(ty)
             } else {
@@ -594,13 +627,14 @@ impl<'a> Parser<'a> {
         let signature = match signature {
             Signature::Function { params, result, is_async, throws, .. } if member.name == "subscript" => {
                 if is_async || throws {
-                    return Err("effectful subscripts (`get async throws`) are not supported".into());
+                    return Err("a subscript's effects go on its getter: `subscript(…) -> T { get async throws }`".into());
                 }
                 if context.is_empty() {
                     return Err("a subscript belongs to a type: `Module.Type(kind).subscript(…) -> T { get }`".into());
                 }
                 self.expect("{")?;
-                let setter = self.accessor()?;
+                let (setter, is_async, throws) = self.accessor()?;
+                accessor_effects = (is_async, throws);
                 Signature::Subscript { params, result, setter }
             }
             signature => signature,
@@ -608,6 +642,15 @@ impl<'a> Parser<'a> {
         if mutating && (is_static || !matches!(signature, Signature::Function { .. }) || context.last().is_none_or(|(_, kind)| !matches!(kind, Kind::Struct | Kind::Enum))) {
             return Err("`mutating` marks a method of a struct or enum".into());
         }
+        let operator = match (&operator, &signature) {
+            (None, _) => None,
+            (Some(_), Signature::Function { params, .. }) => match (fixity, params.len()) {
+                (None, 2) => Some("oi"),
+                (Some(fixity), 1) => Some(fixity),
+                _ => return Err("an infix operator takes two parameters, a `prefix` or `postfix` one takes one".into()),
+            },
+            (Some(_), _) => return Err("an operator is a function".into()),
+        };
         if member.name == "init" {
             match context.last() {
                 None => return Err("`init` belongs to a type: `Module.Type(kind).init(…)`".into()),
@@ -635,6 +678,9 @@ impl<'a> Parser<'a> {
             main_actor,
             nonisolated,
             nonsending,
+            accessor_async: accessor_effects.0,
+            accessor_throws: accessor_effects.1,
+            operator,
             mutating,
             generic_params,
             requirements,
@@ -669,6 +715,9 @@ fn standard_type_is_constrained(module: &str, name: &str) -> bool {
 fn swift_generic(name: &str, args: Vec<Ty>) -> Ty {
     Ty::Nominal { module: "Swift".into(), path: vec![(name.into(), Kind::Struct)], args }
 }
+
+/// The characters of an ASCII operator name.
+const OPERATOR_CHARS: &str = "/=-+!*%<>&|^~?.";
 
 pub fn parse(text: &str) -> Parsed<Decl> {
     Parser { text, position: 0, module: String::new(), home: String::new(), generics: Vec::new() }.declaration()

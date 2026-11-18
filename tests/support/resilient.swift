@@ -66,3 +66,17 @@ public final class Shelf {
     public init() {}
     public subscript(_ key: String) -> String { get { items[key] ?? "" } set { items[key] = newValue } }
 }
+
+// Effectful getters and operators (tests/swift_accessors.rs).
+public enum MeterError: Error { case negative }
+public struct Meter {
+    public var value: Double
+    public init(_ value: Double) { self.value = value }
+    public var slowDouble: Double { get async { await Task.yield(); return value * 2 } }
+    public var checked: Double { get throws { if value < 0 { throw MeterError.negative }; return value } }
+    public subscript(scale s: Double) -> Double { get async throws { await Task.yield(); if s == 0 { throw MeterError.negative }; return value * s } }
+    public static func + (a: Meter, b: Meter) -> Meter { Meter(a.value + b.value) }
+    public static prefix func - (a: Meter) -> Meter { Meter(-a.value) }
+}
+infix operator ~~: ComparisonPrecedence
+public func ~~ (a: Meter, b: Meter) -> Bool { abs(a.value - b.value) < 0.001 }

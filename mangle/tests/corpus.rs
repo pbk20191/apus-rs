@@ -172,6 +172,18 @@ const DECLARATIONS: &[&str] = &[
     "Probe.KProp(class).subscript(_: Int) -> Int { get }",
     "Probe.GProp(struct)<T>.subscript(_: Int) -> T { set }",
     "Probe.GProp(struct)<T>.v: T { set }",
+    // effectful getters, operators (infix unless `prefix`/`postfix`)
+    "Probe.Ops(struct).slow: Int { get async }",
+    "Probe.Ops(struct).both: String { get async throws }",
+    "Probe.Ops(struct).subscript(_: Int) -> Int { get async throws }",
+    "static Probe.Ops(struct).+(_: Ops(struct), _: Ops(struct)) -> Ops(struct)",
+    "static Probe.Ops(struct).==(_: Ops(struct), _: Ops(struct)) -> Bool",
+    "static prefix Probe.Ops(struct).-(_: Ops(struct)) -> Ops(struct)",
+    "static postfix Probe.Ops(struct).++(_: Ops(struct)) -> Ops(struct)",
+    "static Probe.Ops(struct).<*>(_: Ops(struct), _: Int) -> Ops(struct)",
+    "static Probe.Ops(struct).+=(_: inout Ops(struct), _: Ops(struct))",
+    "static Probe.Ops(struct)...<(_: Ops(struct), _: Ops(struct)) -> Int",
+    "Probe.%(_: Ops(struct), _: Ops(struct)) -> Ops(struct)",
 ];
 
 /// Enum cases: each mangles to the tag symbol a library-evolution module exports for it.

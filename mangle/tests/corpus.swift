@@ -141,3 +141,19 @@ public struct Prop { public var x = 0 ; public static var shared = 0
 }
 public final class KProp { public var y = 0 ; public subscript(_ i: Int) -> Int { get { i } set {} } }
 public struct GProp<T> { public var v: T ; public subscript(_ i: Int) -> T { get { v } set {} } }
+// Effectful getters (same symbols as plain ones) and operators (`oi`, `op`, `oP`).
+public struct Ops { public var x = 0
+  public var slow: Int { get async { 1 } }
+  public var both: String { get async throws { "" } }
+  public subscript(_ i: Int) -> Int { get async throws { i } }
+  public static func + (a: Ops, b: Ops) -> Ops { a }
+  public static func == (a: Ops, b: Ops) -> Bool { true }
+  public static prefix func - (a: Ops) -> Ops { a }
+  public static postfix func ++ (a: Ops) -> Ops { a }
+  public static func <*> (a: Ops, b: Int) -> Ops { a }
+  public static func += (a: inout Ops, b: Ops) {}
+  public static func ..< (a: Ops, b: Ops) -> Int { 0 }
+}
+infix operator <*>: AdditionPrecedence
+postfix operator ++
+public func % (a: Ops, b: Ops) -> Ops { a }
