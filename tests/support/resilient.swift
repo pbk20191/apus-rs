@@ -49,3 +49,20 @@ public func figure(_ i: Int) -> Figure {
 
 // A raw-value enum: `init?(rawValue:)` and `rawValue` through their symbols (tests/swift_init.rs).
 public enum Grade: Int { case low = 1, high = 5 }
+
+// Setters, subscripts, mutating methods and inout parameters (tests/swift_accessors.rs).
+public struct Bag {
+    public var count: Int
+    public var name: String
+    public init() { count = 0; name = "" }
+    public subscript(_ i: Int) -> Int { get { count * i } set { count = newValue / i } }
+    public mutating func add(_ n: Int) { count += n }
+    nonisolated(unsafe) public static var total = 0
+}
+public func swapInts(_ a: inout Int, _ b: inout Int) { swap(&a, &b) }
+public final class Shelf {
+    public var label = ""
+    var items: [String: String] = [:]
+    public init() {}
+    public subscript(_ key: String) -> String { get { items[key] ?? "" } set { items[key] = newValue } }
+}

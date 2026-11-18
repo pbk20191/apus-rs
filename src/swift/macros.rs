@@ -46,6 +46,40 @@
 /// }
 /// ```
 ///
+/// - A struct's setter (`name: T { set }`, `subscript(…) -> T { set }`) or `mutating` method changes `self` in place:
+///   declare `self: &mut SwiftValue`; an `inout` parameter is a `&mut SwiftValue`. Both only in a synchronous
+///   `fn` (an async call would outlive the borrow). A setter's new value comes first, then a subscript's indices.
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "Res.Bag(struct).name: String { set }"]
+///     fn set_name(self: &apus::swift::SwiftValue, name: &str); // a copy: needs `&mut SwiftValue`
+/// }
+/// ```
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "Res.swapInts(_: inout Int, _: inout Int)"]
+///     fn swap_ints(a: &apus::swift::SwiftValue, b: &apus::swift::SwiftValue); // `inout` needs `&mut`
+/// }
+/// ```
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "Res.bump(_: inout Int) async"]
+///     async fn bump(a: &mut apus::swift::SwiftValue); // the borrow would outlive the call
+/// }
+/// ```
+///
+/// ```
+/// apus::swift! {
+///     #[swift = "Res.Bag(struct).name: String { set }"]
+///     fn set_name(self: &mut apus::swift::SwiftValue, name: &str);
+///     #[swift = "Res.swapInts(_: inout Int, _: inout Int)"]
+///     fn swap_ints(a: &mut apus::swift::SwiftValue, b: &mut apus::swift::SwiftValue);
+/// }
+/// ```
+///
 /// ```
 /// apus::swift! {
 ///     #[swift = "Probe.Minted(class).init(n: Int)"]
@@ -92,6 +126,17 @@ macro_rules! swift {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __swift_fn {
+    // `self: &mut SwiftValue`: a struct's setter or mutating method, on the Rust value itself (sync only).
+    ([$binding:ident $how:ident $spec:literal] [$(#[$doc:meta])*]
+     $vis:vis async fn $name:ident (self : &mut $receiver:ty $(, $arg:ident : $ty:ty)* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
+        $crate::__swift_route! { $crate::__swift_item ; $binding $how async [$(#[$doc])*] [$vis] $name [this : &mut $receiver] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
+        $crate::swift! { $($rest)* }
+    };
+    ([$binding:ident $how:ident $spec:literal] [$(#[$doc:meta])*]
+     $vis:vis fn $name:ident (self : &mut $receiver:ty $(, $arg:ident : $ty:ty)* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
+        $crate::__swift_route! { $crate::__swift_item ; $binding $how sync [$(#[$doc])*] [$vis] $name [this : &mut $receiver] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
+        $crate::swift! { $($rest)* }
+    };
     ([$binding:ident $how:ident $spec:literal] [$(#[$doc:meta])*]
      $vis:vis async fn $name:ident (self : & $receiver:ty $(, $arg:ident : $ty:ty)* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
         $crate::__swift_route! { $crate::__swift_item ; $binding $how async [$(#[$doc])*] [$vis] $name [this : & $receiver] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
@@ -123,7 +168,7 @@ macro_rules! __swift_item {
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
             static FUNCTION: $crate::swift::SwiftAsyncFn = $crate::swift::SwiftAsyncFn::new($crate::__swift_symbol!($how $spec));
             let call = $crate::__swift_call!(FUNCTION [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
-            $(let call = $crate::swift::SwiftReceiver::bind($this, call);)?
+            $(let call = $crate::swift::__bind($this, call);)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call
         }
@@ -133,7 +178,7 @@ macro_rules! __swift_item {
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
             static FUNCTION: $crate::swift::SwiftAsyncFn = $crate::swift::SwiftAsyncFn::new($crate::__swift_symbol!($how $spec));
             let call = FUNCTION.call_declared(($crate::swift::Isolation::current(), $($arg,)*), $crate::__swift_result_type!($how $spec));
-            $(let call = $crate::swift::SwiftReceiver::bind($this, call);)?
+            $(let call = $crate::swift::__bind($this, call);)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call
         }
@@ -147,7 +192,7 @@ macro_rules! __swift_item {
             }
             let function = unsafe { $crate::swift::SwiftAsyncFn::from_pointer(&POINTER) };
             let call = $crate::__swift_call!(function [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
-            $(let call = $crate::swift::SwiftReceiver::bind($this, call);)?
+            $(let call = $crate::swift::__bind($this, call);)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call
         }
@@ -161,7 +206,7 @@ macro_rules! __swift_item {
             }
             let function = unsafe { $crate::swift::SwiftAsyncFn::from_pointer(&POINTER) };
             let call = function.call_declared(($crate::swift::Isolation::current(), $($arg,)*), $crate::__swift_result_type!($how $spec));
-            $(let call = $crate::swift::SwiftReceiver::bind($this, call);)?
+            $(let call = $crate::swift::__bind($this, call);)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call
         }
@@ -171,7 +216,7 @@ macro_rules! __swift_item {
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
             static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::new($crate::__swift_symbol!($how $spec));
             let call = $crate::__swift_call!(FUNCTION [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
-            $(let call = $crate::swift::SwiftReceiver::bind_sync($this, call);)?
+            $(let call = $crate::swift::__bind_sync($this, call);)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call.invoke()
         }
@@ -186,7 +231,7 @@ macro_rules! __swift_item {
             let entry = unsafe { &ENTRY as *const u8 as *const ::core::ffi::c_void };
             let function = unsafe { $crate::swift::SwiftFn::from_address(entry) };
             let call = $crate::__swift_call!(function [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
-            $(let call = $crate::swift::SwiftReceiver::bind_sync($this, call);)?
+            $(let call = $crate::swift::__bind_sync($this, call);)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call.invoke()
         }
@@ -196,7 +241,7 @@ macro_rules! __swift_item {
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
             static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::new($crate::__swift_symbol!($how $spec));
             let call = $crate::__swift_call!(FUNCTION [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
-            $(let call = $crate::swift::SwiftReceiver::bind_sync($this, call);)?
+            $(let call = $crate::swift::__bind_sync($this, call);)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call.hop($crate::swift::HopTo::$target)
         }
@@ -211,7 +256,7 @@ macro_rules! __swift_item {
             let entry = unsafe { &ENTRY as *const u8 as *const ::core::ffi::c_void };
             let function = unsafe { $crate::swift::SwiftFn::from_address(entry) };
             let call = $crate::__swift_call!(function [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
-            $(let call = $crate::swift::SwiftReceiver::bind_sync($this, call);)?
+            $(let call = $crate::swift::__bind_sync($this, call);)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call.hop($crate::swift::HopTo::$target)
         }

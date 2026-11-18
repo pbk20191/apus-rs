@@ -31,7 +31,9 @@ impl std::error::Error for Error {}
 /// ```text
 /// [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name[<U: P>]([label|_]: Type, …)
 ///     [async] [throws] [-> Type] [where …]
-/// [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name: Type { get }
+/// [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name: Type { get | set }
+/// [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….subscript[<U: P>]([label|_]: Type, …) -> Type { get | set }
+/// [mutating] … (a struct's or enum's method that changes `self`; the symbol does not show it)
 /// [(extension in Module [where …])] Module.Type(kind)[<T, …>]….init[<U: P>]([label|_]: Type, …) [async] [throws] [-> Type?]
 /// case Module.Type(kind)[<T, …>]….Enum(enum).name[([label:] Type, …)]
 /// ```
@@ -52,7 +54,8 @@ impl std::error::Error for Error {}
 /// - Initializers mangle to their allocating entry point (`…fC`); the result is the type itself unless written
 ///   (`-> Level(enum)?` for a failable one). Protocol initializers are not supported.
 /// - `case …` gives an enum case's tag symbol (`…WC`), which library-evolution modules export.
-/// - Not supported: operators, subscripts, setters, non-ASCII names,
+/// - Subscript labels are the ones the call site writes: `subscript(_: Int)` for `v[i]`.
+/// - Not supported: operators, non-ASCII names,
 ///   isolation and ownership attributes, more than one generic enclosing type, parameter packs.
 pub fn mangle(declaration: &str) -> Result<String, Error> {
     let decl = parse::parse(declaration).map_err(Error)?;
@@ -137,6 +140,14 @@ impl Declaration {
                 consumed
             }
             _ => vec![self.0.name == "init"; self.formal_count()],
+        }
+    }
+
+    /// Per formal parameter, whether it is `inout` (passed as the address of a value the callee changes in place).
+    pub fn inout_params(&self) -> Vec<bool> {
+        match &self.0.signature {
+            ast::Signature::Function { params, .. } => params.iter().map(|p| p.inout).collect(),
+            _ => vec![false; self.formal_count()],
         }
     }
 

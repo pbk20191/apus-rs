@@ -142,7 +142,9 @@ the standard library spelled out:
 ```text
 [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name[<U: P>]([label|_]: Type, …)
     [async] [throws] [-> Type] [where …]
-[static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name: Type { get }
+[static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name: Type { get | set }
+[static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….subscript[<U: P>]([label|_]: Type, …) -> Type { get | set }
+[mutating] … (a struct's or enum's method that changes `self`; the symbol does not show it)
 [(extension in Module [where …])] Module.Type(kind)[<T, …>]….init[<U: P>]([label|_]: Type, …) [async] [throws] [-> Type?]
 ```
 
@@ -160,8 +162,12 @@ the standard library spelled out:
   class or actor takes the class as `self` (`self: &SwiftType`, its metadata); a struct's or enum's takes no `self`.
   `swift!` refuses the wrong one. An initializer consumes its arguments (Swift passes them +1): `swift!` hands them
   over. Protocol initializers and static protocol requirements are not supported.
-- A value receiver (`self: &SwiftValue`, `self: &Opened`) is passed as a copy: a `mutating` method changes the copy,
-  never the Rust-side value.
+- A value receiver (`self: &SwiftValue`, `self: &Opened`) is passed as a copy. A struct's setter
+  (`Shop.Cart(struct).note: String { set }`, `subscript(_: Int) -> Int { set }`) or `mutating` method changes the value
+  itself: declare `self: &mut SwiftValue`. An `inout` parameter is a `&mut SwiftValue`. Both work only in a
+  synchronous `fn`, since an async call would outlive the borrow. `swift!` refuses a mismatch. A setter takes the new
+  value first, then a subscript's indices; Swift consumes the new value (+1), and `swift!` hands it over. Subscript
+  labels are the call site's: `subscript(_: Int)` for `v[i]`.
 - `(extension in Module)` marks a member of an extension that Swift mangles as one: an extension in another
   module than the type's, any constrained extension, every protocol extension. For example
   `Task.sleep(nanoseconds:)`:
@@ -172,7 +178,7 @@ static (extension in _Concurrency where Success == Never, Failure == Never)
 ```
 
 - Isolation: `isolated` parameters, `@MainActor`, `nonisolated`, `nonisolated(nonsending)`, `(actor)`, `throws(E)`.
-- Not supported yet: operators, subscripts, setters, non-ASCII names,
+- Not supported yet: operators, effectful subscripts and getters (`get async throws`), non-ASCII names,
   ownership attributes, more than one generic enclosing type. A declaration that cannot be mangled
   is a compile error; for anything unsupported, pass the symbol itself with `#[symbol]`.
 

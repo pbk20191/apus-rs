@@ -98,6 +98,9 @@ impl SwiftAsyncFn {
     fn prepare<R: SwiftRet>(&self, args: impl SwiftArgs, slot: IndirectSlot, indirect: bool) -> SwiftCall<R> {
         let mut lowering = ArgLowering::new(indirect);
         args.lower(&mut lowering);
+        if lowering.borrows {
+            lowering.fail(CallError::InvalidArgument("an `inout` argument (`&mut`) needs a synchronous call"));
+        }
         match self.resolve() {
             Some(function) => SwiftCall::build(function, lowering, None, slot, indirect),
             None => SwiftCall::build(std::ptr::null(), lowering, Some(CallError::Unavailable(self.symbol)), slot, indirect),
@@ -117,6 +120,8 @@ pub struct ArgLowering {
     pub(crate) typed_error: Option<UninitValue>,
     /// A reason not to make the call at all, found while lowering (the first one wins).
     pub(crate) failure: Option<CallError>,
+    /// An argument or `self` is a Rust value borrowed for the call (`inout`): only a synchronous call may run it.
+    pub(crate) borrows: bool,
 }
 
 impl ArgLowering {
@@ -130,6 +135,7 @@ impl ArgLowering {
             error: None,
             typed_error: None,
             failure: None,
+            borrows: false,
         }
     }
 
@@ -272,6 +278,56 @@ impl<T: IntoSwift + Clone> SwiftArg for Vec<T> {
         into.int(unsafe { *(array.as_ptr() as *const u64) });
         into.owned.push(Owned::Value(array));
     }
+}
+
+/// An `inout` argument: the callee reads and writes the value in place. Synchronous calls only (an async call
+/// refuses it with `CallError::InvalidArgument`): the borrow lasts as long as the call.
+impl SwiftArg for &mut SwiftValue {
+    fn lower(&self, into: &mut ArgLowering) {
+        into.borrows = true;
+        into.int(self.as_ptr() as u64);
+    }
+}
+
+/// The receiver of a `swift!` function: `&T` for any [`SwiftReceiver`], or `&mut SwiftValue` (sync calls only).
+#[doc(hidden)]
+pub trait BindReceiver {
+    fn bind_sync<R>(self, call: super::SwiftSyncCall<R>) -> super::SwiftSyncCall<R>;
+}
+
+/// The receiver of an async `swift!` function: `&T` for any [`SwiftReceiver`].
+#[doc(hidden)]
+pub trait BindAsyncReceiver {
+    fn bind<R>(self, call: SwiftCall<R>) -> SwiftCall<R>;
+}
+
+impl<T: SwiftReceiver + ?Sized> BindReceiver for &T {
+    fn bind_sync<R>(self, call: super::SwiftSyncCall<R>) -> super::SwiftSyncCall<R> {
+        self.bind_sync(call)
+    }
+}
+
+impl<T: SwiftReceiver + ?Sized> BindAsyncReceiver for &T {
+    fn bind<R>(self, call: SwiftCall<R>) -> SwiftCall<R> {
+        SwiftReceiver::bind(self, call)
+    }
+}
+
+/// `inout self`: a struct's setter or `mutating` method, working on the value in place.
+impl BindReceiver for &mut SwiftValue {
+    fn bind_sync<R>(self, call: super::SwiftSyncCall<R>) -> super::SwiftSyncCall<R> {
+        call.on_inout_value(self)
+    }
+}
+
+#[doc(hidden)]
+pub fn __bind_sync<B: BindReceiver, R>(this: B, call: super::SwiftSyncCall<R>) -> super::SwiftSyncCall<R> {
+    this.bind_sync(call)
+}
+
+#[doc(hidden)]
+pub fn __bind<B: BindAsyncReceiver, R>(this: B, call: SwiftCall<R>) -> SwiftCall<R> {
+    this.bind(call)
 }
 
 /// An argument the callee consumes (+1): an initializer's arguments, a setter's new value. `swift!` wraps them.

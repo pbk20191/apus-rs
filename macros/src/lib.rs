@@ -113,9 +113,35 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         },
         _ => None,
     };
+    // `&mut` borrows a Rust value for the call: only a struct's setter or mutating method takes `self` that way,
+    // `inout` parameters take one, and only a synchronous call may hold the borrow.
+    let receiver = rust_receiver(tail);
+    let mutable = |text: &str| text.replace(' ', "").starts_with("&mut");
+    let receiver_mut = receiver.as_deref().is_some_and(mutable);
+    let argument_types = rust_argument_types(tail);
+    if (receiver_mut || argument_types.iter().any(|t| mutable(t))) && asyncness.to_string() != "sync" {
+        return item_compile_error("a `&mut` (`inout`) argument or `self` needs a synchronous `fn`: an async call would outlive the borrow");
+    }
+    if let Some((declaration, parsed)) = &declared {
+        if parsed.mutates_self() && !receiver_mut {
+            return item_compile_error(&format!("`{declaration}` changes `self` in place: declare `self: &mut SwiftValue`"));
+        }
+        if receiver_mut && !parsed.mutates_self() {
+            return item_compile_error(&format!("`{declaration}` is not a struct's setter or `mutating` method: `self` takes no `&mut`"));
+        }
+        for (i, (inout, ty)) in parsed.inout_params().iter().zip(&argument_types).enumerate() {
+            if *inout != mutable(ty) {
+                return item_compile_error(&format!(
+                    "`{declaration}`: parameter {} is {}`inout`, so its Rust type {} `&mut SwiftValue`",
+                    i + 1,
+                    if *inout { "" } else { "not " },
+                    if *inout { "must be" } else { "cannot be" }
+                ));
+            }
+        }
+    }
     // A static member or initializer gets its type as `self`: a class's metadata, nothing for a struct or enum.
     if let Some((declaration, parsed)) = &declared {
-        let receiver = rust_receiver(tail);
         match parsed.type_self() {
             apus_mangle::TypeSelf::Thick if !receiver.as_deref().is_some_and(|r| r.ends_with("SwiftType")) => {
                 return item_compile_error(&format!("`{declaration}` takes its class as `self`: declare `self: &SwiftType` first"));
@@ -277,14 +303,47 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     out.into_iter().collect()
 }
 
-/// The Rust signature's receiver type as text (the third bracket group, `this : & Type`), if it has one.
+/// The Rust signature's argument types as text, in order (the fourth bracket group: `name : Type , …`).
+fn rust_argument_types(tail: &[TokenTree]) -> Vec<String> {
+    let Some(args) = tail.iter().filter_map(|t| match t {
+        TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket => Some(g),
+        _ => None,
+    }).nth(3) else { return Vec::new() };
+    let mut types = Vec::new();
+    let (mut current, mut in_type, mut angle) = (Vec::new(), false, 0i32);
+    let tokens = flatten(args.stream());
+    for (i, token) in tokens.iter().enumerate() {
+        match token {
+            TokenTree::Punct(p) if p.as_char() == ':' && !in_type && !matches!(tokens.get(i + 1), Some(TokenTree::Punct(q)) if q.as_char() == ':') => in_type = true,
+            TokenTree::Punct(p) if p.as_char() == ',' && angle == 0 && in_type => {
+                types.push(current.join(" "));
+                current.clear();
+                in_type = false;
+            }
+            token if in_type => {
+                if let TokenTree::Punct(p) = token {
+                    angle += match p.as_char() { '<' => 1, '>' => -1, _ => 0 };
+                }
+                current.push(token.to_string());
+            }
+            _ => {}
+        }
+    }
+    if in_type {
+        types.push(current.join(" "));
+    }
+    types
+}
+
+/// The Rust signature's receiver type as text (the third bracket group, `this : & Type`; just `& Type`), if any.
 fn rust_receiver(tail: &[TokenTree]) -> Option<String> {
     let receiver = tail.iter().filter_map(|t| match t {
         TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket => Some(g),
         _ => None,
     }).nth(2)?;
     let text: String = flatten(receiver.stream()).iter().map(|t| t.to_string()).collect::<Vec<_>>().join(" ");
-    (!text.trim().is_empty()).then(|| text.trim().to_string())
+    let ty = text.split_once(':').map_or(text.as_str(), |(_, ty)| ty).trim();
+    (!ty.is_empty()).then(|| ty.to_string())
 }
 
 /// The Rust signature's argument names: identifiers followed by a single `:` in its argument group (the fourth

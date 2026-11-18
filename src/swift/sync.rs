@@ -115,6 +115,13 @@ impl<R> SwiftSyncCall<R> {
         self
     }
 
+    /// Calls a struct's setter or `mutating` method: the callee changes `value` in place (`inout self`).
+    pub fn on_inout_value(mut self, value: &mut SwiftValue) -> Self {
+        self.lowering.regs.self_ = value.as_ptr();
+        self.lowering.borrows = true;
+        self
+    }
+
     /// Calls a class's initializer or static member: the class (its metadata, which lives forever) is `self`.
     pub fn on_type(mut self, ty: SwiftType) -> Self {
         self.lowering.regs.self_ = ty.as_ptr() as *mut std::ffi::c_void;
@@ -210,6 +217,7 @@ impl<R: SwiftRet> SwiftSyncCall<R> {
             HopTo::SelfActor => actor_executor(lowering.regs.self_),
         };
         let problem = invalid
+            .or_else(|| lowering.borrows.then_some(CallError::InvalidArgument("an `inout` argument (`&mut`) cannot hop to an executor")))
             .or_else(|| function.is_none().then_some(CallError::Unavailable(symbol)))
             .or_else(|| executor.is_none().then_some(CallError::NotAnActor));
         // The sync result address is the hop's own (rs_call_sync), not the first integer argument.
