@@ -21,6 +21,9 @@ pub struct Parser<'a> {
     generics: Vec<(String, GenericParam)>,
     /// `T.Value(of P)`: the protocol that declares an associated type.
     associated: Vec<((GenericParam, String), Protocol)>,
+    /// The constrained extensions a type in the signature may name, with the types they extend: the one an
+    /// enclosing type is declared in, and the declaration's own (for a type declared beside it).
+    known_extensions: Vec<(String, Vec<(String, Kind)>, ContextExtension)>,
 }
 
 type Parsed<T> = Result<T, String>;
@@ -274,7 +277,8 @@ impl<'a> Parser<'a> {
             }
             return Ok(Ty::Param(param));
         }
-        let mut segments = vec![(first, self.kind_suffix())];
+        let kind = self.kind_suffix();
+        let mut segments = vec![(first, kind, self.type_arguments()?)];
         // A segment declared in another module's extension: `Swift.Duration(struct).(extension in Foundation) …`.
         let mut extension = None;
         loop {
@@ -283,35 +287,28 @@ impl<'a> Parser<'a> {
                     return Err(self.error("only one type of a path may be declared in an extension"));
                 }
                 let (module, where_at) = self.extension_marker()?.expect("`.(extension` was seen");
-                if where_at.is_some() {
-                    return Err("a constrained extension in a type's path is not supported".into());
-                }
-                extension = Some((segments.len(), module));
+                let requirements = self.extension_requirements(where_at)?;
+                extension = Some((segments.len(), module, requirements));
             } else if !self.eat_path_dot() {
                 break;
             }
             let name = self.identifier()?;
-            segments.push((name, self.kind_suffix()));
+            let kind = self.kind_suffix();
+            segments.push((name, kind, self.type_arguments()?));
         }
-        let args = if self.eat_here('<') {
-            let mut args = vec![self.ty()?];
-            while self.eat(",") {
-                args.push(self.ty()?);
-            }
-            self.expect(">")?;
-            args
-        } else {
-            Vec::new()
-        };
 
         // A first segment without a kind, followed by more, is a module name.
-        let (module, path) = if segments.len() > 1 && segments[0].1.is_none() {
+        let (module, path) = if segments.len() > 1 && segments[0].1.is_none() && segments[0].2.is_empty() {
             (segments[0].0.clone(), &segments[1..])
         } else {
             (self.home.clone(), &segments[..])
         };
+        // `Outer<A>.Inner<B>`: the arguments of every level, outermost first, and how many each takes.
+        let args: Vec<Ty> = path.iter().flat_map(|(_, _, args)| args.iter().cloned()).collect();
+        let counts: Vec<usize> = path.iter().map(|(_, _, args)| args.len()).collect();
+        let split = if counts[..counts.len() - 1].iter().all(|&count| count == 0) { Vec::new() } else { counts };
         // A lone name without a kind must be one the standard library defines.
-        if let [(name, None)] = path {
+        if let [(name, None, _)] = path {
             let explicit_module = segments.len() > 1;
             if name == "Void" && !explicit_module {
                 return Ok(Ty::Tuple(Vec::new()));
@@ -326,37 +323,70 @@ impl<'a> Parser<'a> {
                         if name == "Optional" && args.len() == 1 {
                             return Ok(Ty::Optional(Box::new(args.into_iter().next().unwrap())));
                         }
-                        return Ok(Ty::Nominal { module: known_module.into(), path: vec![(name.clone(), kind)], args, extension: None });
+                        return Ok(Ty::Nominal { module: known_module.into(), path: vec![(name.clone(), kind)], args, split, extension: None });
                     }
                 }
             }
             return Err(format!("unknown type `{name}`: write `{name}(struct)`, `{name}(class)` or `{name}(enum)`"));
         }
-        let extension = match extension {
-            Some((at, extension_module)) => {
-                let at = at - (segments.len() - path.len());
-                if at == 0 {
-                    return Err(self.error("an extension needs a type to extend"));
-                }
-                Some(Box::new(ContextExtension {
-                    at,
-                    module: extension_module,
-                    requirements: Vec::new(),
-                    extended_params: 0,
-                    extended_constrained: false,
-                }))
-            }
-            None => None,
-        };
         let mut resolved = Vec::new();
-        for (name, kind) in path {
+        for (name, kind, _) in path {
             let kind = kind.ok_or_else(|| needs_kind(name))?;
             if matches!(kind, Kind::TypedefStruct | Kind::TypedefClass) && (module != "__C" || path.len() != 1) {
                 return Err(format!("`{name}`: a typedef kind names an imported C type, `__C.{name}(typedef …)`"));
             }
             resolved.push((name.clone(), kind));
         }
-        Ok(Ty::Nominal { module, path: resolved, args, extension })
+        let extension = match extension {
+            Some((at, extension_module, requirements)) => {
+                let at = at - (segments.len() - path.len());
+                if at == 0 {
+                    return Err(self.error("an extension needs a type to extend"));
+                }
+                if requirements.is_empty() {
+                    Some(Box::new(ContextExtension {
+                        at,
+                        module: extension_module,
+                        requirements,
+                        extended_params: 0,
+                        extended_constrained: false,
+                    }))
+                } else {
+                    // A constrained one is the declaration's own context extension, written the same way: its
+                    // requirements are in terms of the enclosing type's parameters, which only the context declares.
+                    let known = self.known_extensions.iter().find(|(known_module, extended, known)| {
+                        *known_module == module
+                            && known.at == at
+                            && known.module == extension_module
+                            && known.requirements == requirements
+                            && extended.get(..at) == resolved.get(..at)
+                    });
+                    match known {
+                        Some((_, _, known)) => Some(Box::new(known.clone())),
+                        None => {
+                            return Err("a constrained extension in a type's path must be the declaration's own \
+                                        enclosing one"
+                                .into())
+                        }
+                    }
+                }
+            }
+            None => None,
+        };
+        Ok(Ty::Nominal { module, path: resolved, args, split, extension })
+    }
+
+    /// `<A, B>` right after a type's name (and kind), or none.
+    fn type_arguments(&mut self) -> Parsed<Vec<Ty>> {
+        if !self.eat_here('<') {
+            return Ok(Vec::new());
+        }
+        let mut args = vec![self.ty()?];
+        while self.eat(",") {
+            args.push(self.ty()?);
+        }
+        self.expect(">")?;
+        Ok(args)
     }
 
     fn subject(&mut self) -> Parsed<Subject> {
@@ -657,6 +687,10 @@ impl<'a> Parser<'a> {
             context.push((segment.name, kind));
         }
 
+        if let Some(extension) = &context_extension {
+            self.known_extensions.push((self.module.clone(), context.clone(), extension.clone()));
+        }
+
         // The declaration's own generic parameters sit one level below the enclosing type's.
         let own_depth = usize::from(context_params > 0);
         let (generic_params, mut requirements) = match member.generics {
@@ -665,7 +699,24 @@ impl<'a> Parser<'a> {
         };
 
         let extension = match extension {
-            Some((module, where_at)) => Some(Extension { module, requirements: self.extension_requirements(where_at)? }),
+            Some((module, where_at)) => {
+                let requirements = self.extension_requirements(where_at)?;
+                if !requirements.is_empty() && !context.is_empty() {
+                    // A type declared in the same extension as the member: nested in the member's context.
+                    self.known_extensions.push((
+                        self.module.clone(),
+                        context.clone(),
+                        ContextExtension {
+                            at: context.len(),
+                            module: module.clone(),
+                            requirements: requirements.clone(),
+                            extended_params: context_params,
+                            extended_constrained: context_is_constrained,
+                        },
+                    ));
+                }
+                Some(Extension { module, requirements })
+            }
             None => None,
         };
 
@@ -751,7 +802,13 @@ impl<'a> Parser<'a> {
             } else if member.name == "init" {
                 // An initializer returns the type itself (written out only for a failable one: `-> T?`).
                 let args = (0..context_params).map(|index| Ty::Param(GenericParam { depth: 0, index })).collect();
-                Ty::Nominal { module: self.module.clone(), path: context.clone(), args, extension: context_extension.clone().map(Box::new) }
+                Ty::Nominal {
+                    module: self.module.clone(),
+                    path: context.clone(),
+                    split: Ty::split(context.len(), context_generic_level.unwrap_or(context.len() - 1), context_params),
+                    args,
+                    extension: context_extension.clone().map(Box::new),
+                }
             } else {
                 Ty::Tuple(Vec::new())
             };
@@ -891,7 +948,7 @@ fn standard_type_is_constrained(module: &str, name: &str) -> bool {
 }
 
 fn swift_generic(name: &str, args: Vec<Ty>) -> Ty {
-    Ty::Nominal { module: "Swift".into(), path: vec![(name.into(), Kind::Struct)], args, extension: None }
+    Ty::Nominal { module: "Swift".into(), path: vec![(name.into(), Kind::Struct)], args, split: Vec::new(), extension: None }
 }
 
 /// `ty` with each `some P` replaced by a new generic parameter at `depth`, conforming to its protocols.
@@ -906,9 +963,13 @@ fn anonymous_generics(ty: &Ty, depth: usize, count: &mut usize, requirements: &m
         }
         Ty::Optional(wrapped) => Ty::Optional(Box::new(again(wrapped))),
         Ty::Tuple(elements) => Ty::Tuple(elements.iter().map(|(label, e)| (label.clone(), again(e))).collect()),
-        Ty::Nominal { module, path, args, extension } => {
-            Ty::Nominal { module: module.clone(), path: path.clone(), args: args.iter().map(again).collect(), extension: extension.clone() }
-        }
+        Ty::Nominal { module, path, args, split, extension } => Ty::Nominal {
+            module: module.clone(),
+            path: path.clone(),
+            args: args.iter().map(again).collect(),
+            split: split.clone(),
+            extension: extension.clone(),
+        },
         Ty::Function(f) => Ty::Function(Box::new(FunctionTy {
             params: f.params.iter().map(&mut again).collect(),
             result: again(&f.result),
@@ -922,6 +983,6 @@ fn anonymous_generics(ty: &Ty, depth: usize, count: &mut usize, requirements: &m
 const OPERATOR_CHARS: &str = "/=-+!*%<>&|^~?.";
 
 pub fn parse(text: &str) -> Parsed<Decl> {
-    Parser { text, position: 0, module: String::new(), home: String::new(), generics: Vec::new(), associated: Vec::new() }
+    Parser { text, position: 0, module: String::new(), home: String::new(), generics: Vec::new(), associated: Vec::new(), known_extensions: Vec::new() }
         .declaration()
 }

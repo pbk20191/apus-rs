@@ -62,7 +62,7 @@ impl std::error::Error for Error {}
 /// - `case …` gives an enum case's tag symbol (`…WC`), which library-evolution modules export.
 /// - Subscript labels are the ones the call site writes: `subscript(_: Int)` for `v[i]`.
 /// - Not supported: non-ASCII names (and so non-ASCII operators),
-///   more than one generic enclosing type, parameter packs.
+///   a declaration inside more than one generic enclosing type, parameter packs, metatypes.
 pub fn mangle(declaration: &str) -> Result<String, Error> {
     let decl = parse::parse(declaration).map_err(Error)?;
     mangler::mangle(&decl).map_err(Error)

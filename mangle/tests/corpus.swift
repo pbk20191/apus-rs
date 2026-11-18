@@ -203,3 +203,11 @@ extension Showing where Self: Opening, Self.Value: Leafy { public func perform()
 public func mixw<T: Opening>(_ t: T, _ v: T.Value) where T: Leafy, T.Value: Leafy {}
 public func seqw<T: Sequence>(_ t: T, _ e: T.Element) where T: Hashable, T.Element: Hashable {}
 public func amark<T: Opening & Sendable>(_ t: T, _ v: T.Value) {}
+// A member type of a generic type: each level of the path takes its own arguments.
+public struct GOuter<T> { public struct Inner { public init() {} }; public enum E<U> { case a } }
+public struct GTwo<A, B> { public struct W {} }
+public func gf1(_ x: GOuter<Int>.Inner) {}
+public func gf2<V>(_ x: GOuter<V>.Inner, _ y: GOuter<V>.Inner) {}
+public func gf3(_ x: GOuter<Int>.E<String>) {}
+public func gf4(_ x: GTwo<Int, String>.W) {}
+public func gf6(_ x: [GOuter<Int>.Inner]) -> GOuter<Int>.Inner? { nil }

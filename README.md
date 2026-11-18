@@ -198,9 +198,13 @@ static (extension in _Concurrency where Success == Never, Failure == Never)
   `M.f<T: Opening & Hashable>(_: T, _: T.Value(of Opening))`; without it the declaration is refused.
 - `@preconcurrency` declarations: their symbols leave out `@Sendable`, global actors in function types and `Sendable`
   requirements.
+- A member type of a generic type takes each level's arguments where Swift writes them:
+  `SwiftUI.FocusState(struct)<Bool>.Binding(struct)`, `M.Outer(struct)<Int>.E(enum)<String>`. In a type, a
+  constrained extension in the path (`Outer(struct)<T>.(extension in M where T: P) Inner(struct)`) must be the one
+  the declaration or its enclosing type is declared in: its `where` clause speaks of that type's parameters.
 - Isolation: `isolated` parameters, `@MainActor`, `nonisolated`, `nonisolated(nonsending)`, `(actor)`, `throws(E)`.
 - Not supported yet: metatypes (`T.Type`), non-ASCII names (and so non-ASCII operators),
-  more than one generic enclosing type. A declaration that cannot be mangled
+  a declaration inside more than one generic enclosing type. A declaration that cannot be mangled
   is a compile error; for anything unsupported, pass the symbol itself with `#[symbol]`.
 
 The mangler (`mangle/`) ports the Swift compiler's identifier, substitution and generic-signature rules and is

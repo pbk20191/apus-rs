@@ -123,8 +123,9 @@ def associated_type(name, usr):
     return f"{name}(of {protocol_name(protocol['names']['title'], protocol['identifier']['precise'])})"
 
 
-def render_chain(chain, extended=False):
-    """`extended`: the chain continues a type it extends from another module (an imported one)."""
+def render_chain(chain, extended=False, continued=False):
+    """`extended`: the chain continues a type it extends from another module (an imported one). `continued`: it
+    continues a generic type written before it (`Outer<A>.` + `Inner`)."""
     first = chain[0]
     usr = first.get("preciseIdentifier")
     names = [c["spelling"] for c in chain]
@@ -172,15 +173,20 @@ def render_chain(chain, extended=False):
             raise Untranslatable(f"type {kind or 'unknown'}" if kind else "type unknown")
         marker = ""
         declared = GRAPH.by_usr.get(c.get("preciseIdentifier", "")) if GRAPH is not None else None
-        ext = declared.get("swiftExtension") if declared is not None and (n > 0 or extended) else None
-        if ext is not None and (extended or ext.get("constraints") or ext.get("extendedModule", GRAPH.module) != GRAPH.module):
-            if ext.get("constraints"):
-                raise Untranslatable("type of a constrained extension in a type reference")
-            marker = f"(extension in {GRAPH.module}) "
+        ext = declared.get("swiftExtension") if declared is not None and (n > 0 or extended or continued) else None
+        if ext is not None:
+            # The extension's constraints beyond the extended type's own.
+            extended_type = GRAPH.by_usr.get(GRAPH.parent.get(c.get("preciseIdentifier", ""), ""), {})
+            own = extended_type.get("swiftGenerics", {}).get("constraints", [])
+            extra = [k for k in ext.get("constraints", []) if k not in own]
+            if extended or extra or ext.get("extendedModule", GRAPH.module) != GRAPH.module:
+                where = (" where " + ", ".join(constraint_text(GRAPH, k) for k in extra)) if extra else ""
+                marker = f"(extension in {GRAPH.module}{where}) "
         parts.append((c["spelling"], kind, marker))
     if parts[-1][1] == "protocol":
         return protocol_name(".".join(names), usr)
-    return f"{module}." + ".".join(f"{marker}{name}({kind})" for name, kind, marker in parts)
+    path = ".".join(f"{marker}{name}({kind})" for name, kind, marker in parts)
+    return path if continued else f"{module}.{path}"
 
 
 def render(frags):
@@ -195,7 +201,9 @@ def render(frags):
                     and frags[j + 1]["kind"] == "typeIdentifier":
                 chain.append(frags[j + 1])
                 j += 2
-            out.append(render_chain(chain))
+            # After `Outer<A>.` the chain continues that type: its path, without a module.
+            continued = bool(out) and out[-1].endswith(">.")
+            out.append(render_chain(chain, continued=continued))
             i = j
             continue
         if kind == "attribute" and spelling.strip() == "@" and i + 1 < len(frags) and frags[i + 1]["kind"] == "typeIdentifier":
@@ -257,10 +265,6 @@ def signature(frags):
             last_external = False
             continue
         out.append(f)
-    text = ""
-    for f in out:
-        if f["kind"] == "text" and ">." in f["spelling"]:
-            raise Untranslatable("member type of a generic type")
     return render(out)
 
 

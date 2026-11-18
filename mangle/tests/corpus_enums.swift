@@ -18,7 +18,8 @@ public struct Sorting<E: Hashable> { public enum Order { case up, down(E) } }
 public struct Holder<T> { public init() {} }
 extension Holder where T: Tagged {
     public enum Mode { case on, off(T) }
-    public struct Item { public init() {}; public func size() -> Int { 0 } }
+    public func mode() -> Mode { .on }
+    public struct Item { public init() {}; public func size() -> Int { 0 }; public func same(_ i: Item) -> Bool { true } }
 }
 extension Holder where T == Int { public enum Plain { case a } }
 extension Holder { public enum Free { case z } }

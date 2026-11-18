@@ -40,6 +40,18 @@ pub struct Protocol {
     pub name: String,
 }
 
+impl Ty {
+    /// The `split` of a nominal type whose arguments (`count` of them) all belong to path element `level` of `depth`.
+    pub fn split(depth: usize, level: usize, count: usize) -> Vec<usize> {
+        if level + 1 == depth {
+            return Vec::new();
+        }
+        let mut split = vec![0; depth];
+        split[level] = count;
+        split
+    }
+}
+
 impl Protocol {
     /// A marker protocol: no witness table, and it does not make an associated type ambiguous.
     pub fn is_marker(&self) -> bool {
@@ -50,9 +62,10 @@ impl Protocol {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
-    /// `Module.Outer.Inner<Args>`; `args` belong to the last path element. `extension`: one element of the path is
-    /// declared in an extension that is part of its context.
-    Nominal { module: String, path: Vec<(String, Kind)>, args: Vec<Ty>, extension: Option<Box<ContextExtension>> },
+    /// `Module.Outer<A>.Inner<B>`: `args` of all levels, outermost first; `split` how many each path element takes,
+    /// empty when they all belong to the last (see `Ty::split`). `extension`: one element of the path is declared in
+    /// an extension that is part of its context.
+    Nominal { module: String, path: Vec<(String, Kind)>, args: Vec<Ty>, split: Vec<usize>, extension: Option<Box<ContextExtension>> },
     Optional(Box<Ty>),
     Tuple(Vec<(Option<String>, Ty)>),
     Any,
@@ -173,6 +186,21 @@ pub struct ContextExtension {
     /// extension's generic signature ends.
     pub extended_params: usize,
     pub extended_constrained: bool,
+}
+
+impl Decl {
+    /// The enclosing type, bound to its own generic parameters (`Outer<T>.Inner`).
+    pub fn context_type(&self) -> Ty {
+        let args: Vec<Ty> = (0..self.context_params).map(|index| Ty::Param(GenericParam { depth: 0, index })).collect();
+        let level = self.context_generic_level.unwrap_or(self.context.len().saturating_sub(1));
+        Ty::Nominal {
+            module: self.module.clone(),
+            path: self.context.clone(),
+            split: Ty::split(self.context.len(), level, args.len()),
+            args,
+            extension: self.context_extension.clone().map(Box::new),
+        }
+    }
 }
 
 pub struct Decl {

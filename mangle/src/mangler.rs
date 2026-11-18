@@ -30,9 +30,6 @@ struct Mangler {
     last_subst_is_standard: bool,
     /// Mangling an initializer's parameters, which are consumed by default.
     in_initializer: bool,
-    /// The declaration's enclosing type and the level of it that declares the generic parameters: its bound form
-    /// puts the arguments at that level, not the last.
-    nested_generic: Option<(Vec<(String, Kind)>, usize)>,
     /// A `@preconcurrency` declaration: its symbol leaves out marker protocols.
     strip_markers: bool,
     /// How many protocols the signature requires of each generic parameter, and the protocols written for
@@ -233,6 +230,7 @@ impl Mangler {
             module: module.to_string(),
             path: path.to_vec(),
             args: Vec::new(),
+            split: Vec::new(),
             extension: extension.cloned().map(Box::new),
         });
         if self.try_substitution(&key) {
@@ -275,26 +273,25 @@ impl Mangler {
 
     fn ty(&mut self, ty: &Ty) -> Result<(), String> {
         match ty {
-            Ty::Nominal { module, path, args, extension } if args.is_empty() => self.nominal(module, path, extension.as_deref()),
-            Ty::Nominal { module, path, args, extension } => {
+            Ty::Nominal { module, path, args, extension, .. } if args.is_empty() => self.nominal(module, path, extension.as_deref()),
+            Ty::Nominal { module, path, args, split, extension } => {
                 let key = Key::Type(ty.clone());
                 if self.try_substitution(&key) {
                     return Ok(());
                 }
                 self.nominal(module, path, extension.as_deref())?;
                 // One argument list per type level, outermost first (`y`, then `_` before each next level), the
-                // arguments at the level that declares them: `PE.Pair<Int, String>` is `y_SiSSG`.
-                let level = match &self.nested_generic {
-                    Some((nested, level)) if nested == path => *level,
-                    _ => path.len() - 1,
-                };
+                // arguments at the level that declares them: `PE.Pair<Int, String>` is `y_SiSSG`,
+                // `Outer<Int>.E<String>` is `ySi_SSG`.
+                let mut rest = args.as_slice();
                 for l in 0..path.len() {
                     self.push(if l == 0 { "y" } else { "_" });
-                    if l == level {
-                        for arg in args {
-                            self.ty(arg)?;
-                        }
+                    let count = if split.is_empty() { if l + 1 == path.len() { rest.len() } else { 0 } } else { split[l] };
+                    let (level, after) = rest.split_at(count.min(rest.len()));
+                    for arg in level {
+                        self.ty(arg)?;
                     }
+                    rest = after;
                 }
                 self.push("G");
                 self.add_substitution(key);
@@ -593,10 +590,11 @@ fn canonical(ty: &Ty, same_types: &SameTypes) -> Ty {
         Ty::Member(param, name) => same_types.members.get(&(*param, name.clone())).cloned().unwrap_or_else(|| ty.clone()),
         Ty::Optional(wrapped) => Ty::Optional(Box::new(canonical(wrapped, same_types))),
         Ty::Tuple(elements) => Ty::Tuple(elements.iter().map(|(label, element)| (label.clone(), canonical(element, same_types))).collect()),
-        Ty::Nominal { module, path, args, extension } => Ty::Nominal {
+        Ty::Nominal { module, path, args, split, extension } => Ty::Nominal {
             module: module.clone(),
             path: path.clone(),
             args: args.iter().map(|arg| canonical(arg, same_types)).collect(),
+            split: split.clone(),
             extension: extension.clone(),
         },
         Ty::Function(function) => Ty::Function(Box::new(FunctionTy {
@@ -696,7 +694,6 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
     }
     let is_init = decl.name == "init";
     m.in_initializer = is_init;
-    m.nested_generic = decl.context_generic_level.map(|level| (decl.context.clone(), level));
     if let Some(fixity) = decl.operator {
         // Each operator character as a letter (docs/ABI/Mangling.rst: operator-char), then the fixity.
         let letters: String = decl
@@ -759,12 +756,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
         Signature::Case(payload) => {
             // The case as a function: `(Enum.Type) -> Enum`, or `(Enum.Type) -> (Payload) -> Enum`, in the enum's
             // generic signature; then the tag symbol's `WC`.
-            let path: Vec<(String, Kind)> = decl.context.clone();
-            let args = (0..decl.context_params).map(|index| Ty::Param(GenericParam { depth: 0, index })).collect();
-            let this = canonical(
-                &Ty::Nominal { module: decl.module.clone(), path, args, extension: decl.context_extension.clone().map(Box::new) },
-                &same_types,
-            );
+            let this = canonical(&decl.context_type(), &same_types);
             m.push("y");
             m.ty(&this)?;
             if !payload.is_empty() {
