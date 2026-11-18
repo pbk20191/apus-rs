@@ -189,6 +189,10 @@ static (extension in _Concurrency where Success == Never, Failure == Never)
     _Concurrency.Task<Success, Failure>.sleep(nanoseconds: UInt64) async throws
 ```
 
+- A type declared in such an extension has it in its context, marked before the type's name:
+  `case __C.NSScanner(class).(extension in Foundation) NumberRepresentation(enum).decimal`, and a constrained one
+  `case M.Holder(struct)<T>.(extension in M where T: Tagged) Mode(enum).on`. A parameter or result type may carry an
+  unconstrained one.
 - Isolation: `isolated` parameters, `@MainActor`, `nonisolated`, `nonisolated(nonsending)`, `(actor)`, `throws(E)`.
 - Not supported yet: metatypes (`T.Type`), non-ASCII names (and so non-ASCII operators),
   more than one generic enclosing type. A declaration that cannot be mangled
