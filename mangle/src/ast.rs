@@ -90,6 +90,10 @@ pub enum Signature {
     /// `typed_error`: `throws(E)` with an error type other than `any Error`.
     Function { params: Vec<Param>, result: Ty, is_async: bool, throws: bool, typed_error: Option<Ty> },
     Getter(Ty),
+    /// `name: T { set }`: the property's setter, which takes the new value.
+    Setter(Ty),
+    /// `subscript(…) -> T { get }` or `{ set }` (`setter`), whose setter takes the new value before the indices.
+    Subscript { params: Vec<Param>, result: Ty, setter: bool },
     /// `case Module.Enum(enum).name(payload…)`: an enum case, mangled to its tag symbol (`…WC`).
     Case(Vec<Ty>),
 }
@@ -119,6 +123,8 @@ pub struct Decl {
     /// `nonisolated(nonsending)`: an async function that runs on its caller's isolation, passed as a hidden first
     /// argument. The symbol does not show it.
     pub nonsending: bool,
+    /// `mutating`: the method changes `self` (a struct's or enum's, passed `inout`). The symbol does not show it.
+    pub mutating: bool,
     /// The declaration's own generic parameters.
     pub generic_params: usize,
     /// The declaration's own requirements (inline constraints and its `where` clause).

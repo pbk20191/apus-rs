@@ -562,13 +562,48 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
         m.push("E");
     }
     let is_init = decl.name == "init";
-    if !is_init {
+    if !is_init && !matches!(decl.signature, Signature::Subscript { .. }) {
         m.identifier(&decl.name)?;
     }
     match &decl.signature {
         Signature::Getter(ty) => {
             m.ty(&canonical(ty, &same_types))?;
             m.push("vg");
+        }
+        Signature::Setter(ty) => {
+            m.ty(&canonical(ty, &same_types))?;
+            m.push("vs");
+        }
+        Signature::Subscript { params, result, setter } => {
+            // Like an initializer: labels, the function type (`c`), generic (`…lu`), then the accessor.
+            if params.iter().any(|p| p.label.is_some()) {
+                for param in params {
+                    match &param.label {
+                        Some(label) => m.identifier(label)?,
+                        None => m.push("_"),
+                    }
+                }
+            } else {
+                m.push("y");
+            }
+            m.ty(&canonical(result, &same_types))?;
+            let params: Vec<Param> = params
+                .iter()
+                .map(|p| Param { label: p.label.clone(), ty: canonical(&p.ty, &same_types), inout: p.inout, variadic: p.variadic, isolated: p.isolated })
+                .collect();
+            m.parameters(&params)?;
+            m.push("c");
+            if decl.generic_params > 0 {
+                for requirement in sorted_requirements(&decl.requirements) {
+                    m.requirement(&requirement)?;
+                }
+                if decl.generic_params > 1 {
+                    m.push("r");
+                    m.push(&index(decl.generic_params - 1));
+                }
+                m.push("lu");
+            }
+            m.push(if *setter { "is" } else { "ig" });
         }
         Signature::Case(payload) => {
             // The case as a function: `(Enum.Type) -> Enum`, or `(Enum.Type) -> (Payload) -> Enum`, in the enum's
@@ -699,7 +734,8 @@ pub fn result_type(decl: &Decl) -> Result<Option<String>, String> {
     let same_types = all_same_types(decl);
     let ty = match &decl.signature {
         Signature::Function { result, .. } => canonical(result, &same_types),
-        Signature::Getter(ty) => canonical(ty, &same_types),
+        Signature::Getter(ty) | Signature::Subscript { result: ty, setter: false, .. } => canonical(ty, &same_types),
+        Signature::Setter(_) | Signature::Subscript { setter: true, .. } => Ty::Tuple(Vec::new()),
         Signature::Case(_) => return Err("an enum case has no result type".into()),
     };
     if !is_concrete(&ty) {

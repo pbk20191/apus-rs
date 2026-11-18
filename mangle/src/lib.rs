@@ -100,7 +100,7 @@ impl Declaration {
     pub fn isolation(&self) -> Isolation {
         let decl = &self.0;
         let sync = match &decl.signature {
-            ast::Signature::Getter(_) => true,
+            ast::Signature::Getter(_) | ast::Signature::Setter(_) | ast::Signature::Subscript { .. } => true,
             ast::Signature::Function { is_async, .. } => !is_async,
             ast::Signature::Case(_) => return Isolation::None,
         };
@@ -129,8 +129,24 @@ impl Declaration {
     /// Per formal parameter, whether the callee consumes it (+1) instead of borrowing it: every parameter of an
     /// initializer (Swift's default for initializers and setters, SE-0377).
     pub fn consumed(&self) -> Vec<bool> {
-        let consumes = self.0.name == "init";
-        vec![consumes; self.formal_count()]
+        match &self.0.signature {
+            // The new value comes first, then a subscript's indices (borrowed).
+            ast::Signature::Setter(_) | ast::Signature::Subscript { setter: true, .. } => {
+                let mut consumed = vec![false; self.formal_count()];
+                consumed[0] = true;
+                consumed
+            }
+            _ => vec![self.0.name == "init"; self.formal_count()],
+        }
+    }
+
+    /// Whether the call changes `self` in place: a `mutating` method, or a setter, of a struct or enum (`self` is
+    /// passed `inout`: the value's own address).
+    pub fn mutates_self(&self) -> bool {
+        let decl = &self.0;
+        let setter = matches!(decl.signature, ast::Signature::Setter(_) | ast::Signature::Subscript { setter: true, .. });
+        let value_type = decl.context.last().is_some_and(|(_, kind)| matches!(kind, ast::Kind::Struct | ast::Kind::Enum));
+        !decl.is_static && value_type && (decl.mutating || setter)
     }
 
     /// See [`typed_throws`].
@@ -168,6 +184,8 @@ impl Declaration {
         match &self.0.signature {
             ast::Signature::Function { params, .. } => params.len(),
             ast::Signature::Getter(_) | ast::Signature::Case(_) => 0,
+            ast::Signature::Setter(_) => 1,
+            ast::Signature::Subscript { params, setter, .. } => params.len() + usize::from(*setter),
         }
     }
 

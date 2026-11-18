@@ -132,3 +132,12 @@ public struct Made { public var x = 0
   public init?(maybe: Int) {}
 }
 public final class Built { public init(n: Int) {} ; public static func make() -> Built { Built(n: 1) } }
+// Setters and subscripts (`vs`, `ig`, `is`); `mutating` changes no symbol.
+public struct Prop { public var x = 0 ; public static var shared = 0
+  public subscript(_ i: Int) -> Int { get { i } set {} }
+  public subscript(_ k: String, d: Int) -> String { get { k } set {} }
+  public subscript<T>(t t: T) -> T { get { t } set {} }
+  public mutating func bump(by n: Int) { x += n }
+}
+public final class KProp { public var y = 0 ; public subscript(_ i: Int) -> Int { get { i } set {} } }
+public struct GProp<T> { public var v: T ; public subscript(_ i: Int) -> T { get { v } set {} } }

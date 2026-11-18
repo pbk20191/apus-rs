@@ -379,13 +379,29 @@ impl<'a> Parser<'a> {
         requirements
     }
 
+    /// `get }` or `set }` after a `{`: whether it is the setter.
+    fn accessor(&mut self) -> Parsed<bool> {
+        let setter = if self.eat_keyword("get") {
+            false
+        } else if self.eat_keyword("set") {
+            true
+        } else {
+            return Err(self.error("expected `get` or `set`"));
+        };
+        self.expect("}")?;
+        Ok(setter)
+    }
+
     fn declaration(&mut self) -> Parsed<Decl> {
         // Isolation attributes: they change no symbol, only how apus calls the declaration.
         let mut main_actor = false;
         let mut nonisolated = false;
         let mut nonsending = false;
+        let mut mutating = false;
         loop {
-            if self.eat("@MainActor") {
+            if self.eat_keyword("mutating") {
+                mutating = true;
+            } else if self.eat("@MainActor") {
                 main_actor = true;
             } else if self.eat("nonisolated(nonsending)") {
                 nonsending = true;
@@ -563,16 +579,34 @@ impl<'a> Parser<'a> {
         } else if self.eat(":") {
             let ty = self.ty()?;
             self.expect("{")?;
-            if !self.eat_keyword("get") {
-                return Err(self.error("expected `get`"));
+            let setter = self.accessor()?;
+            if setter {
+                Signature::Setter(ty)
+            } else {
+                Signature::Getter(ty)
             }
-            self.expect("}")?;
-            Signature::Getter(ty)
         } else {
             return Err(self.error("expected `(` or `:` after the declaration's name"));
         };
         if self.eat_keyword("where") {
             self.where_clause(&mut requirements)?;
+        }
+        let signature = match signature {
+            Signature::Function { params, result, is_async, throws, .. } if member.name == "subscript" => {
+                if is_async || throws {
+                    return Err("effectful subscripts (`get async throws`) are not supported".into());
+                }
+                if context.is_empty() {
+                    return Err("a subscript belongs to a type: `Module.Type(kind).subscript(…) -> T { get }`".into());
+                }
+                self.expect("{")?;
+                let setter = self.accessor()?;
+                Signature::Subscript { params, result, setter }
+            }
+            signature => signature,
+        };
+        if mutating && (is_static || !matches!(signature, Signature::Function { .. }) || context.last().is_none_or(|(_, kind)| !matches!(kind, Kind::Struct | Kind::Enum))) {
+            return Err("`mutating` marks a method of a struct or enum".into());
         }
         if member.name == "init" {
             match context.last() {
@@ -601,6 +635,7 @@ impl<'a> Parser<'a> {
             main_actor,
             nonisolated,
             nonsending,
+            mutating,
             generic_params,
             requirements,
             signature,

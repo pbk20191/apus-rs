@@ -160,6 +160,18 @@ const DECLARATIONS: &[&str] = &[
     "Probe.Box(struct)<T>.init()",
     "Probe.Built(class).init(n: Int)",
     "static Probe.Built(class).make() -> Built(class)",
+    // setters, subscripts (labels as at the call site: `p[i]` is `_:`), mutating methods
+    "Probe.Prop(struct).x: Int { set }",
+    "static Probe.Prop(struct).shared: Int { set }",
+    "Probe.Prop(struct).subscript(_: Int) -> Int { get }",
+    "Probe.Prop(struct).subscript(_: Int) -> Int { set }",
+    "Probe.Prop(struct).subscript(_: String, _: Int) -> String { get }",
+    "Probe.Prop(struct).subscript<T>(t: T) -> T { set }",
+    "mutating Probe.Prop(struct).bump(by: Int)",
+    "Probe.KProp(class).y: Int { set }",
+    "Probe.KProp(class).subscript(_: Int) -> Int { get }",
+    "Probe.GProp(struct)<T>.subscript(_: Int) -> T { set }",
+    "Probe.GProp(struct)<T>.v: T { set }",
 ];
 
 /// Enum cases: each mangles to the tag symbol a library-evolution module exports for it.
