@@ -345,7 +345,7 @@ fn closure_shape(function: &ast::FunctionTy) -> Result<String, String> {
         fn mentions_param(ty: &Ty) -> bool {
             match ty {
                 Ty::Param(_) | Ty::Member(..) | Ty::Opaque(_) => true,
-                Ty::Optional(wrapped) => mentions_param(wrapped),
+                Ty::Optional(wrapped) | Ty::Metatype(wrapped) => mentions_param(wrapped),
                 Ty::Tuple(elements) => elements.iter().any(|(_, element)| mentions_param(element)),
                 Ty::Nominal { args, .. } => args.iter().any(mentions_param),
                 Ty::Function(f) => f.params.iter().any(mentions_param) || mentions_param(&f.result),
@@ -575,10 +575,9 @@ mod isolation_tests {
 
     #[test]
     fn a_metatype_is_not_a_member_type() {
-        // `T.Type` is T's metatype, never an associated type named `Type`.
-        for declaration in ["M.f<T>(_: T.Type) -> Int", "case M.E(enum)<T>.boom(T.Protocol)"] {
-            let error = super::mangle(declaration).unwrap_err().to_string();
-            assert!(error.contains("metatype"), "{declaration}: {error}");
-        }
+        // `T.Type` is T's metatype (`xm`), never an associated type named `Type`.
+        assert_eq!(super::mangle("M.f<T>(_: T.Type) -> Int").unwrap(), "$s1M1fySixmlF");
+        let error = super::mangle("case M.E(enum)<T>.boom(T.Protocol)").unwrap_err().to_string();
+        assert!(error.contains("metatype"), "{error}");
     }
 }

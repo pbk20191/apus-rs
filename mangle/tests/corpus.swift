@@ -219,3 +219,11 @@ public func s2<T: NSObject>(_ t: T, _ n: Int) -> [T] { [t] }
 public func s3<T>(_ t: T) where T: SBase, T: SP {}
 public func s4<T: AnyObject>(_ t: T) -> T { t }
 public func s5<T: AnyObject & SP>(_ t: T) {}
+// Metatypes: `T.Type` (`xm`), a class's, `Any.Type` (`ypXp`).
+public func mt1<T>(_ t: T.Type) -> Int { 0 }
+public func mt2<T: Decodable>(_ t: T.Type, from n: Int) -> T? { nil }
+public func mt3(_ b: SBase.Type) -> Int { 0 }
+public func mt5() -> SBase.Type { SBase.self }
+public func mt6<T>(_ t: T.Type) -> T.Type { t }
+public func mt8(_ a: Any.Type) -> Int { 0 }
+public func mt9(_ t: Int.Type?, _ s: Big.Type) -> Int { 0 }

@@ -307,6 +307,13 @@ impl Mangler {
                 self.add_substitution(key);
                 Ok(())
             }
+            // docs/ABI/Mangling.rst: `type 'm'` (metatype); `type 'Xp'` for an existential's (`Any.Type`: `ypXp`).
+            // Not a substitution entry (`T.Type` twice is `xmxm`).
+            Ty::Metatype(instance) => {
+                self.ty(instance)?;
+                self.push(if matches!(**instance, Ty::Any | Ty::AnyObject | Ty::Existential(_)) { "Xp" } else { "m" });
+                Ok(())
+            }
             // The empty tuple as a type; a `()` result is just `y` (see `mangle`).
             Ty::Tuple(elements) if elements.is_empty() => {
                 self.push("yt");
@@ -610,6 +617,7 @@ fn canonical(ty: &Ty, same_types: &SameTypes) -> Ty {
         Ty::Param(param) => same_types.params.get(param).cloned().unwrap_or_else(|| ty.clone()),
         Ty::Member(param, name) => same_types.members.get(&(*param, name.clone())).cloned().unwrap_or_else(|| ty.clone()),
         Ty::Optional(wrapped) => Ty::Optional(Box::new(canonical(wrapped, same_types))),
+        Ty::Metatype(instance) => Ty::Metatype(Box::new(canonical(instance, same_types))),
         Ty::Tuple(elements) => Ty::Tuple(elements.iter().map(|(label, element)| (label.clone(), canonical(element, same_types))).collect()),
         Ty::Nominal { module, path, args, split, extension } => Ty::Nominal {
             module: module.clone(),
@@ -878,7 +886,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
 fn is_concrete(ty: &Ty) -> bool {
     match ty {
         Ty::Param(_) | Ty::Member(..) | Ty::Opaque(_) => false,
-        Ty::Optional(wrapped) => is_concrete(wrapped),
+        Ty::Optional(wrapped) | Ty::Metatype(wrapped) => is_concrete(wrapped),
         Ty::Tuple(elements) => elements.iter().all(|(_, element)| is_concrete(element)),
         Ty::Nominal { args, .. } => args.iter().all(is_concrete),
         Ty::Function(function) => function.params.iter().all(is_concrete) && is_concrete(&function.result),

@@ -191,8 +191,23 @@ impl<'a> Parser<'a> {
         Ok(Protocol { module: module.to_string(), name: first })
     }
 
+    /// `.Type` or `.Protocol` next: a metatype of the type before it, not a member type.
+    fn at_metatype_suffix(&self) -> bool {
+        let rest = self.rest();
+        [".Type", ".Protocol"].iter().any(|suffix| {
+            rest.starts_with(suffix) && !rest[suffix.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '(')
+        })
+    }
+
     fn ty(&mut self) -> Parsed<Ty> {
         let mut ty = self.primary_type()?;
+        while self.at_metatype_suffix() {
+            if self.eat(".Protocol") {
+                return Err(self.error("protocol metatypes (`P.Protocol`) are not supported"));
+            }
+            self.position += ".Type".len();
+            ty = Ty::Metatype(Box::new(ty));
+        }
         while self.eat("?") {
             ty = Ty::Optional(Box::new(ty));
         }
@@ -292,11 +307,8 @@ impl<'a> Parser<'a> {
     fn named_type(&mut self) -> Parsed<Ty> {
         let first = self.identifier()?;
         if let Some(param) = self.generic_param(&first) {
-            if self.eat_path_dot() {
+            if !self.at_metatype_suffix() && self.eat_path_dot() {
                 let name = self.identifier()?;
-                if name == "Type" || name == "Protocol" {
-                    return Err(format!("metatypes (`{first}.{name}`) are not supported"));
-                }
                 self.associated_protocol(param, &name)?;
                 return Ok(Ty::Member(param, name));
             }
@@ -314,7 +326,7 @@ impl<'a> Parser<'a> {
                 let (module, where_at) = self.extension_marker()?.expect("`.(extension` was seen");
                 let requirements = self.extension_requirements(where_at)?;
                 extension = Some((segments.len(), module, requirements));
-            } else if !self.eat_path_dot() {
+            } else if self.at_metatype_suffix() || !self.eat_path_dot() {
                 break;
             }
             let name = self.identifier()?;
@@ -1016,6 +1028,7 @@ fn anonymous_generics(ty: &Ty, depth: usize, count: &mut usize, requirements: &m
             Ty::Param(param)
         }
         Ty::Optional(wrapped) => Ty::Optional(Box::new(again(wrapped))),
+        Ty::Metatype(instance) => Ty::Metatype(Box::new(again(instance))),
         Ty::Tuple(elements) => Ty::Tuple(elements.iter().map(|(label, e)| (label.clone(), again(e))).collect()),
         Ty::Nominal { module, path, args, split, extension } => Ty::Nominal {
             module: module.clone(),
