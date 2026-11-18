@@ -52,7 +52,7 @@ impl SwiftFn {
     fn prepare<R>(&self, args: impl SwiftArgs, slot: IndirectSlot, indirect: bool) -> SwiftSyncCall<R> {
         let mut lowering = ArgLowering::new(false);
         args.lower(&mut lowering);
-        SwiftSyncCall { function: self.resolve(), symbol: self.symbol, lowering, slot, indirect, throws: false, consumed: None, invalid: None, result: PhantomData }
+        SwiftSyncCall { function: self.resolve(), symbol: self.symbol, lowering, slot, indirect, throws: false, invalid: None, result: PhantomData }
     }
 
     /// Prepares a call returning `R`; run it with [`SwiftSyncCall::invoke`].
@@ -95,7 +95,6 @@ pub struct SwiftSyncCall<R> {
     indirect: bool,
     throws: bool,
     /// A `self` the callee consumes (`__consuming` methods): passed by address, not destroyed afterwards.
-    consumed: Option<SwiftValue>,
     /// A problem found while preparing the call; reported by `invoke` instead of running it.
     invalid: Option<CallError>,
     result: PhantomData<fn() -> R>,
@@ -152,7 +151,7 @@ impl<R> SwiftSyncCall<R> {
     /// Calls a `__consuming` method of a value passed by address: the callee takes ownership of `value`.
     pub(crate) fn on_consumed(mut self, value: SwiftValue) -> Self {
         self.lowering.regs.self_ = value.as_ptr();
-        self.consumed = Some(value);
+        self.lowering.owned.push(Owned::Value(value).pending());
         self
     }
 }
@@ -176,10 +175,8 @@ impl<R: SwiftRet> SwiftSyncCall<R> {
         unsafe { apus_sys::apus_fill_isolation(&mut self.lowering.regs, main_task) };
         let kind = if self.indirect { KIND_INDIRECT } else if R::FLOAT { KIND_FLOATS } else { KIND_INTEGERS };
         unsafe {
+            super::call::start_all(&mut self.lowering.owned);
             apus_sys::rs_call_sync(function, &self.lowering.regs, self.slot.address(), &mut ret.0, kind);
-            if let Some(consumed) = self.consumed.take() {
-                drop(consumed.into_uninit()); // the callee destroyed the value; only the storage is ours
-            }
             let typed_error = self.lowering.typed_error.take();
             let result = if let (Some(slot), false) = (typed_error, ret.0.error.is_null()) {
                 Err(CallError::Typed(slot.assume_init())) // the callee threw: the slot holds its error
@@ -209,8 +206,7 @@ impl<R: SwiftRet> SwiftSyncCall<R> {
     /// executor. An object that is not an actor makes it `CallError::NotAnActor`.
     #[doc(hidden)]
     pub fn hop(self, to: HopTo) -> SwiftCall<R> {
-        let SwiftSyncCall { function, symbol, lowering, slot, indirect, throws, consumed, invalid, .. } = self;
-        assert!(consumed.is_none(), "apus: a consumed self cannot hop to an executor (the callee would destroy it, then apus again)");
+        let SwiftSyncCall { function, symbol, lowering, slot, indirect, throws, invalid, .. } = self;
         let kind = if indirect { KIND_INDIRECT } else if R::FLOAT { KIND_FLOATS } else { KIND_INTEGERS };
         let executor = match to {
             HopTo::Main => Some(unsafe { super::rt::swift_task_getMainExecutor() }),

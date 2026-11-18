@@ -108,12 +108,43 @@ pub(crate) enum Owned {
     Storage(#[allow(dead_code)] UninitValue),
     /// Shared storage the callee works on in place (an `inout` self).
     Shared(#[allow(dead_code)] Arc<dyn std::any::Any + Send + Sync>),
+    /// What a consumed argument keeps alive, handed over to the callee when the call starts ([`start_all`]);
+    /// released as usual if the call never runs (refused, or its future dropped first).
+    Pending(Box<Owned>),
+}
+
+/// The call is starting: pending hand-overs become the callee's.
+pub(crate) fn start_all(owned: &mut Vec<Owned>) {
+    if owned.iter().any(|o| matches!(o, Owned::Pending(_))) {
+        let all: Vec<Owned> = owned.drain(..).collect();
+        owned.extend(all.into_iter().filter_map(Owned::start));
+    }
 }
 
 impl Owned {
+    /// Marks what this keeps alive for the callee to consume (+1), handed over when the call starts.
+    pub(crate) fn pending(self) -> Owned {
+        match self {
+            Owned::Object(_) | Owned::Native(_) | Owned::Bridge(_) | Owned::Value(_) => Owned::Pending(Box::new(self)),
+            other => other,
+        }
+    }
+
+    fn start(self) -> Option<Owned> {
+        match self {
+            Owned::Pending(_) => {
+                let this = std::mem::ManuallyDrop::new(self);
+                let Owned::Pending(inner) = &*this else { unreachable!() };
+                // Moved out of `this`, which is never dropped.
+                unsafe { std::ptr::read(inner) }.hand_over()
+            }
+            other => Some(other),
+        }
+    }
+
     /// Hands what this keeps alive over to the callee, for an argument it consumes (+1): a reference's +1 becomes
     /// the callee's; a value passed by address becomes the callee's, its storage still ours until the call is over.
-    pub(crate) fn hand_over(self) -> Option<Owned> {
+    fn hand_over(self) -> Option<Owned> {
         match self {
             Owned::Object(_) | Owned::Native(_) | Owned::Bridge(_) => {
                 std::mem::forget(self);
@@ -138,7 +169,7 @@ impl Drop for Owned {
                 Owned::Object(object) => rt::swift_unknownObjectRelease(object),
                 Owned::Native(object) => rt::swift_release(object),
                 Owned::Bridge(word) => rt::swift_bridgeObjectRelease(word as *mut c_void),
-                Owned::Value(_) | Owned::Storage(_) | Owned::Shared(_) => {} // release themselves
+                Owned::Value(_) | Owned::Storage(_) | Owned::Shared(_) | Owned::Pending(_) => {} // release themselves
             }
         }
     }
@@ -190,7 +221,8 @@ pub(crate) struct CallShared {
     typed_error: UnsafeCell<Option<UninitValue>>,
     /// Whether the callee is `throws`: only then is the error register meaningful.
     throws: bool,
-    owned: Vec<Owned>,
+    /// Locked only when the call starts (pending hand-overs) and while it is configured.
+    owned: Mutex<Vec<Owned>>,
     /// Drops a finished result nobody will read (monomorphized for the call's result type).
     discard: unsafe fn(&CallShared),
     state: Mutex<CallState>,
@@ -219,7 +251,7 @@ impl CallShared {
             indirect: UnsafeCell::new(slot),
             typed_error: UnsafeCell::new(typed_error),
             throws: false,
-            owned: lowering.owned,
+            owned: Mutex::new(lowering.owned),
             discard: discard_as::<R>,
             state: Mutex::new(CallState::Registered),
             waker: Mutex::new(None),
@@ -280,6 +312,7 @@ fn take_registered_from(calls: &Mutex<Vec<Arc<CallShared>>>, same_task: bool, no
         if matches!(*state, CallState::Registered) {
             *state = CallState::Running;
             drop(state);
+            start_all(&mut call.owned.lock().unwrap());
             return Some(call);
         }
     }
@@ -408,11 +441,11 @@ impl<R> SwiftCall<R> {
     }
 
     pub(crate) fn owned_count(&mut self) -> usize {
-        self.configure().owned.len()
+        self.configure().owned.get_mut().unwrap().len()
     }
 
     pub(crate) fn hand_over_owned(&mut self, start: usize) {
-        super::func::hand_over(&mut self.configure().owned, start);
+        super::func::hand_over(self.configure().owned.get_mut().unwrap(), start);
     }
 
     fn configure(&mut self) -> &mut CallShared {
@@ -430,7 +463,7 @@ impl<R> SwiftCall<R> {
     pub fn on(mut self, object: &super::SwiftObject) -> Self {
         let call = self.configure();
         call.regs.get_mut().self_ = object.as_ptr();
-        call.owned.push(Owned::Object(unsafe { rt::swift_unknownObjectRetain(object.as_ptr()) }));
+        call.owned.get_mut().unwrap().push(Owned::Object(unsafe { rt::swift_unknownObjectRetain(object.as_ptr()) }));
         self
     }
 
@@ -454,7 +487,7 @@ impl<R> SwiftCall<R> {
         regs.gpr[call.next_int] = opened.ty().as_ptr() as u64;
         regs.gpr[call.next_int + 1] = opened.witness().0 as u64;
         call.next_int += 2;
-        call.owned.push(Owned::Value(copy));
+        call.owned.get_mut().unwrap().push(Owned::Value(copy));
         self
     }
 
@@ -463,7 +496,7 @@ impl<R> SwiftCall<R> {
         let copy = value.clone();
         let call = self.configure();
         call.regs.get_mut().self_ = copy.as_ptr();
-        call.owned.push(Owned::Value(copy));
+        call.owned.get_mut().unwrap().push(Owned::Value(copy));
         self
     }
 
@@ -471,7 +504,7 @@ impl<R> SwiftCall<R> {
     pub(crate) fn on_inout(mut self, address: *mut c_void, keep_alive: Arc<dyn std::any::Any + Send + Sync>) -> Self {
         let call = self.configure();
         call.regs.get_mut().self_ = address;
-        call.owned.push(Owned::Shared(keep_alive));
+        call.owned.get_mut().unwrap().push(Owned::Shared(keep_alive));
         self
     }
 

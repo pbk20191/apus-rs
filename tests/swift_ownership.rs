@@ -5,8 +5,8 @@ mod common;
 #[path = "common/probe.rs"]
 mod probe;
 
-use apus::swift::{SwiftObject, SwiftType, SwiftValue};
-use common::{check, Failed, Trial};
+use apus::swift::{spawn, CallError, SwiftObject, SwiftType, SwiftValue};
+use common::{block, check, Failed, Trial};
 
 apus::swift! {
     #[swift_linked = "Res.Ticket(class).init(id: Int)"]
@@ -23,6 +23,11 @@ apus::swift! {
     fn pass(t: &SwiftObject) -> SwiftValue;
     #[swift_linked = "consuming Res.Pass(struct).redeem() -> Int"]
     fn redeem(self: &SwiftValue) -> i64;
+    // Not in the binary: the calls are refused (Unavailable) before Swift runs them.
+    #[swift = "Res.missing(_: consuming Ticket(class))"]
+    fn missing(t: &SwiftObject);
+    #[swift = "Res.missingLater(_: consuming Ticket(class)) async"]
+    async fn missing_later(t: &SwiftObject);
 }
 
 fn new_ticket(id: i64) -> SwiftObject {
@@ -57,10 +62,20 @@ fn consuming_self_takes_a_copy() -> Result<(), Failed> {
     check(gone(2003).unwrap(), "until the pass goes")
 }
 
+fn a_refused_call_keeps_what_it_would_have_handed_over() -> Result<(), Failed> {
+    let t = new_ticket(2004);
+    check(matches!(missing(&t), Err(CallError::Unavailable(_))), "sync: unavailable")?;
+    let later = missing_later(&t);
+    check(matches!(block(spawn(later)).unwrap(), Err(CallError::Unavailable(_))), "async: unavailable")?;
+    drop(t);
+    check(gone(2004).unwrap(), "nothing kept a reference")
+}
+
 fn main() {
     common::run(vec![
         Trial::test("consuming_parameters_are_handed_over", consuming_parameters_are_handed_over),
         Trial::test("borrowing_initializer_parameters_are_not", borrowing_initializer_parameters_are_not),
         Trial::test("consuming_self_takes_a_copy", consuming_self_takes_a_copy),
+        Trial::test("a_refused_call_keeps_what_it_would_have_handed_over", a_refused_call_keeps_what_it_would_have_handed_over),
     ]);
 }

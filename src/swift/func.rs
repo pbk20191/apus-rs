@@ -343,10 +343,10 @@ pub fn __bind<B: BindAsyncReceiver, R>(this: B, mut call: SwiftCall<R>, consumes
     call
 }
 
-/// Hands the entries from `start` on over to the callee (see [`Owned::hand_over`]).
+/// Marks the entries from `start` on for the callee to consume, handed over when the call starts.
 pub(crate) fn hand_over(owned: &mut Vec<Owned>, start: usize) {
     let lowered: Vec<Owned> = owned.drain(start..).collect();
-    owned.extend(lowered.into_iter().filter_map(Owned::hand_over));
+    owned.extend(lowered.into_iter().map(Owned::pending));
 }
 
 /// An argument the callee consumes (+1): an initializer's arguments, a setter's new value. `swift!` wraps them.
