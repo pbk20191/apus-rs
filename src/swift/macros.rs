@@ -417,7 +417,7 @@ macro_rules! __swift_call {
         $crate::__swift_call!($function [$($f,)* __apus_self_type $(, $g)*] [$($generic)*] declared)
     }};
     // `wrapped [(argument Wrapper)…]`: arguments whose Rust type the declaration fixes (`ClassBound`, `Metatype`,
-    // `CFunctionArg`, `BlockArg`).
+    // `Existential`, `CFunctionArg`, `BlockArg`).
     // A C function's or block's wrapper also takes the declared shape.
     ($function:ident [$($arg:ident),*] [wrapped [$(($wa:ident $wk:ident $($ws:literal)?))*] $($generic:tt)*] $declared:expr) => {{
         $(let $wa = $crate::swift::$wk($wa $(, $ws)?);)*

@@ -223,9 +223,14 @@ static (extension in _Concurrency where Success == Never, Failure == Never)
 - Metatypes: `T.Type`, a class's `Base(class).Type` and `Any.Type` are `SwiftType`s, as arguments and results; a
   `T.Type` argument also gives T (`decode<T: Decodable>(_: T.Type, from: …) -> T`). A struct's or enum's metatype
   (Swift passes nothing for it), an optional one and `any P.Type` are refused.
-- Both rest on swiftc's type lowering (one pointer each), which the calling-convention document does not spell out;
-  Apple's frameworks export functions compiled that way, so ABI stability keeps it. So does a generic struct's
-  members taking `Self`'s metadata.
+- An `any P` argument or result (optional or not) is a `SwiftValue`. When its protocols are class-bound
+  (`any Named`, `Named: AnyObject`), Swift passes and returns it in registers, as its reference and one witness
+  table per protocol; any other existential by address. Only the type's metadata tells which, so the call reads it
+  (`Existential` wraps an argument declared `any P`; up to three protocols). A generic parameter's value goes by
+  address whatever its type.
+- These rest on swiftc's type lowering (one pointer each; a class existential's words in registers), which the
+  calling-convention document does not spell out; Apple's frameworks export functions compiled that way, so ABI
+  stability keeps it. So does a generic struct's members taking `Self`'s metadata.
 - A variadic generic type's pack argument is written as Swift's demangler prints it, since the use site does not
   show that the type is variadic: `Foundation.Predicate(struct)<Pack{T}>` for `Predicate<T>`,
   `M.Mixed(struct)<Int, Pack{String, Bool}>`. Declarations with packs of their own (`<each T>`) are not supported.

@@ -36,6 +36,14 @@ apus::swift! {
     fn label_of_unmarked(named: &SwiftValue) -> String;
     #[swift_linked = "Res.isTagged<T: Tagged(AnyObject)>(_: T) -> Bool"]
     fn is_tagged_marked(tagged: &SwiftObject) -> bool;
+    #[swift_linked = "Res.anyNamed(_: String) -> any Named"]
+    fn any_named(name: &str) -> SwiftValue;
+    #[swift_linked = "Res.labelOfAny(_: any Named) -> String"]
+    fn label_of_any(named: &SwiftValue) -> String;
+    #[swift_linked = "Res.maybeNamed(_: String) -> (any Named)?"]
+    fn maybe_named(name: &str) -> SwiftValue;
+    #[swift_linked = "Res.labelOfMaybe(_: (any Named)?) -> String"]
+    fn label_of_maybe(named: &SwiftValue) -> String;
     #[swift_linked = "Res.unitSymbol(_: __C.NSUnit(class)) -> String"]
     fn unit_symbol(unit: &SwiftObject) -> String;
     // Foundation's own: a member of a generic type whose parameter is class-bound.
@@ -72,6 +80,16 @@ fn class_bound_protocols_are_checked() -> Result<(), Failed> {
     check(matches!(mismarked, Err(CallError::InvalidArgument(_))), format!("mismarked: {mismarked:?}"))
 }
 
+/// `any Named` (`Named: AnyObject`) is a class existential: its reference and witness table, in registers.
+fn class_existentials_are_passed_in_registers() -> Result<(), Failed> {
+    let named = any_named("Rex").unwrap();
+    let label = label_of_any(&named);
+    check(matches!(&label, Ok(l) if l == "named Rex"), format!("{label:?}"))?;
+    // Optional: the same words, nil all zero (an empty name gives nil).
+    let labels = ["Fido", ""].map(|name| label_of_maybe(&maybe_named(name).unwrap()));
+    check(matches!(&labels, [Ok(a), Ok(b)] if a == "named Fido" && b == "nobody"), format!("{labels:?}"))
+}
+
 fn metatypes_are_metadata() -> Result<(), Failed> {
     check(describe_type(SwiftType::of::<i64>()).unwrap() == "Int", "T.Type")?;
     check(any_type_name(SwiftType::of::<String>()).unwrap() == "String", "Any.Type")?;
@@ -87,6 +105,7 @@ fn main() {
         Trial::test("class_bound_values_are_references", class_bound_values_are_references),
         Trial::test("metatypes_are_metadata", metatypes_are_metadata),
         Trial::test("class_bound_protocols_are_checked", class_bound_protocols_are_checked),
+        Trial::test("class_existentials_are_passed_in_registers", class_existentials_are_passed_in_registers),
         Trial::test("members_of_class_bound_generic_types", members_of_class_bound_generic_types),
     ]);
 }

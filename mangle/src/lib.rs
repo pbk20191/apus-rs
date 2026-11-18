@@ -125,6 +125,9 @@ pub enum ArgumentKind {
     CFunction(String),
     /// `@convention(block)`, optional or not: an Objective-C block, of the shape given.
     Block(String),
+    /// `any P`, optional or not: a class existential (its protocols class-bound) goes in registers, as its reference
+    /// and witness tables; any other by address. Only the type's metadata tells which, at run time.
+    Existential,
 }
 
 /// A result whose Rust type the declaration fixes, for the same reason as [`ArgumentKind`].
@@ -479,13 +482,18 @@ impl Declaration {
         let kind = |ty: &ast::Ty| match ty {
             ast::Ty::Param(param) if class_bound.contains(param) => Some(ArgumentKind::ClassBound),
             ast::Ty::Metatype(_) => Some(ArgumentKind::Metatype),
+            ast::Ty::Existential(_) => Some(ArgumentKind::Existential),
+            ast::Ty::Optional(wrapped) if matches!(**wrapped, ast::Ty::Existential(_)) => Some(ArgumentKind::Existential),
             ty => foreign_function(ty).map(|function| match function.convention {
                 ast::Convention::C => ArgumentKind::CFunction(foreign_shape(function)),
                 _ => ArgumentKind::Block(foreign_shape(function)),
             }),
         };
         Ok(match &decl.signature {
-            ast::Signature::Function { params, .. } => params.iter().map(|p| if p.inout { None } else { kind(&p.ty) }).collect(),
+            ast::Signature::Function { params, .. } => {
+                // `isolated (any Actor)?` is the call's isolation (`Isolation`); `any P...` an array.
+                params.iter().map(|p| if p.inout || p.isolated || p.variadic { None } else { kind(&p.ty) }).collect()
+            }
             ast::Signature::Getter(_) | ast::Signature::Case(_) => Vec::new(),
             ast::Signature::Setter(ty) => vec![kind(ty)],
             ast::Signature::Subscript { params, result, setter } => {
@@ -1007,6 +1015,11 @@ mod isolation_tests {
         assert_eq!(init.argument_kinds().unwrap(), vec![None, Some(ArgumentKind::ClassBound)]);
         let constrained = parsed("(extension in M where T: Base(class)) M.Box(struct)<T>.put(_: T)");
         assert_eq!(constrained.argument_kinds().unwrap(), vec![Some(ArgumentKind::ClassBound)]);
+        // An existential parameter: passed in registers when its protocols are class-bound, which only its metadata
+        // tells; a generic parameter's value is passed by address whatever its type.
+        let existential = parsed("M.f<T>(_: any P, _: (any P)?, _: T, _: [any P])");
+        assert_eq!(existential.argument_kinds().unwrap(), vec![Some(ArgumentKind::Existential), Some(ArgumentKind::Existential), None, None]);
+        assert_eq!(parsed("M.f(_: isolated (any Actor)?, _: any P...)").argument_kinds().unwrap(), vec![None, None]);
         // A class-bound protocol (`protocol PersistentModel: AnyObject`) is marked `(AnyObject)`, which the
         // declaration cannot show otherwise; its symbol is the unmarked one's. The witness entry says what the
         // protocol's descriptor must say at run time.

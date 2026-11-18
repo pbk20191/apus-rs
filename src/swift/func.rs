@@ -290,6 +290,30 @@ impl SwiftArg for &SwiftValue {
     }
 }
 
+/// An `any P` argument (optional or not). A class existential, whose protocols are class-bound, is passed in
+/// registers as its reference and witness tables; any other existential by address, as a `&SwiftValue` is. `swift!`
+/// wraps an argument declared `any P`; a generic parameter's value goes by address whatever its type, so pass that
+/// one unwrapped.
+pub struct Existential<'a>(pub &'a SwiftValue);
+
+impl SwiftArg for Existential<'_> {
+    fn lower(&self, into: &mut ArgLowering) {
+        let Some(words) = self.0.ty().class_existential_words() else {
+            return self.0.lower(into);
+        };
+        if words > 4 {
+            // swiftcall expands an aggregate of at most four words into registers, and passes a larger one by address.
+            return into.fail(CallError::InvalidArgument("a class existential of more than three protocols is not supported"));
+        }
+        let copy = self.0.clone(); // the call may outlive the borrow
+        let container = copy.as_ptr() as *const u64;
+        for word in 0..words {
+            into.int(unsafe { *container.add(word) });
+        }
+        into.owned.push(Owned::Value(copy));
+    }
+}
+
 /// A concrete `[T]` parameter: an array is one reference, passed directly.
 impl<T: IntoSwift + Clone> SwiftArg for Vec<T> {
     fn lower(&self, into: &mut ArgLowering) {
@@ -556,7 +580,13 @@ impl SwiftRet for SwiftValue {
             // `Self`: by address, of the receiver's type, which binding the receiver adds.
             return Ok((IndirectSlot::receiver_self(), true));
         }
-        Ok((IndirectSlot::boxed(UninitValue::new(declared_type(result_type)?), false), true))
+        let ty = declared_type(result_type)?;
+        if result_type.ty.is_none() && ty.class_existential_words().is_some() {
+            // A declared `any P` whose protocols are class-bound: in registers (a generic parameter's value, whose type
+            // comes in `ty`, is returned by address whatever its type).
+            return DirectValue::result_slot(result_type);
+        }
+        Ok((IndirectSlot::boxed(UninitValue::new(ty), false), true))
     }
 }
 

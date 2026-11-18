@@ -193,3 +193,9 @@ public struct Tray<T> {
     public static func size(plus n: Int) -> Int { MemoryLayout<T>.size + n }
 }
 public func pearTray(count: Int) -> Tray<String> { Tray(item: "pear", count: count) }
+// A class-bound existential (tests/swift_class_bound.rs): Swift passes and returns it as its reference and witness
+// table, in registers.
+public func anyNamed(_ name: String) -> any Named { Dog(name: name) }
+public func labelOfAny(_ x: any Named) -> String { x.label }
+public func maybeNamed(_ name: String) -> (any Named)? { name.isEmpty ? nil : Dog(name: name) }
+public func labelOfMaybe(_ x: (any Named)?) -> String { x?.label ?? "nobody" }

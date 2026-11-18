@@ -339,7 +339,8 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         }
     }
     // Arguments Swift passes as one pointer where a value would go by address: a class-bound generic parameter's
-    // (a class reference) and a metatype (a `SwiftType`). Wrapped so that another Rust type does not compile.
+    // (a class reference) and a metatype (a `SwiftType`). Wrapped so that another Rust type does not compile. An
+    // `any P` too: in registers when its protocols are class-bound, which its metadata tells at run time.
     if let Some((declaration, parsed)) = &declared {
         let kinds = match parsed.argument_kinds() {
             Ok(kinds) => kinds,
@@ -352,6 +353,7 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
                 let (wrapper, shape) = match kind.as_ref()? {
                     apus_mangle::ArgumentKind::ClassBound => ("ClassBound", None),
                     apus_mangle::ArgumentKind::Metatype => ("Metatype", None),
+                    apus_mangle::ArgumentKind::Existential => ("Existential", None),
                     apus_mangle::ArgumentKind::CFunction(shape) => ("CFunctionArg", Some(shape)),
                     apus_mangle::ArgumentKind::Block(shape) => ("BlockArg", Some(shape)),
                 };

@@ -88,6 +88,26 @@ impl SwiftType {
         unsafe { SwiftType(*(self.0 as *const *const c_void).add(2 + index)) }
     }
 
+    /// The words of a class existential (`any P` whose protocols are class-bound, `AnyObject`), optional or not: its
+    /// reference, then one witness table per protocol (docs/ABI/TypeLayout.rst, "class existential containers";
+    /// ExistentialTypeFlags in include/swift/ABI/MetadataValues.h). `None` for any other type.
+    pub(crate) fn class_existential_words(self) -> Option<usize> {
+        unsafe {
+            let kind = *(self.0 as *const usize) as u32;
+            if kind == rt::METADATA_KIND_OPTIONAL {
+                let wrapped = self.generic_argument(0);
+                return (*(wrapped.0 as *const usize) as u32 == rt::METADATA_KIND_EXISTENTIAL).then(|| wrapped.class_existential_words())?;
+            }
+            if kind != rt::METADATA_KIND_EXISTENTIAL {
+                return None;
+            }
+            let flags = *(self.0.byte_add(std::mem::size_of::<usize>()) as *const u32);
+            let class = flags & rt::EXISTENTIAL_ANY_CLASS_CONSTRAINT == 0;
+            let special = flags & rt::EXISTENTIAL_SPECIAL_PROTOCOL_MASK != 0;
+            (class && !special).then(|| 1 + (flags & rt::EXISTENTIAL_WITNESS_TABLES_MASK) as usize)
+        }
+    }
+
     /// Whether this is a class: a Swift class, an Objective-C class or a Core Foundation type
     /// (include/swift/ABI/MetadataKind.def; a Swift class's kind word is its isa pointer).
     pub(crate) fn is_class(self) -> bool {
