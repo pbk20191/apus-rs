@@ -46,3 +46,6 @@ public func figure(_ i: Int) -> Figure {
     default: return .empty
     }
 }
+
+// A raw-value enum: `init?(rawValue:)` and `rawValue` through their symbols (tests/swift_init.rs).
+public enum Grade: Int { case low = 1, high = 5 }

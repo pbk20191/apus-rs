@@ -28,6 +28,32 @@
 ///   - `#[symbol = "$s…"]` / `#[linked = "$s…"]`: the mangled symbol itself, at run time / at link time.
 /// - A leading `self: &SwiftObject` or `self: &SwiftValue` declares a method or property of that receiver:
 ///   `fn total(self: &SwiftValue) -> i64;` is called as `total(&cart)`.
+/// - An initializer (`Module.Type(kind).init(…)`, returning the type unless written: `-> T?` when failable) or a
+///   static member takes the type's metatype as `self`: a class's is `self: &SwiftType` (its metadata), a struct's or
+///   enum's is nothing. The wrong one is a compile error:
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "Probe.Minted(class).init(n: Int)"]
+///     fn minted(n: i64) -> apus::swift::SwiftObject; // needs `self: &SwiftType`
+/// }
+/// ```
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "Probe.Made(struct).init(x: Int)"]
+///     fn made(self: &apus::swift::SwiftType, x: i64) -> apus::swift::SwiftValue; // a struct passes no `self`
+/// }
+/// ```
+///
+/// ```
+/// apus::swift! {
+///     #[swift = "Probe.Minted(class).init(n: Int)"]
+///     fn minted(self: &apus::swift::SwiftType, n: i64) -> apus::swift::SwiftObject;
+///     #[swift = "Probe.Made(struct).init(x: Int)"]
+///     fn made(x: i64) -> apus::swift::SwiftValue;
+/// }
+/// ```
 /// - Parameter and result types are the ones [`SwiftAsyncFn::call`](crate::swift::SwiftAsyncFn::call) accepts,
 ///   and must match the Swift signature: nothing checks them. A `SwiftValue` (returned by address) or
 ///   `DirectValue` (returned in registers) result takes its Swift type from the `#[swift = …]` declaration.

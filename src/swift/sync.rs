@@ -115,6 +115,12 @@ impl<R> SwiftSyncCall<R> {
         self
     }
 
+    /// Calls a class's initializer or static member: the class (its metadata, which lives forever) is `self`.
+    pub fn on_type(mut self, ty: SwiftType) -> Self {
+        self.lowering.regs.self_ = ty.as_ptr() as *mut std::ffi::c_void;
+        self
+    }
+
     /// Calls a protocol requirement on an opened `any P`: the value's address is `self`, and the dynamic type and
     /// the witness table follow the arguments.
     pub fn on_opened(mut self, opened: &super::value::Opened) -> Self {

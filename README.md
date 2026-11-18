@@ -143,6 +143,7 @@ the standard library spelled out:
 [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name[<U: P>]([label|_]: Type, …)
     [async] [throws] [-> Type] [where …]
 [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name: Type { get }
+[(extension in Module [where …])] Module.Type(kind)[<T, …>]….init[<U: P>]([label|_]: Type, …) [async] [throws] [-> Type?]
 ```
 
 - Types: `Int`, `String`, `Bool`, `Double`, `UInt8`, … ; `[T]`, `[K: V]`, `Set<T>`, `T?`, tuples, `Any`,
@@ -154,6 +155,10 @@ the standard library spelled out:
   `Shop.Box(struct)<T>.get() -> T?`, `Swift.Array<Element>.first: Element? { get }`, `Keyed(struct)<K: Hashable>`.
 - Protocol members: `Shop.Shape(protocol).area() -> Double`; the conforming type is `Self`. Call them on an
   `any Shape` value opened with `SwiftValue::open()` (`self: &Opened`).
+- Initializers: `Shop.Cart(struct).init(items: [String])`, `Shop.Level(enum).init(rawValue: Int) -> Level(enum)?`
+  (the result is the type unless written; a failable one returns an optional). An initializer or `static` member of a
+  class or actor takes the class as `self` (`self: &SwiftType`, its metadata); a struct's or enum's takes no `self`.
+  `swift!` refuses the wrong one. Protocol initializers and static protocol requirements are not supported.
 - A value receiver (`self: &SwiftValue`, `self: &Opened`) is passed as a copy: a `mutating` method changes the copy,
   never the Rust-side value.
 - `(extension in Module)` marks a member of an extension that Swift mangles as one: an extension in another
@@ -166,7 +171,7 @@ static (extension in _Concurrency where Success == Never, Failure == Never)
 ```
 
 - Isolation: `isolated` parameters, `@MainActor`, `nonisolated`, `nonisolated(nonsending)`, `(actor)`, `throws(E)`.
-- Not supported yet: operators, initializers, subscripts, setters, non-ASCII names,
+- Not supported yet: operators, subscripts, setters, non-ASCII names,
   ownership attributes, more than one generic enclosing type. A declaration that cannot be mangled
   is a compile error; for anything unsupported, pass the symbol itself with `#[symbol]`.
 

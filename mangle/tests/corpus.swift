@@ -121,3 +121,14 @@ public func applySync(_ f: (Int) -> Int) -> Int { 0 }
 public func applyMain(_ f: @MainActor (Int) async -> Int) async -> Int { 0 }
 public func applyVoid(_ f: @escaping () async -> Void) async {}
 public func applyLabeled(count: Int, transform f: (Double) -> Double) -> Double { 0 }
+// Initializers: the allocating entry point (`fC`).
+public enum Level: Int { case low = 1, high = 5 }
+public struct Made { public var x = 0
+  public init(x: Int) { self.x = x }
+  public init(_ a: Int, _ b: String) {}
+  public init(parse: String) throws {}
+  public init(slow: Int) async {}
+  public init<T>(any: T) {}
+  public init?(maybe: Int) {}
+}
+public final class Built { public init(n: Int) {} ; public static func make() -> Built { Built(n: 1) } }

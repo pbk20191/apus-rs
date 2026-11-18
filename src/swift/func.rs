@@ -460,6 +460,16 @@ impl SwiftReceiver for SwiftObject {
     }
 }
 
+/// A class as `self`: its initializers and static members (a struct's or enum's take no `self`).
+impl SwiftReceiver for SwiftType {
+    fn bind<R>(&self, call: SwiftCall<R>) -> SwiftCall<R> {
+        call.on_type(*self)
+    }
+    fn bind_sync<R>(&self, call: super::SwiftSyncCall<R>) -> super::SwiftSyncCall<R> {
+        call.on_type(*self)
+    }
+}
+
 /// `self` by address: a large or resilient struct. (A small struct of the caller's own module is passed in
 /// registers instead; that is not supported as a receiver.)
 impl SwiftReceiver for SwiftValue {

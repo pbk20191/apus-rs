@@ -148,6 +148,18 @@ const DECLARATIONS: &[&str] = &[
     "Probe.applyMain(_: @MainActor (Int) async -> Int) async -> Int",
     "Probe.applyVoid(_: @escaping () async -> Void) async",
     "Probe.applyLabeled(count: Int, transform: (Double) -> Double) -> Double",
+    // initializers: the result is the type itself unless written (`-> T?` for a failable one)
+    "Probe.Level(enum).init(rawValue: Int) -> Level(enum)?",
+    "Probe.Made(struct).init(x: Int)",
+    "Probe.Made(struct).init(_: Int, _: String)",
+    "Probe.Made(struct).init(parse: String) throws",
+    "Probe.Made(struct).init(slow: Int) async",
+    "Probe.Made(struct).init<T>(any: T)",
+    "Probe.Made(struct).init(maybe: Int) -> Made(struct)?",
+    "Probe.Counter(class).init()",
+    "Probe.Box(struct)<T>.init()",
+    "Probe.Built(class).init(n: Int)",
+    "static Probe.Built(class).make() -> Built(class)",
 ];
 
 /// Enum cases: each mangles to the tag symbol a library-evolution module exports for it.

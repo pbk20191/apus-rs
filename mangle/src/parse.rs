@@ -550,7 +550,15 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            let result = if self.eat("->") { self.ty()? } else { Ty::Tuple(Vec::new()) };
+            let result = if self.eat("->") {
+                self.ty()?
+            } else if member.name == "init" {
+                // An initializer returns the type itself (written out only for a failable one: `-> T?`).
+                let args = (0..context_params).map(|index| Ty::Param(GenericParam { depth: 0, index })).collect();
+                Ty::Nominal { module: self.module.clone(), path: context.clone(), args }
+            } else {
+                Ty::Tuple(Vec::new())
+            };
             Signature::Function { params, result, is_async, throws, typed_error }
         } else if self.eat(":") {
             let ty = self.ty()?;
@@ -565,6 +573,18 @@ impl<'a> Parser<'a> {
         };
         if self.eat_keyword("where") {
             self.where_clause(&mut requirements)?;
+        }
+        if member.name == "init" {
+            match context.last() {
+                None => return Err("`init` belongs to a type: `Module.Type(kind).init(…)`".into()),
+                Some((_, Kind::Protocol)) => return Err("protocol initializers are not supported".into()),
+                _ if is_static => return Err("an initializer is not `static`".into()),
+                _ if !matches!(signature, Signature::Function { .. }) => return Err("expected `init(…)`".into()),
+                _ if generic_params == 0 && !requirements.is_empty() => {
+                    return Err("a `where` clause on an initializer needs generic parameters of its own".into())
+                }
+                _ => {}
+            }
         }
         self.skip_whitespace();
         if !self.rest().is_empty() {

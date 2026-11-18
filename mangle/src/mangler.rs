@@ -561,7 +561,10 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
         }
         m.push("E");
     }
-    m.identifier(&decl.name)?;
+    let is_init = decl.name == "init";
+    if !is_init {
+        m.identifier(&decl.name)?;
+    }
     match &decl.signature {
         Signature::Getter(ty) => {
             m.ty(&canonical(ty, &same_types))?;
@@ -633,6 +636,23 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
                 }
                 None if *throws => m.push("K"),
                 None => {}
+            }
+            if is_init {
+                // The allocating initializer: a function type (`c`), generic (`…lu`) when it has parameters of its
+                // own, then `fC`.
+                m.push("c");
+                if decl.generic_params > 0 {
+                    for requirement in sorted_requirements(&decl.requirements) {
+                        m.requirement(&requirement)?;
+                    }
+                    if decl.generic_params > 1 {
+                        m.push("r");
+                        m.push(&index(decl.generic_params - 1));
+                    }
+                    m.push("lu");
+                }
+                m.push("fC");
+                return Ok(m.buffer);
             }
             if decl.generic_params > 0 {
                 for requirement in sorted_requirements(&decl.requirements) {

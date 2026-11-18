@@ -320,3 +320,11 @@ nonisolated(unsafe) var keptClosure: (@Sendable () -> Int)?
 public enum Light { case red, amber(Int), green }
 // Its metadata, kept alive for the test (nothing else in the binary refers to the type).
 public func lightMetadata() -> UnsafeRawPointer { unsafeBitCast(Light.self as Any.Type, to: UnsafeRawPointer.self) }
+
+// A class's initializer and static method take the class (its metadata) as `self` (tests/swift_init.rs).
+public final class Minted {
+    public let n: Int
+    public init(n: Int) { self.n = n }
+    public static func twice(_ n: Int) -> Minted { Minted(n: n * 2) }
+    public var value: Int { n }
+}

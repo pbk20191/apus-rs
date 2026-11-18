@@ -32,6 +32,8 @@ impl std::error::Error for Error {}
 /// [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name[<U: P>]([label|_]: Type, …)
 ///     [async] [throws] [-> Type] [where …]
 /// [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name: Type { get }
+/// [(extension in Module [where …])] Module.Type(kind)[<T, …>]….init[<U: P>]([label|_]: Type, …) [async] [throws] [-> Type?]
+/// case Module.Type(kind)[<T, …>]….Enum(enum).name[([label:] Type, …)]
 /// ```
 ///
 /// - Types: standard library names (`Int`, `String`, `Bool`, `Double`, `UInt8`, …), `[T]`, `[K: V]`, `Set<T>`,
@@ -47,7 +49,10 @@ impl std::error::Error for Error {}
 ///   another module than the type's, any constrained extension (`(extension in M where Element == Int)`), and
 ///   every protocol extension. Inside it, bare names belong to the extension's module.
 /// - Function types: `(Int, String) async throws -> String`, with `@escaping`, `@Sendable`, `@MainActor`.
-/// - Not supported: operators, initializers, subscripts, setters, non-ASCII names,
+/// - Initializers mangle to their allocating entry point (`…fC`); the result is the type itself unless written
+///   (`-> Level(enum)?` for a failable one). Protocol initializers are not supported.
+/// - `case …` gives an enum case's tag symbol (`…WC`), which library-evolution modules export.
+/// - Not supported: operators, subscripts, setters, non-ASCII names,
 ///   isolation and ownership attributes, more than one generic enclosing type, parameter packs.
 pub fn mangle(declaration: &str) -> Result<String, Error> {
     let decl = parse::parse(declaration).map_err(Error)?;
@@ -72,6 +77,17 @@ pub enum Isolation {
     MainActor,
 }
 
+/// What a call passes as `self` for the type itself: a static member or an initializer gets its type's metatype.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TypeSelf {
+    /// An instance member or a free function.
+    NotStatic,
+    /// A struct's or enum's metatype is thin: nothing is passed.
+    Thin,
+    /// A class's or actor's metatype is its metadata, passed as `self`.
+    Thick,
+}
+
 /// A declaration parsed once, for a caller that asks several of the questions below about it (`swift!`).
 pub struct Declaration(ast::Decl);
 
@@ -88,12 +104,25 @@ impl Declaration {
             ast::Signature::Function { is_async, .. } => !is_async,
             ast::Signature::Case(_) => return Isolation::None,
         };
-        let actor_member = !decl.is_static && decl.context.last().is_some_and(|(_, kind)| *kind == ast::Kind::Actor);
+        let actor_member = !decl.is_static && decl.name != "init" && decl.context.last().is_some_and(|(_, kind)| *kind == ast::Kind::Actor);
         match () {
             _ if !sync || decl.nonisolated => Isolation::None,
             _ if decl.main_actor => Isolation::MainActor,
             _ if actor_member => Isolation::Actor,
             _ => Isolation::None,
+        }
+    }
+
+    /// See [`TypeSelf`].
+    pub fn type_self(&self) -> TypeSelf {
+        let decl = &self.0;
+        if !decl.is_static && decl.name != "init" {
+            return TypeSelf::NotStatic;
+        }
+        match decl.context.last() {
+            Some((_, ast::Kind::Class | ast::Kind::Actor)) => TypeSelf::Thick,
+            Some((_, ast::Kind::Struct | ast::Kind::Enum)) => TypeSelf::Thin,
+            _ => TypeSelf::NotStatic,
         }
     }
 
@@ -110,6 +139,9 @@ impl Declaration {
     pub fn check_callable(&self) -> Result<(), Error> {
         if let ast::Signature::Case(_) = &self.0.signature {
             return Err(Error("an enum case is not callable: `mangle!` gives its tag symbol, for `SwiftEnumCase`".into()));
+        }
+        if self.0.is_static && self.0.context.last().is_some_and(|(_, kind)| *kind == ast::Kind::Protocol) {
+            return Err(Error("static protocol requirements are not supported".into()));
         }
         if let ast::Signature::Function { params, .. } = &self.0.signature {
             if params.iter().any(|p| p.isolated && !matches!(p.ty, ast::Ty::Optional(_))) {
@@ -334,6 +366,22 @@ mod isolation_tests {
             super::closure_shapes("M.f(_: (Int, Any) async throws -> String, _: (any Error) -> Void, _: (any P) -> Any, _: Int)").unwrap();
         // `any Error` is one box pointer in a register; `any P` may be class-bound (registers) or not (address).
         assert_eq!(shapes, vec![Some("at(di)d".into()), Some("s(d)-".into()), Some("s(?)i".into()), None]);
+    }
+
+    #[test]
+    fn statics_and_initializers_take_a_class_as_self() {
+        use super::{Declaration, TypeSelf};
+        let of = |d: &str| Declaration::parse(d).unwrap().type_self();
+        assert_eq!(of("M.Made(struct).init(x: Int)"), TypeSelf::Thin);
+        assert_eq!(of("static M.Level(enum).all() -> [Level(enum)]"), TypeSelf::Thin);
+        assert_eq!(of("M.Built(class).init(n: Int)"), TypeSelf::Thick);
+        assert_eq!(of("static M.Built(class).make() -> Built(class)"), TypeSelf::Thick);
+        assert_eq!(of("M.Tally(actor).init()"), TypeSelf::Thick);
+        assert_eq!(of("M.Built(class).value: Int { get }"), TypeSelf::NotStatic);
+        assert_eq!(of("M.free() -> Int"), TypeSelf::NotStatic);
+        assert!(super::check_callable("static M.Shape(protocol).make() -> Self").is_err(), "a static requirement");
+        assert_eq!(of("M.Tally(actor).init()"), TypeSelf::Thick);
+        assert_eq!(super::isolation("M.Tally(actor).init()").unwrap(), Isolation::None, "an actor's init is nonisolated");
     }
 
     #[test]

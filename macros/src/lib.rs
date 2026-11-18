@@ -113,6 +113,19 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         },
         _ => None,
     };
+    // A static member or initializer gets its type as `self`: a class's metadata, nothing for a struct or enum.
+    if let Some((declaration, parsed)) = &declared {
+        let receiver = rust_receiver(tail);
+        match parsed.type_self() {
+            apus_mangle::TypeSelf::Thick if !receiver.as_deref().is_some_and(|r| r.ends_with("SwiftType")) => {
+                return item_compile_error(&format!("`{declaration}` takes its class as `self`: declare `self: &SwiftType` first"));
+            }
+            apus_mangle::TypeSelf::Thin if receiver.is_some() => {
+                return item_compile_error(&format!("`{declaration}` belongs to a struct or enum, which passes no `self`: declare no receiver"));
+            }
+            _ => {}
+        }
+    }
     // The Rust signature's `throws`: a bracket group holding just that word.
     let rust_throws = tail.iter().any(|t| matches!(t, TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket && g.stream().to_string() == "throws"));
     // The Rust signature's `ErrorSlot` argument (an identifier anywhere in its groups).
@@ -239,6 +252,16 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     out.push(TokenTree::Punct(Punct::new('!', Spacing::Alone)));
     out.push(TokenTree::Group(Group::new(Delimiter::Brace, body.into_iter().collect())));
     out.into_iter().collect()
+}
+
+/// The Rust signature's receiver type as text (the third bracket group, `this : & Type`), if it has one.
+fn rust_receiver(tail: &[TokenTree]) -> Option<String> {
+    let receiver = tail.iter().filter_map(|t| match t {
+        TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket => Some(g),
+        _ => None,
+    }).nth(2)?;
+    let text: String = flatten(receiver.stream()).iter().map(|t| t.to_string()).collect::<Vec<_>>().join(" ");
+    (!text.trim().is_empty()).then(|| text.trim().to_string())
 }
 
 /// The Rust signature's argument names: identifiers followed by a single `:` in its argument group (the fourth
