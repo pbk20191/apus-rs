@@ -154,15 +154,17 @@ where
     }
 }
 
-/// Whether a task is running on this (main) thread right now: then it is a main task.
-#[cfg(feature = "swift")]
+/// Whether a task is running on this (main) thread right now: then it is a main task, of either runtime.
 fn inside_main_task() -> bool {
-    !unsafe { crate::swift::rt::swift_task_getCurrent() }.is_null()
-}
-
-#[cfg(all(feature = "dispatch", not(feature = "swift")))]
-fn inside_main_task() -> bool {
-    crate::dispatch::in_main_task()
+    #[cfg(feature = "swift")]
+    if !unsafe { crate::swift::rt::swift_task_getCurrent() }.is_null() {
+        return true;
+    }
+    #[cfg(feature = "dispatch")]
+    if crate::dispatch::in_main_task() {
+        return true;
+    }
+    false
 }
 
 #[cfg(feature = "swift")]

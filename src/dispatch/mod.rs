@@ -45,7 +45,6 @@ thread_local! {
 }
 
 /// True while a main-queue task is being polled on this thread.
-#[allow(dead_code)] // used by run_main without the swift backend
 pub(crate) fn in_main_task() -> bool {
     IN_MAIN_TASK.get()
 }

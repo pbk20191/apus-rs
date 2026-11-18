@@ -21,5 +21,10 @@ fn main() {
     });
     let refused = run_main(async { std::panic::catch_unwind(|| run_main(async { 1 })).is_err() });
     assert!(refused, "nested run_main returned");
+    // The same from a dispatch main-queue task, whichever runtime run_main itself uses.
+    let refused = run_main(async {
+        apus::dispatch::spawn_on_main(async { std::panic::catch_unwind(|| run_main(async { 1 })).is_err() }).await.unwrap()
+    });
+    assert!(refused, "nested run_main in a dispatch main task returned");
     println!("nested_run_main_panics ... ok");
 }
