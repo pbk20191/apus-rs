@@ -339,3 +339,5 @@ public final class Holder {
     public init(s: String, o: Minted) { self.s = s; self.o = o }
     public var text: String { s }
 }
+// A nonsending function taking a closure: its shape is checked like any other (tests/swift_closures.rs).
+@inline(never) nonisolated(nonsending) public func applyInherited(_ f: (Int) async -> Int) async -> Int { await f(20) + 1 }

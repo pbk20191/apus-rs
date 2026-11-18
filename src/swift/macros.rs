@@ -194,7 +194,9 @@ macro_rules! __swift_item {
         $(#[$doc])*
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
             static FUNCTION: $crate::swift::SwiftAsyncFn = $crate::swift::SwiftAsyncFn::new($crate::__swift_symbol!($how $spec));
-            let call = FUNCTION.call_declared(($crate::swift::Isolation::current(), $($arg,)*), $crate::__swift_result_type!($how $spec));
+            // The caller's isolation is the hidden first argument; closures are checked like any call's.
+            let isolation = $crate::swift::Isolation::current();
+            let call = $crate::__swift_call!(FUNCTION [isolation $(, $arg)*] [$($generic)*] $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::__bind($this, call, $crate::__swift_consumes_self!($how $spec));)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call
@@ -222,7 +224,9 @@ macro_rules! __swift_item {
                 static POINTER: $crate::swift::AsyncFunctionPointer;
             }
             let function = unsafe { $crate::swift::SwiftAsyncFn::from_pointer(&POINTER) };
-            let call = function.call_declared(($crate::swift::Isolation::current(), $($arg,)*), $crate::__swift_result_type!($how $spec));
+            // The caller's isolation is the hidden first argument; closures are checked like any call's.
+            let isolation = $crate::swift::Isolation::current();
+            let call = $crate::__swift_call!(function [isolation $(, $arg)*] [$($generic)*] $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::__bind($this, call, $crate::__swift_consumes_self!($how $spec));)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call

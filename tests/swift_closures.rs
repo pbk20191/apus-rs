@@ -25,6 +25,8 @@ apus::swift! {
     fn apply_sync_double(f: &SwiftClosure) -> f64;
     #[swift_linked = "Probe.applySyncGeneric<T>(_: T, _: (T) -> T) -> T"]
     fn apply_sync_generic(x: &SwiftValue, f: &SwiftClosure) -> SwiftValue;
+    #[swift_linked = "nonisolated(nonsending) Probe.applyInherited(_: (Int) async -> Int) async -> Int"]
+    async fn apply_inherited(f: &SwiftClosure) -> i64;
     #[swift_linked = "Probe.applyMain(_: @MainActor (Int) async -> Int) async -> Int"]
     async fn apply_main(f: &SwiftClosure) -> i64;
     #[swift_linked = "Probe.applyEscaping(_: @escaping @Sendable (Int, String) async throws -> String) async throws -> String"]
@@ -140,7 +142,14 @@ fn mismatched_shape() -> Result<(), Failed> {
     check(matches!(result, Err(CallError::ClosureMismatch(_))), format!("sync for async: {result:?}"))?;
     let direct = SwiftClosure::new_async(|x: i64| async move { x });
     let result = block(spawn(async move { apply_generic(&SwiftValue::new(1i64), &direct).await })).unwrap();
-    check(matches!(result, Err(CallError::ClosureMismatch(_))), format!("direct for generic: {result:?}"))
+    check(matches!(result, Err(CallError::ClosureMismatch(_))), format!("direct for generic: {result:?}"))?;
+    // A nonsending function checks its closures too.
+    let sync = SwiftClosure::new_sync(|x: i64| x);
+    let result = block(spawn(async move { apply_inherited(&sync).await })).unwrap();
+    check(matches!(result, Err(CallError::ClosureMismatch(_))), format!("nonsending, sync for async: {result:?}"))?;
+    let doubled = SwiftClosure::new_async(|x: i64| async move { x * 2 });
+    let result = block(spawn(async move { apply_inherited(&doubled).await })).unwrap();
+    check(matches!(result, Ok(41)), format!("nonsending, the right shape: {result:?}"))
 }
 
 fn main() {
