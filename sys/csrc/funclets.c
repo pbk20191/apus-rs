@@ -76,13 +76,15 @@ static APUS_SWIFTASYNCCALL void after_wait_all(APUS_ASYNC_CONTEXT AsyncContext *
   return finish(ctx);
 }
 
-// MainActor.shared: a singleton, looked up once (a race only computes the same object twice).
+// MainActor.shared: a singleton, looked up once. Threads racing on the first lookup each get a +1; the one that
+// stores first keeps its reference for good, the others release theirs.
 static void *main_actor(void) {
   static void *shared;
   void *known = __atomic_load_n(&shared, __ATOMIC_ACQUIRE);
   if (known) return known;
-  known = main_actor_shared(main_actor_metadata(0).metadata);   // +1, kept for good
-  __atomic_store_n(&shared, known, __ATOMIC_RELEASE);
+  void *mine = main_actor_shared(main_actor_metadata(0).metadata);   // +1
+  if (__atomic_compare_exchange_n(&shared, &known, mine, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return mine;
+  swift_release(mine);
   return known;
 }
 
