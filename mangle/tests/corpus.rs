@@ -194,6 +194,7 @@ const DECLARATIONS: &[&str] = &[
     "Probe.own3(_: __owned Own(class))",
     "Probe.own4(_: __shared Own(class))",
     "Probe.own5(_: consuming String, _: Int)",
+    "(extension in Probe where T == Big(struct)) Probe.Box(struct)<T>.onlyBig() -> Int",
 ];
 
 /// Enum cases: each mangles to the tag symbol a library-evolution module exports for it.

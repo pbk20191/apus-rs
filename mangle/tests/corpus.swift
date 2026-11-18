@@ -170,3 +170,5 @@ public func own2(_ a: borrowing Own) {}
 public func own3(_ a: __owned Own) {}
 public func own4(_ a: __shared Own) {}
 public func own5(_ a: consuming String, _ b: Int) {}
+// A constrained extension whose requirement names a type with its kind.
+extension Box where T == Big { public func onlyBig() -> Int { 0 } }

@@ -457,7 +457,17 @@ impl<'a> Parser<'a> {
             }
             let module = self.identifier()?;
             let where_at = if self.eat_keyword("where") { Some(self.position) } else { None };
-            let close = self.rest().find(')').ok_or_else(|| self.error("expected `)`"))?;
+            // The `)` that closes the extension, past any in its `where` clause (`T == Big(struct)`).
+            let mut depth = 0;
+            let close = self
+                .rest()
+                .char_indices()
+                .find(|&(_, c)| {
+                    depth += match c { '(' => 1, ')' => -1, _ => 0 };
+                    depth < 0
+                })
+                .map(|(i, _)| i)
+                .ok_or_else(|| self.error("expected `)`"))?;
             self.position += close + 1;
             extension = Some((module, where_at));
         }
