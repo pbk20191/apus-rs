@@ -315,3 +315,8 @@ nonisolated(unsafe) var keptClosure: (@Sendable () -> Int)?
 @inline(never) public func dropKept() { keptClosure = nil }
 @inline(never) public func applySyncGeneric<T>(_ x: T, _ f: (T) -> T) -> T { f(x) }
 @inline(never) public func makeAnyError() -> any Error { StructError(code: 1, detail: "x") }
+
+// An enum of a module without library evolution: no tag symbols, tags by declaration order (tests/swift_enum.rs).
+public enum Light { case red, amber(Int), green }
+// Its metadata, kept alive for the test (nothing else in the binary refers to the type).
+public func lightMetadata() -> UnsafeRawPointer { unsafeBitCast(Light.self as Any.Type, to: UnsafeRawPointer.self) }

@@ -28,3 +28,21 @@ public struct Polygon: Shape {
 
 @inline(never) public func makeSquare(side: Double) -> any Shape { Square(side: side) }
 @inline(never) public func makePolygon() -> any Shape { Polygon() }
+
+// Enum cases by tag (tests/swift_enum.rs): built for library evolution, so each case exports its tag symbol.
+public enum Figure {
+    case none
+    case circle(Double)
+    case label(String)
+    indirect case group([Figure])
+    case empty
+}
+public func figure(_ i: Int) -> Figure {
+    switch i {
+    case 0: return .none
+    case 1: return .circle(2.5)
+    case 2: return .label("hi")
+    case 3: return .group([.circle(1), .label("inner")])
+    default: return .empty
+    }
+}

@@ -206,6 +206,33 @@ println!("{}", products.description());                                     // S
 - `SwiftFn` calls **synchronous** Swift functions the same way, on the current thread:
   `TOTAL.call::<i64>(()).on_value(&big).invoke()?` (a getter of a struct passed by address).
 
+### Enums
+
+An enum value is a `SwiftValue` (pass and return it by address, like a framework struct). Its cases are read and made
+through the runtime's enum value witnesses, by **tag**: the cases with a payload first, in declaration order, then
+the cases without one. A library-evolution module (every Apple framework) exports each case's tag as a symbol, which
+`mangle!("case …")` names and `SwiftEnumCase` reads, so a case added or reordered in a newer OS is still found:
+
+```rust
+use apus::swift::{SwiftEnumCase, SwiftType, SwiftValue};
+
+static CORRUPTED: SwiftEnumCase =
+    SwiftEnumCase::new(apus::mangle!("case Swift.DecodingError(enum).dataCorrupted(DecodingError(enum).Context(struct))"));
+
+if error.enum_tag() == CORRUPTED.tag() {
+    let context = unsafe { error.enum_payload(SwiftType::from_mangled_name("s13DecodingErrorO7ContextV").unwrap()) };
+}
+```
+
+- `SwiftType::enum_cases()`: how many cases have a payload and how many do not; `None` for a type that is not an enum.
+- `enum_tag()`; `enum_payload(ty)` and `indirect_enum_payload(ty)` copy the payload out (a tuple type for several
+  associated values; the value is untouched); `SwiftValue::enum_case(ty, tag)` and `enum_case_with(ty, tag, payload)`
+  make a value. Tags and case kinds are checked; the payload type and `indirect` are yours to get right (`unsafe`).
+- Not supported: making a value of an `indirect` case (its box would have to match what the compiler builds); enums
+  imported from C (`NS_ENUM`, refused: the value is the raw integer, use `rawValue`); passing a small enum of a module
+  without library evolution in registers (its layout is the compiler's to compute: use a function that takes or
+  returns it by address, or a generic one).
+
 ### Async sequences
 
 Any value whose type is a Swift `AsyncSequence` can be consumed element by element:

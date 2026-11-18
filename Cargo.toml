@@ -149,3 +149,8 @@ required-features = ["test-probe"]
 
 [workspace]
 members = [".", "sys", "mangle", "macros"]
+
+[[test]]
+name = "swift_enum"
+harness = false
+required-features = ["test-probe"]

@@ -194,6 +194,27 @@ typedef struct { const void *function; void *indirect; SerialExecutorRef executo
 // MetadataKind::Tuple = 1 | RuntimePrivate | NonHeap; MetadataKind::Struct = 0 | NonHeap.
 #define METADATA_KIND_TUPLE 0x301u
 #define METADATA_KIND_STRUCT 0x200u
+// MetadataKind::Enum = 1 | NonHeap; MetadataKind::Optional = 2 | NonHeap.
+#define METADATA_KIND_ENUM 0x201u
+#define METADATA_KIND_OPTIONAL 0x202u
+
+// include/swift/ABI/Metadata.h: TargetEnumMetadata (TargetValueMetadata) and TargetEnumDescriptor
+// (TargetTypeContextDescriptor, then the enum's counts). Fields are relative pointers.
+typedef struct {
+  uint32_t flags;                  // ContextDescriptorFlags: kind-specific flags in the high 16 bits
+  int32_t parent, name, access_function, fields;
+  uint32_t num_payload_cases_and_payload_size_offset;   // low 24 bits: cases with a payload
+  uint32_t num_empty_cases;
+} EnumDescriptor;
+_Static_assert(sizeof(EnumDescriptor) == 28, "EnumDescriptor layout");
+typedef struct {
+  uintptr_t kind;
+  const EnumDescriptor *description;
+} EnumMetadata;
+#define ENUM_PAYLOAD_CASES_MASK 0x00FFFFFFu
+// TypeContextDescriptorFlags::HasImportInfo (kind-specific bit 2): a type imported from C, such as an NS_ENUM, whose
+// value is its raw integer rather than a case tag.
+#define TYPE_CONTEXT_HAS_IMPORT_INFO (1u << (16 + 2))
 
 // ---- value witnesses (include/swift/ABI/ValueWitness.def) ----
 
@@ -201,6 +222,8 @@ typedef APUS_SWIFTCALL void ValueWitnessDestroy(void *value, const void *metadat
 typedef APUS_SWIFTCALL void *ValueWitnessInitializeWithCopy(void *dest, void *src, const void *metadata) APUS_DIRECT;
 typedef APUS_SWIFTCALL void *ValueWitnessInitializeWithTake(void *dest, void *src, const void *metadata) APUS_DIRECT;
 typedef APUS_SWIFTCALL unsigned ValueWitnessGetEnumTag(const void *value, const void *metadata) APUS_DIRECT;
+typedef APUS_SWIFTCALL void ValueWitnessDestructiveProjectEnumData(void *value, const void *metadata) APUS_DIRECT;
+typedef APUS_SWIFTCALL void ValueWitnessDestructiveInjectEnumTag(void *value, unsigned tag, const void *metadata) APUS_DIRECT;
 
 // ValueWitnessTable, followed for enums by the enum witnesses (EnumValueWitnessTable). TypeMetadataHeader points at it.
 struct ValueWitnessTable {
@@ -216,7 +239,10 @@ struct ValueWitnessTable {
   size_t stride;
   uint32_t flags;                  // low 8 bits: alignment mask
   uint32_t extra_inhabitant_count;
-  ValueWitnessGetEnumTag *get_enum_tag;   // EnumValueWitnessTable only
+  // EnumValueWitnessTable only. Tags number the cases with a payload first, in declaration order, then the others.
+  ValueWitnessGetEnumTag *get_enum_tag;
+  ValueWitnessDestructiveProjectEnumData *destructive_project_enum_data;   // leaves the payload in place, untagged
+  ValueWitnessDestructiveInjectEnumTag *destructive_inject_enum_tag;       // tags an initialized payload (or nothing)
 };
 
 // ---- swiftCore: C-convention runtime functions (include/swift/Runtime/HeapObject.h, Casting.h, Error.h) ----
@@ -232,6 +258,8 @@ extern void swift_bridgeObjectRelease(void *object) APUS_C;
 // swift_retain/swift_release must not touch.
 extern void *swift_unknownObjectRetain(void *object) APUS_C;
 extern void swift_unknownObjectRelease(void *object) APUS_C;
+// A box's value (an indirect enum case's payload: its storage holds the box).
+extern void *swift_projectBox(void *box) APUS_C;
 extern const void *swift_conformsToProtocol(const void *metadata, const void *protocol) APUS_C;
 extern const void *swift_getObjectType(void *object) APUS_C;
 extern bool swift_dynamicCast(void *dest, void *src, const void *src_type, const void *target_type, size_t flags) APUS_C;
