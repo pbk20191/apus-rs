@@ -77,6 +77,26 @@ C_TYPEDEFS = {
 }
 
 
+# Standard types mangled as substitutions (mangle/src/names.rs): USR -> (module, name, kind).
+STANDARD_SUBSTITUTIONS = {
+    **{f"s:S{c}": ("Swift", name, kind) for c, name, kind in [
+        ("a", "Array", "struct"), ("b", "Bool", "struct"), ("D", "Dictionary", "struct"), ("d", "Double", "struct"),
+        ("f", "Float", "struct"), ("h", "Set", "struct"), ("I", "DefaultIndices", "struct"), ("i", "Int", "struct"),
+        ("J", "Character", "struct"), ("N", "ClosedRange", "struct"), ("n", "Range", "struct"),
+        ("O", "ObjectIdentifier", "struct"), ("P", "UnsafePointer", "struct"), ("p", "UnsafeMutablePointer", "struct"),
+        ("R", "UnsafeBufferPointer", "struct"), ("r", "UnsafeMutableBufferPointer", "struct"),
+        ("S", "String", "struct"), ("s", "Substring", "struct"), ("u", "UInt", "struct"),
+        ("V", "UnsafeRawPointer", "struct"), ("v", "UnsafeMutableRawPointer", "struct"),
+        ("W", "UnsafeRawBufferPointer", "struct"), ("w", "UnsafeMutableRawBufferPointer", "struct"),
+        ("q", "Optional", "enum")]},
+    **{f"s:Sc{c}": ("_Concurrency", name, kind) for c, name, kind in [
+        ("C", "CheckedContinuation", "struct"), ("c", "UnsafeContinuation", "struct"), ("E", "CancellationError", "struct"),
+        ("G", "TaskGroup", "struct"), ("g", "ThrowingTaskGroup", "struct"), ("M", "MainActor", "class"),
+        ("P", "TaskPriority", "struct"), ("S", "AsyncStream", "struct"), ("s", "AsyncThrowingStream", "struct"),
+        ("T", "Task", "struct")]},
+}
+
+
 def usr_module_kind(usr):
     """(module, kind) of a type's USR; kind None when it is not a nominal type apus can name."""
     if usr.startswith("c:objc(cs)"):
@@ -87,6 +107,8 @@ def usr_module_kind(usr):
         return "__C", "struct"
     if not usr.startswith("s:"):
         return None, None
+    if usr in STANDARD_SUBSTITUTIONS:
+        return STANDARD_SUBSTITUTIONS[usr][0], STANDARD_SUBSTITUTIONS[usr][2]
     body = usr[2:]
     if body.startswith("So"):
         module = "__C"
@@ -104,7 +126,7 @@ def usr_module_kind(usr):
 
 def objc_name(usr):
     """The C/ObjC name in a Clang USR (`c:objc(cs)NSString`, `c:@E@NSComparisonResult`): what Swift mangles."""
-    m = re.match(r"c:(?:objc\((?:cs|pl)\)|@(?:E|S|EA|SA)@)([A-Za-z0-9_]+)$", usr)
+    m = re.match(r"c:(?:objc\((?:cs|pl)\)|@(?:E|S|EA|SA|T)@)([A-Za-z0-9_]+)$", usr)
     return m.group(1) if m else None
 
 
@@ -153,6 +175,10 @@ def render_chain(chain, extended=False, continued=False):
             raise Untranslatable("imported type unknown")
         if len(chain) == 1:
             return f"__C.{name}" if kind == "protocol" else f"__C.{name}({kind})"
+        last = chain[-1].get("preciseIdentifier", "")
+        if last.startswith("c:"):
+            # Imported types are mangled flat, under their own C name, however Swift nests them.
+            return render_chain(chain[-1:])
         # A Swift type nested in an imported one: declared in an overlay's extension of it.
         return f"__C.{name}({kind})." + render_chain(chain[1:], extended=True).split(".", 1)[1]
     if len(chain) >= 1 and chain[-1].get("preciseIdentifier", "").endswith("a") and GRAPH is not None:
@@ -354,6 +380,8 @@ class Graph:
             # An imported type: Swift mangles it flat, under its C/ObjC name.
             name = objc_name(target)
             _, kind = usr_module_kind(target)
+            if target.startswith(("c:@SA@", "c:@T@")):
+                kind = "typedef struct"  # named after its typedef (`So9NSDecimala`)
             if name is None or kind is None:
                 raise Untranslatable("imported context unknown")
             return "__C", [(name, kind, "", "")], [], []
@@ -398,8 +426,16 @@ class Graph:
                         raise Untranslatable("imported context unknown")
                     path = [objc_name(usr)] + path[1:]  # mangled flat, under its C/ObjC name
                     imported = True
+                elif n == len(path) and not params:
+                    # A generic type of another module: its parameters are the member's outermost ones.
+                    own = [p["name"] for p in sym.get("swiftGenerics", {}).get("parameters", []) if p.get("depth", 0) == 0]
+                    if own:
+                        params = own
+                        clause = "<" + ", ".join(own) + ">"
             marker = ""
             ext = t.get("swiftExtension") if t is not None and n > 1 else None
+            if ext is None and imported and n == 2:
+                ext = {"extendedModule": "__C"}  # a Swift type nested in an imported one: always in an extension
             if ext is not None:
                 # A type declared in a constrained extension, or in another module's: the extension is its context.
                 extra = [c for c in ext.get("constraints", []) if c not in constraints]
@@ -495,7 +531,10 @@ def declaration(graph, sym):
     if ext is not None:
         extra = [c for c in ext.get("constraints", []) if c not in ctx_constraints]
         protocol = bool(parts) and parts[-1][1] == "protocol"
-        if extra or protocol or (ext.get("extendedModule") and ext["extendedModule"] != graph.module):
+        # An imported type's Swift members are always in another module's extension (its overlay's, even one named
+        # like the Clang module).
+        imported = module == "__C"
+        if extra or protocol or imported or (ext.get("extendedModule") and ext["extendedModule"] != graph.module):
             where = (" where " + ", ".join(constraint_text(graph, c) for c in extra)) if extra else ""
             extension = f"(extension in {graph.module}{where}) "
     ctx = "".join(f".{marker}{name}({k}){clause}" for name, k, clause, marker in parts)
@@ -610,6 +649,9 @@ def measure(module):
                 row["outcome"], row["reason"], row["mangled"] = "mismatch", "mangled differently", value
         elif value == row["expected"]:
             row["outcome"] = "callable"
+        elif "Yt" in row["expected"] and row["expected"].replace("Yt", "") == value:
+            # Only `_const` (`Yt`, a parameter flag) differs: symbol graphs do not show it; written, it is mangled.
+            row["outcome"], row["reason"], row["mangled"] = "const", "`_const` parameters the symbol graph hides", value
         else:
             row["outcome"], row["reason"], row["mangled"] = "mismatch", "mangled differently", value
     with open(os.path.join(CACHE, f"{module}.details.json"), "w") as f:
@@ -625,19 +667,24 @@ def main():
               "subscripts, operators and enum cases. *Callable*: exported and mangled exactly; *not exported*: no symbol",
               "to call (inlinable); *mangled only*: `mangle!` names the symbol, `swift!` refuses to call it; the rest are",
               "apus's gaps.", "",
-              "| Module | Declarations | Exported | Callable | Callable of exported |", "|---|---|---|---|---|"]
+              "*With `_const`*: also those that differ only by `_const` parameters, which symbol graphs do not show (the",
+              "declaration must write them, as the module's .swiftinterface does).", "",
+              "| Module | Declarations | Exported | Callable | Callable of exported | With `_const` |",
+              "|---|---|---|---|---|---|"]
     reasons = collections.Counter()
     for module in modules:
         try:
             rows = measure(module)
         except subprocess.CalledProcessError as e:
-            report.append(f"| {module} | (symbol graph failed: {e.returncode}) | | | |")
+            report.append(f"| {module} | (symbol graph failed: {e.returncode}) | | | | |")
             continue
         total = len(rows)
         exported_rows = [r for r in rows if r["exported"]]
         callable_rows = [r for r in exported_rows if r.get("outcome") == "callable"]
         share = f"{100 * len(callable_rows) / len(exported_rows):.0f}%" if exported_rows else "-"
-        report.append(f"| {module} | {total} | {len(exported_rows)} | {len(callable_rows)} | {share} |")
+        with_const = [r for r in exported_rows if r.get("outcome") in ("callable", "const")]
+        const_share = f"{100 * len(with_const) / len(exported_rows):.0f}%" if exported_rows else "-"
+        report.append(f"| {module} | {total} | {len(exported_rows)} | {len(callable_rows)} | {share} | {const_share} |")
         for r in exported_rows:
             if r.get("outcome") != "callable":
                 reasons[(r["outcome"], reason_key(r.get("reason", "")))] += 1
