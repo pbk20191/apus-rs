@@ -239,8 +239,10 @@ const ENUM_CASES: &[&str] = &[
     "case Cases.GenOuter(enum)<T>.Inner(enum).b(Int)",
 ];
 
+/// Compiled once per test process: tests run in parallel and would otherwise write the same library.
 fn compiled_symbols() -> HashSet<String> {
-    symbols_of("corpus.swift", "Probe", &[])
+    static SYMBOLS: std::sync::OnceLock<HashSet<String>> = std::sync::OnceLock::new();
+    SYMBOLS.get_or_init(|| symbols_of("corpus.swift", "Probe", &[])).clone()
 }
 
 fn symbols_of(file: &str, module: &str, flags: &[&str]) -> HashSet<String> {

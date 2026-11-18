@@ -131,6 +131,36 @@ impl SwiftProtocol {
     }
 }
 
+/// A declaration's opaque result type (`some P`), named by its opaque type descriptor (`…QOMQ`, looked up once).
+#[doc(hidden)]
+pub struct OpaqueResult {
+    symbol: Option<&'static str>,
+    descriptor: OnceLock<usize>,
+}
+
+impl OpaqueResult {
+    /// `None`: the declaration has no `some P` result.
+    pub const fn new(descriptor_symbol: Option<&'static str>) -> OpaqueResult {
+        OpaqueResult { symbol: descriptor_symbol, descriptor: OnceLock::new() }
+    }
+
+    pub(crate) fn is_opaque(&self) -> bool {
+        self.symbol.is_some()
+    }
+
+    /// The actual type, given the generic arguments of the declaration's signature (metadata, then witness tables:
+    /// what the call passes). `swift_getOpaqueTypeMetadata2`, index 0: the one `some P` of the result.
+    pub(crate) fn metadata(&self, arguments: &[*const c_void]) -> Result<SwiftType, super::CallError> {
+        let symbol = self.symbol.expect("an opaque result");
+        let descriptor = *self.descriptor.get_or_init(|| lookup(symbol));
+        if descriptor == 0 {
+            return Err(super::CallError::Unavailable(symbol));
+        }
+        let response = unsafe { rt::swift_getOpaqueTypeMetadata2(0, arguments.as_ptr(), descriptor as *const c_void, 0) };
+        Ok(SwiftType(response.metadata))
+    }
+}
+
 /// A protocol witness table: the trailing argument a constrained generic function takes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct WitnessTable(pub(crate) *const c_void);
@@ -361,6 +391,14 @@ impl Opened {
 }
 
 impl SwiftValue {
+    /// The value as a `P` its type conforms to (`swift_conformsToProtocol`), to call `P`'s requirements and extension
+    /// methods on it: a `some P` result, for one. `None` if the type does not conform.
+    pub fn conforming(&self, protocol: &SwiftProtocol) -> Option<Opened> {
+        let witness = self.ty.conformance(protocol)?;
+        let container = self.clone();
+        Some(Opened { value: container.as_ptr(), ty: self.ty, witness, container })
+    }
+
     /// Opens an `any P` value of one protocol (not class-bound): its value, dynamic type and `P`'s witness table.
     /// `None` for any other value. The container layout is the ABI's: a three-word buffer holding the value inline,
     /// or a box when the value does not fit, then the metadata, then the witness table.

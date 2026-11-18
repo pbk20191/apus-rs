@@ -106,3 +106,9 @@ public struct Pass {
     public init(_ ticket: Ticket) { self.ticket = ticket }
     public consuming func redeem() -> Int { ticket.id }
 }
+
+// Opaque results (tests/swift_opaque.rs): the caller learns the actual type from the runtime.
+public func makeSomeShape(side: Double) -> some Shape { Square(side: side) }
+public func makeSomeShapeLater(side: Double) async -> some Shape { await Task.yield(); return Square(side: side) }
+public struct ShapeMaker { public init() {} ; public var polygon: some Shape { Polygon() } }
+extension Shape { public func enlarged() -> some Shape { Square(side: area()) } }

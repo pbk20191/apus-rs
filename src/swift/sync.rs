@@ -58,12 +58,12 @@ impl SwiftFn {
     /// Prepares a call returning `R`; run it with [`SwiftSyncCall::invoke`].
     /// The argument and result types must match the Swift signature: the compiler cannot check them.
     pub fn call<R: SwiftRet>(&self, args: impl SwiftArgs) -> SwiftSyncCall<R> {
-        self.call_declared(args, None)
+        self.call_declared(args, super::func::DeclaredResult::UNKNOWN)
     }
 
     /// [`call`](Self::call) for a function declared with its Swift result type (what `swift!` generates).
     #[doc(hidden)]
-    pub fn call_declared<R: SwiftRet>(&self, args: impl SwiftArgs, result_type: Option<&'static str>) -> SwiftSyncCall<R> {
+    pub fn call_declared<R: SwiftRet>(&self, args: impl SwiftArgs, result_type: super::func::DeclaredResult) -> SwiftSyncCall<R> {
         match R::result_slot(result_type) {
             Ok((slot, indirect)) => self.prepare(args, slot, indirect),
             Err(error) => {
@@ -134,6 +134,7 @@ impl<R> SwiftSyncCall<R> {
         self.lowering.regs.self_ = copy.as_ptr();
         self.lowering.int(opened.ty().as_ptr() as u64);
         self.lowering.int(opened.witness().0 as u64);
+        self.lowering.generic_args.extend([opened.ty().as_ptr(), opened.witness().0]);
         self.lowering.owned.push(Owned::Value(copy)); // `.hop()` runs the call later
         self
     }
@@ -169,6 +170,7 @@ impl<R: SwiftRet> SwiftSyncCall<R> {
         if let Some(why) = self.lowering.error {
             return Err(CallError::InvalidArgument(why));
         }
+        self.slot.resolve(&self.lowering.generic_args)?;
         let mut ret = RetRegs::new();
         // A sync call runs right here: on the main actor if this is a main task's poll.
         let main_task = super::task::current().is_some_and(|task| task.main);

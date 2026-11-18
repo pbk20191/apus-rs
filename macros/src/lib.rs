@@ -89,6 +89,22 @@ pub fn result_type(input: TokenStream) -> TokenStream {
     }
 }
 
+/// Expands to the declaration's opaque type descriptor symbol as an `Option<&'static str>`: `Some("…QOMQ")` for a
+/// `some P` result, else `None`.
+#[doc(hidden)]
+#[proc_macro]
+pub fn __opaque_descriptor(input: TokenStream) -> TokenStream {
+    let tokens = flatten(input);
+    let Some(declaration) = tokens.first().and_then(string_literal) else {
+        return compile_error("expected a Swift declaration as a string literal");
+    };
+    match apus_mangle::opaque_descriptor(&declaration) {
+        Ok(Some(symbol)) => format!("::core::option::Option::Some({symbol:?})").parse().expect("an Option expression"),
+        Ok(None) => "::core::option::Option::<&'static str>::None".parse().expect("an Option expression"),
+        Err(error) => compile_error(&format!("cannot mangle `{declaration}`: {error}")),
+    }
+}
+
 /// Expands to `true` if the declaration consumes `self` (`consuming func`), else `false`.
 #[doc(hidden)]
 #[proc_macro]

@@ -182,19 +182,39 @@ pub struct IndirectSlot {
     pub(crate) boxed: Option<UninitValue>,
     /// The boxed type is returned in registers, not through an address: copy the result words into the box.
     pub(crate) direct: bool,
+    /// A `some P` result whose storage is allocated by [`resolve`](Self::resolve), once the generic arguments are known.
+    pub(crate) opaque: Option<&'static super::value::OpaqueResult>,
 }
 
 impl IndirectSlot {
     pub(crate) fn inline() -> IndirectSlot {
-        IndirectSlot { inline: [0; 4], boxed: None, direct: false }
+        IndirectSlot { inline: [0; 4], boxed: None, direct: false, opaque: None }
     }
 
     pub(crate) fn boxed(storage: UninitValue, direct: bool) -> IndirectSlot {
         assert!(!direct || storage.ty.size() <= 32, "a type larger than four words is not returned in registers");
-        IndirectSlot { inline: [0; 4], boxed: Some(storage), direct }
+        IndirectSlot { inline: [0; 4], boxed: Some(storage), direct, opaque: None }
+    }
+
+    pub(crate) fn opaque(result: &'static super::value::OpaqueResult) -> IndirectSlot {
+        IndirectSlot { inline: [0; 4], boxed: None, direct: false, opaque: Some(result) }
+    }
+
+    /// Whether the storage still waits for [`resolve`](Self::resolve).
+    pub(crate) fn pending(&self) -> bool {
+        self.opaque.is_some() && self.boxed.is_none()
+    }
+
+    /// Allocates a `some P` result's storage for its actual type, given the call's generic arguments.
+    pub(crate) fn resolve(&mut self, generic_args: &[*const c_void]) -> Result<(), CallError> {
+        if let (Some(opaque), None) = (self.opaque, &self.boxed) {
+            self.boxed = Some(UninitValue::new(opaque.metadata(generic_args)?));
+        }
+        Ok(())
     }
 
     pub(crate) fn address(&mut self) -> *mut c_void {
+        assert!(!self.pending(), "apus: an opaque result's storage is allocated before the call runs");
         match &self.boxed {
             Some(storage) => storage.ptr.as_ptr().cast(),
             None => self.inline.as_mut_ptr().cast(),
@@ -223,6 +243,10 @@ pub(crate) struct CallShared {
     throws: bool,
     /// Locked only when the call starts (pending hand-overs) and while it is configured.
     owned: Mutex<Vec<Owned>>,
+    /// The generic arguments passed, for an opaque result's type (see `IndirectSlot::resolve`).
+    generic_args: Vec<*const c_void>,
+    /// The first integer register holds the result's address.
+    indirect_result: bool,
     /// Drops a finished result nobody will read (monomorphized for the call's result type).
     discard: unsafe fn(&CallShared),
     state: Mutex<CallState>,
@@ -252,6 +276,8 @@ impl CallShared {
             typed_error: UnsafeCell::new(typed_error),
             throws: false,
             owned: Mutex::new(lowering.owned),
+            generic_args: lowering.generic_args,
+            indirect_result: indirect,
             discard: discard_as::<R>,
             state: Mutex::new(CallState::Registered),
             waker: Mutex::new(None),
@@ -260,7 +286,8 @@ impl CallShared {
             next_int,
             hop: apus_sys::HopCall { function: std::ptr::null(), indirect: std::ptr::null_mut(), executor: rt::SerialExecutorRef { identity: std::ptr::null(), implementation: 0 }, kind: 0 },
         });
-        if indirect {
+        // An opaque result's address is set once its storage is allocated, at the first poll.
+        if indirect && !unsafe { (*shared.indirect.get()).pending() } {
             unsafe { (*shared.regs.get()).gpr[0] = (*shared.indirect.get()).address() as u64 };
         }
         shared
@@ -486,6 +513,7 @@ impl<R> SwiftCall<R> {
         regs.self_ = copy.as_ptr();
         regs.gpr[call.next_int] = opened.ty().as_ptr() as u64;
         regs.gpr[call.next_int + 1] = opened.witness().0 as u64;
+        call.generic_args.extend([opened.ty().as_ptr(), opened.witness().0]);
         call.next_int += 2;
         call.owned.get_mut().unwrap().push(Owned::Value(copy));
         self
@@ -552,6 +580,19 @@ impl<R: SwiftRet> Future for SwiftCall<R> {
             return Poll::Pending; // running: the waker above hears when it is done
         }
         let Some(t) = task::current() else { return Poll::Ready(Err(CallError::NoCurrentTask)) };
+        if !self.registered {
+            // Configured now (receiver bound): an opaque result can be sized.
+            let call = self.configure();
+            let slot = call.indirect.get_mut();
+            if slot.pending() {
+                if let Err(error) = slot.resolve(&call.generic_args) {
+                    return Poll::Ready(Err(error));
+                }
+                if call.indirect_result {
+                    call.regs.get_mut().gpr[0] = call.indirect.get_mut().address() as u64;
+                }
+            }
+        }
         // Still waiting to run: the task it was registered in may have finished without running it (the call
         // was returned out of it), so it registers in this task unless it is there already. Whichever task takes
         // it first runs it.

@@ -347,8 +347,11 @@ macro_rules! __swift_call {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __swift_result_type {
-    (literal $symbol:literal) => { ::core::option::Option::None };
-    (declared $declaration:literal) => { $crate::result_type!($declaration) };
+    (literal $symbol:literal) => { $crate::swift::DeclaredResult::UNKNOWN };
+    (declared $declaration:literal) => {{
+        static OPAQUE: $crate::swift::OpaqueResult = $crate::swift::OpaqueResult::new($crate::__opaque_descriptor!($declaration));
+        $crate::swift::DeclaredResult { name: $crate::result_type!($declaration), opaque: ::core::option::Option::Some(&OPAQUE) }
+    }};
 }
 
 /// Whether the declaration consumes `self` (`consuming func`); unknown for a bare symbol.

@@ -271,6 +271,10 @@ extern const void *swift_getExistentialTypeMetadata(bool class_constraint_any, c
 
 extern APUS_SWIFTCALL MetadataResponse swift_getTupleTypeMetadata(size_t request, size_t flags, const void *const *elements,
                                                                   const char *labels, const void *proposed_witnesses) APUS_DIRECT;
+// include/swift/Runtime/Metadata.h: the actual type of a declaration's opaque result (`some P`) from its opaque type
+// descriptor (`…QOMQ`) and the generic arguments of the declaration's signature; `index` 0 for a single `some P`.
+extern APUS_SWIFTCALL MetadataResponse swift_getOpaqueTypeMetadata2(size_t request, const void *const *arguments,
+                                                                    const void *descriptor, unsigned index) APUS_DIRECT;
 // include/swift/Runtime/Error.h: an `any Error` box holding a value of `type` (taken when `is_take`).
 extern APUS_SWIFTCALL BoxPair swift_allocError(const void *type, const void *error_conformance, void *value, bool is_take) APUS_DIRECT;
 extern APUS_SWIFTCALL TypeNamePair swift_getTypeName(const void *metadata, bool qualified) APUS_DIRECT;

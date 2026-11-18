@@ -71,12 +71,12 @@ impl SwiftAsyncFn {
     /// Prepares a call with `args` (a tuple, in declaration order) returning `R`. Nothing runs until awaited.
     /// The argument and result types must match the Swift signature: the compiler cannot check them.
     pub fn call<R: SwiftRet>(&self, args: impl SwiftArgs) -> SwiftCall<R> {
-        self.call_declared(args, None)
+        self.call_declared(args, DeclaredResult::UNKNOWN)
     }
 
     /// [`call`](Self::call) for a function declared with its Swift result type (what `swift!` generates).
     #[doc(hidden)]
-    pub fn call_declared<R: SwiftRet>(&self, args: impl SwiftArgs, result_type: Option<&'static str>) -> SwiftCall<R> {
+    pub fn call_declared<R: SwiftRet>(&self, args: impl SwiftArgs, result_type: DeclaredResult) -> SwiftCall<R> {
         match R::result_slot(result_type) {
             Ok((slot, indirect)) => self.prepare(args, slot, indirect),
             Err(error) => SwiftCall::build(std::ptr::null(), ArgLowering::new(false), Some(error), IndirectSlot::inline(), false),
@@ -122,6 +122,8 @@ pub struct ArgLowering {
     pub(crate) failure: Option<CallError>,
     /// An argument or `self` is a Rust value borrowed for the call (`inout`): only a synchronous call may run it.
     pub(crate) borrows: bool,
+    /// The generic arguments passed (metadata, witness tables), in order: what an opaque result type depends on.
+    pub(crate) generic_args: Vec<*const c_void>,
 }
 
 impl ArgLowering {
@@ -136,6 +138,7 @@ impl ArgLowering {
             typed_error: None,
             failure: None,
             borrows: false,
+            generic_args: Vec::new(),
         }
     }
 
@@ -234,6 +237,7 @@ impl SwiftArg for &SwiftObject {
 /// A type argument of a generic function.
 impl SwiftArg for SwiftType {
     fn lower(&self, into: &mut ArgLowering) {
+        into.generic_args.push(self.as_ptr());
         into.int(self.as_ptr() as u64)
     }
 }
@@ -241,6 +245,7 @@ impl SwiftArg for SwiftType {
 /// A conformance argument of a constrained generic function.
 impl SwiftArg for WitnessTable {
     fn lower(&self, into: &mut ArgLowering) {
+        into.generic_args.push(self.0);
         into.int(self.0 as u64)
     }
 }
@@ -349,6 +354,22 @@ pub(crate) fn hand_over(owned: &mut Vec<Owned>, start: usize) {
     owned.extend(lowered.into_iter().map(Owned::pending));
 }
 
+/// What `swift!` knows of a declaration's result: its type's mangled name, or that it is a `some P`.
+#[doc(hidden)]
+#[derive(Clone, Copy)]
+pub struct DeclaredResult {
+    pub name: Option<&'static str>,
+    pub opaque: Option<&'static super::value::OpaqueResult>,
+}
+
+impl DeclaredResult {
+    pub const UNKNOWN: DeclaredResult = DeclaredResult { name: None, opaque: None };
+
+    pub const fn named(name: Option<&'static str>) -> DeclaredResult {
+        DeclaredResult { name, opaque: None }
+    }
+}
+
 /// An argument the callee consumes (+1): an initializer's arguments, a setter's new value. `swift!` wraps them.
 #[doc(hidden)]
 pub struct Consumed<A>(pub A);
@@ -407,7 +428,7 @@ pub trait SwiftRet: Sized {
     /// Where the result goes and whether the callee writes it through an address. `result_type` is the
     /// mangled name of the Swift result type when the function was declared with one.
     #[doc(hidden)]
-    fn result_slot(_result_type: Option<&'static str>) -> Result<(IndirectSlot, bool), CallError> {
+    fn result_slot(_result_type: DeclaredResult) -> Result<(IndirectSlot, bool), CallError> {
         Ok((IndirectSlot::inline(), Self::INDIRECT))
     }
 }
@@ -498,8 +519,12 @@ impl SwiftRet for SwiftValue {
         storage.assume_init()
     }
 
-    fn result_slot(result_type: Option<&'static str>) -> Result<(IndirectSlot, bool), CallError> {
-        Ok((IndirectSlot::boxed(UninitValue::new(declared_type(result_type)?), false), true))
+    fn result_slot(result_type: DeclaredResult) -> Result<(IndirectSlot, bool), CallError> {
+        if let Some(opaque) = result_type.opaque.filter(|o| o.is_opaque()) {
+            // `some P`: always by address; the storage is sized once the generic arguments are known.
+            return Ok((IndirectSlot::opaque(opaque), true));
+        }
+        Ok((IndirectSlot::boxed(UninitValue::new(declared_type(result_type.name)?), false), true))
     }
 }
 
@@ -512,8 +537,11 @@ impl SwiftRet for DirectValue {
         DirectValue(SwiftValue::lift(ret, indirect))
     }
 
-    fn result_slot(result_type: Option<&'static str>) -> Result<(IndirectSlot, bool), CallError> {
-        let ty = declared_type(result_type)?;
+    fn result_slot(result_type: DeclaredResult) -> Result<(IndirectSlot, bool), CallError> {
+        if result_type.opaque.is_some_and(|o| o.is_opaque()) {
+            return Err(CallError::InvalidArgument("a `some P` result is returned by address: use SwiftValue"));
+        }
+        let ty = declared_type(result_type.name)?;
         if ty.size() > 32 {
             return Err(CallError::InvalidArgument("a type larger than four words is returned by address: use SwiftValue"));
         }

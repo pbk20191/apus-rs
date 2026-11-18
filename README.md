@@ -257,6 +257,27 @@ if error.enum_tag() == CORRUPTED.tag() {
   without library evolution in registers (its layout is the compiler's to compute: use a function that takes or
   returns it by address, or a generic one).
 
+### Opaque results (`some P`)
+
+A declaration returning `some P` returns a `SwiftValue` of the actual type, which the Swift runtime gives from the
+declaration's opaque type descriptor (`…QOMQ`, exported by library-evolution modules) and the call's generic
+arguments (`swift_getOpaqueTypeMetadata2`). `conforming(&protocol)` makes it an `Opened` to call `P`'s requirements
+and extension methods, so calls chain:
+
+```rust
+apus::swift! {
+    #[swift = "Res.makeSomeShape(side: Double) -> some Shape"]
+    fn make_some_shape(side: f64) -> SwiftValue;
+    #[swift = "(extension in Res) Res.Shape(protocol).enlarged() -> some Shape"]
+    fn enlarged(self: &Opened) -> SwiftValue;
+}
+let square = make_some_shape(3.0)?.conforming(&SHAPE).unwrap();
+let bigger = enlarged(&square)?;
+```
+
+A `some P` parameter is an anonymous generic parameter (pass its type metadata and witness table like any other).
+One `some P` per result, without primary associated types (`some Collection<Int>`).
+
 ### Async sequences
 
 Any value whose type is a Swift `AsyncSequence` can be consumed element by element:

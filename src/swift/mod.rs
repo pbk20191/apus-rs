@@ -28,11 +28,11 @@ pub use closure::{ClosureArgs, ClosureFn, ClosureOut, DeclaredClosure, ResultKin
 pub use enums::{EnumCases, SwiftEnumCase};
 pub use stream::SwiftStream;
 pub use sync::{HopTo, SwiftFn, SwiftSyncCall};
-pub use value::{IntoSwift, Opened, SwiftProtocol, SwiftType, SwiftValue, WitnessTable};
+pub use value::{IntoSwift, OpaqueResult, Opened, SwiftProtocol, SwiftType, SwiftValue, WitnessTable};
 pub use isolation::Isolation;
 #[doc(hidden)]
 pub use generic::{__generic_args, __type_of, GenericArgs, HasSwiftType};
-pub use func::{__bind, __bind_sync, BindAsyncReceiver, BindReceiver, Consumed, ErrorSlot, ArgLowering, DirectValue, SwiftArg, SwiftArgs, SwiftAsyncFn, SwiftObject, SwiftReceiver, SwiftRet};
+pub use func::{__bind, __bind_sync, BindAsyncReceiver, BindReceiver, Consumed, DeclaredResult, ErrorSlot, ArgLowering, DirectValue, SwiftArg, SwiftArgs, SwiftAsyncFn, SwiftObject, SwiftReceiver, SwiftRet};
 pub use current::{cancelled, current_task, is_cancelled, priority, Cancelled, TaskRef};
 pub use join::{JoinHandle, MainOnlyHandle};
 pub use timer::{sleep, within, Sleep};
