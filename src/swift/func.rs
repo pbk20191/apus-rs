@@ -320,14 +320,33 @@ impl BindReceiver for &mut SwiftValue {
     }
 }
 
+/// Binds `self`; for a `consuming` method (`consumes`), what the binding keeps alive goes to the callee instead:
+/// the receiver is a copy (a value) or an extra reference (an object) that the callee consumes.
 #[doc(hidden)]
-pub fn __bind_sync<B: BindReceiver, R>(this: B, call: super::SwiftSyncCall<R>) -> super::SwiftSyncCall<R> {
-    this.bind_sync(call)
+pub fn __bind_sync<B: BindReceiver, R>(this: B, mut call: super::SwiftSyncCall<R>, consumes: bool) -> super::SwiftSyncCall<R> {
+    let start = call.lowering.owned.len();
+    call = this.bind_sync(call);
+    if consumes {
+        hand_over(&mut call.lowering.owned, start);
+    }
+    call
 }
 
 #[doc(hidden)]
-pub fn __bind<B: BindAsyncReceiver, R>(this: B, call: SwiftCall<R>) -> SwiftCall<R> {
-    this.bind(call)
+pub fn __bind<B: BindAsyncReceiver, R>(this: B, mut call: SwiftCall<R>, consumes: bool) -> SwiftCall<R> {
+    if !consumes {
+        return this.bind(call);
+    }
+    let start = call.owned_count();
+    let mut call = this.bind(call);
+    call.hand_over_owned(start);
+    call
+}
+
+/// Hands the entries from `start` on over to the callee (see [`Owned::hand_over`]).
+pub(crate) fn hand_over(owned: &mut Vec<Owned>, start: usize) {
+    let lowered: Vec<Owned> = owned.drain(start..).collect();
+    owned.extend(lowered.into_iter().filter_map(Owned::hand_over));
 }
 
 /// An argument the callee consumes (+1): an initializer's arguments, a setter's new value. `swift!` wraps them.
@@ -338,8 +357,7 @@ impl<A: SwiftArg> SwiftArg for Consumed<A> {
     fn lower(&self, into: &mut ArgLowering) {
         let start = into.owned.len();
         self.0.lower(into);
-        let lowered: Vec<Owned> = into.owned.drain(start..).collect();
-        into.owned.extend(lowered.into_iter().filter_map(Owned::hand_over));
+        hand_over(&mut into.owned, start);
     }
 }
 

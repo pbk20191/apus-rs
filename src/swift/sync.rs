@@ -90,7 +90,7 @@ impl SwiftFn {
 pub struct SwiftSyncCall<R> {
     function: Option<*const c_void>,
     symbol: &'static str,
-    lowering: ArgLowering,
+    pub(crate) lowering: ArgLowering,
     slot: IndirectSlot,
     indirect: bool,
     throws: bool,

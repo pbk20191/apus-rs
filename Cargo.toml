@@ -164,3 +164,8 @@ required-features = ["test-probe"]
 name = "swift_accessors"
 harness = false
 required-features = ["test-probe"]
+
+[[test]]
+name = "swift_ownership"
+harness = false
+required-features = ["test-probe"]

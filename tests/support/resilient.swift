@@ -1,4 +1,5 @@
 // A library-evolution module (like Apple's frameworks): protocol requirements are called through dispatch thunks.
+import Foundation
 public protocol Shape {
     func area() -> Double
     func label() -> String
@@ -80,3 +81,28 @@ public struct Meter {
 }
 infix operator ~~: ComparisonPrecedence
 public func ~~ (a: Meter, b: Meter) -> Bool { abs(a.value - b.value) < 0.001 }
+
+// Ownership modifiers (tests/swift_ownership.rs): a Ticket records its deinit, so a reference released once too
+// often (or never) shows.
+nonisolated(unsafe) var goneTickets: Set<Int> = []
+let ticketsLock = NSLock()
+public final class Ticket {
+    public let id: Int
+    public init(id: Int) { self.id = id }
+    deinit { ticketsLock.withLock { _ = goneTickets.insert(id) } }
+}
+public func ticketGone(_ id: Int) -> Bool { ticketsLock.withLock { goneTickets.contains(id) } }
+nonisolated(unsafe) var keptTickets: [Ticket] = []
+nonisolated(unsafe) let keptLock = NSLock()
+public func keep(_ t: consuming Ticket) { let t = t; keptLock.withLock { keptTickets.append(t) } }
+// The tickets are released outside the lock: their deinit takes ticketsLock.
+public func releaseKept() { let released = keptLock.withLock { let all = keptTickets; keptTickets = []; return all }; _ = released }
+public struct Stub {
+    public var ticket: Ticket?
+    public init(borrowing t: borrowing Ticket) { ticket = copy t }
+}
+public struct Pass {
+    var ticket: Ticket
+    public init(_ ticket: Ticket) { self.ticket = ticket }
+    public consuming func redeem() -> Int { ticket.id }
+}

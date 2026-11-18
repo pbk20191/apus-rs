@@ -407,6 +407,14 @@ impl<R> SwiftCall<R> {
         self.configure().hop = hop;
     }
 
+    pub(crate) fn owned_count(&mut self) -> usize {
+        self.configure().owned.len()
+    }
+
+    pub(crate) fn hand_over_owned(&mut self, start: usize) {
+        super::func::hand_over(&mut self.configure().owned, start);
+    }
+
     fn configure(&mut self) -> &mut CallShared {
         Arc::get_mut(&mut self.shared).expect("a Swift call is configured before it is first awaited")
     }

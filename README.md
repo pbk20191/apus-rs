@@ -145,7 +145,8 @@ the standard library spelled out:
 [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name: Type { get [async] [throws] | set }
 [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….subscript[<U: P>]([label|_]: Type, …) -> Type { get [async] [throws] | set }
 [static] [prefix | postfix] [Module.Type(kind)….]+(_: Type[, _: Type]) -> Type   (an operator: infix with two parameters)
-[mutating] … (a struct's or enum's method that changes `self`; the symbol does not show it)
+[mutating | consuming | borrowing] … (how the method takes `self`; the symbol does not show it)
+… ([label|_]: [inout | consuming | borrowing | __owned | __shared] Type, …)
 [(extension in Module [where …])] Module.Type(kind)[<T, …>]….init[<U: P>]([label|_]: Type, …) [async] [throws] [-> Type?]
 ```
 
@@ -173,6 +174,9 @@ the standard library spelled out:
   (`total: Int { get async throws }` is `async fn total(self: &SwiftValue) throws -> i64`): `swift!` refuses a mismatch,
   which would call an async function the sync way or leave a thrown error unread. A sync member that must run on its
   actor is the exception: it is `async fn` in Rust, and apus hops there.
+- Ownership: a `consuming` (`__owned`) parameter, every initializer parameter not marked `borrowing`, and a
+  setter's new value are passed +1, and `swift!` hands them over. A `consuming func` takes a copy of `self` (or an
+  extra reference) for the callee to consume.
 - Operators: `static Shop.Money(struct).+(_: Money(struct), _: Money(struct)) -> Money(struct)`, `static prefix …-(…)`,
   `Shop.~~(_: Money(struct), _: Money(struct)) -> Bool` for one declared at the top level.
 - `(extension in Module)` marks a member of an extension that Swift mangles as one: an extension in another
@@ -186,7 +190,7 @@ static (extension in _Concurrency where Success == Never, Failure == Never)
 
 - Isolation: `isolated` parameters, `@MainActor`, `nonisolated`, `nonisolated(nonsending)`, `(actor)`, `throws(E)`.
 - Not supported yet: non-ASCII names (and so non-ASCII operators),
-  ownership attributes, more than one generic enclosing type. A declaration that cannot be mangled
+  more than one generic enclosing type. A declaration that cannot be mangled
   is a compile error; for anything unsupported, pass the symbol itself with `#[symbol]`.
 
 The mangler (`mangle/`) ports the Swift compiler's identifier, substitution and generic-signature rules and is

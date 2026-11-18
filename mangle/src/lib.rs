@@ -34,7 +34,8 @@ impl std::error::Error for Error {}
 /// [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….name: Type { get [async] [throws] | set }
 /// [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….subscript[<U: P>]([label|_]: Type, …) -> Type { get [async] [throws] | set }
 /// [static] [prefix | postfix] [Module.Type(kind)….]+(_: Type[, _: Type]) -> Type   (an operator: infix with two parameters)
-/// [mutating] … (a struct's or enum's method that changes `self`; the symbol does not show it)
+/// [mutating | consuming | borrowing] … (how the method takes `self`; the symbol does not show it)
+/// … ([label|_]: [inout | consuming | borrowing | __owned | __shared] Type, …)
 /// [(extension in Module [where …])] Module.Type(kind)[<T, …>]….init[<U: P>]([label|_]: Type, …) [async] [throws] [-> Type?]
 /// case Module.Type(kind)[<T, …>]….Enum(enum).name[([label:] Type, …)]
 /// ```
@@ -57,7 +58,7 @@ impl std::error::Error for Error {}
 /// - `case …` gives an enum case's tag symbol (`…WC`), which library-evolution modules export.
 /// - Subscript labels are the ones the call site writes: `subscript(_: Int)` for `v[i]`.
 /// - Not supported: non-ASCII names (and so non-ASCII operators),
-///   isolation and ownership attributes, more than one generic enclosing type, parameter packs.
+///   more than one generic enclosing type, parameter packs.
 pub fn mangle(declaration: &str) -> Result<String, Error> {
     let decl = parse::parse(declaration).map_err(Error)?;
     mangler::mangle(&decl).map_err(Error)
@@ -131,17 +132,24 @@ impl Declaration {
     }
 
     /// Per formal parameter, whether the callee consumes it (+1) instead of borrowing it: every parameter of an
-    /// initializer (Swift's default for initializers and setters, SE-0377).
+    /// initializer and a setter's new value (Swift's defaults, SE-0377), or any marked `consuming`/`__owned`.
     pub fn consumed(&self) -> Vec<bool> {
+        let by_default = self.0.name == "init";
         match &self.0.signature {
-            // The new value comes first, then a subscript's indices (borrowed).
-            ast::Signature::Setter(_) | ast::Signature::Subscript { setter: true, .. } => {
-                let mut consumed = vec![false; self.formal_count()];
-                consumed[0] = true;
-                consumed
+            ast::Signature::Function { params, .. } => params.iter().map(|p| ast::Ownership::consumes(p.ownership, by_default)).collect(),
+            // The new value comes first, then a subscript's indices (borrowed unless marked).
+            ast::Signature::Setter(_) => vec![true],
+            ast::Signature::Subscript { params, setter: true, .. } => {
+                std::iter::once(true).chain(params.iter().map(|p| ast::Ownership::consumes(p.ownership, false))).collect()
             }
-            _ => vec![self.0.name == "init"; self.formal_count()],
+            ast::Signature::Subscript { params, .. } => params.iter().map(|p| ast::Ownership::consumes(p.ownership, false)).collect(),
+            _ => vec![false; self.formal_count()],
         }
+    }
+
+    /// Whether the method consumes `self` (`consuming func`): apus passes a copy for the callee to consume.
+    pub fn consumes_self(&self) -> bool {
+        self.0.consumes_self
     }
 
     /// Whether the callee is async: an `async` function, or a `{ get async }` getter.
