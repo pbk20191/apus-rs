@@ -147,7 +147,7 @@ the standard library spelled out:
 [static] [(extension in Module [where …])] Module.Type(kind)[<T, …>]….subscript[<U: P>]([label|_]: Type, …) -> Type { get [async] [throws] | set }
 [static] [prefix | postfix] [Module.Type(kind)….]+(_: Type[, _: Type]) -> Type   (an operator: infix with two parameters)
 [mutating | consuming | borrowing] … (how the method takes `self`; the symbol does not show it)
-… ([label|_]: [_const] [inout | consuming | borrowing | __owned | __shared] Type, …)   (`_const`: AppIntents' compile-time constants)
+… ([label|_]: [_const] [inout | consuming | borrowing | __owned | __shared | sending] Type, …) [-> [sending] Type]   (`_const`: AppIntents' compile-time constants)
 @preconcurrency …   (its symbol leaves out @Sendable and global actors in function types)
 [(extension in Module [where …])] Module.Type(kind)[<T, …>]….init[<U: P>]([label|_]: Type, …) [async] [throws] [-> Type?]
 ```
@@ -180,8 +180,9 @@ the standard library spelled out:
   (`total: Int { get async throws }` is `async fn total(self: &SwiftValue) throws -> i64`): `swift!` refuses a mismatch,
   which would call an async function the sync way or leave a thrown error unread. A sync member that must run on its
   actor is the exception: it is `async fn` in Rust, and apus hops there.
-- Ownership: a `consuming` (`__owned`) parameter, every initializer parameter not marked `borrowing`, and a
-  setter's new value are passed +1, and `swift!` hands them over. A `consuming func` takes a copy of `self` (or an
+- Ownership: a `consuming` (`__owned`) or `sending` parameter, every initializer parameter not marked `borrowing`,
+  and a setter's new value are passed +1, and `swift!` hands them over. A `sending` result is returned as any result
+  is; in a closure type, `-> sending R` is accepted, a `sending` parameter refused (Swift would hand the closure it +1). A `consuming func` takes a copy of `self` (or an
   extra reference) for the callee to consume.
 - Operators: `static Shop.Money(struct).+(_: Money(struct), _: Money(struct)) -> Money(struct)`, `static prefix …-(…)`,
   `Shop.~~(_: Money(struct), _: Money(struct)) -> Bool` for one declared at the top level.

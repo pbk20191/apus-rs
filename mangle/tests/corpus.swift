@@ -256,3 +256,10 @@ public func cv8(_ f: @escaping @Sendable @convention(block) () -> Void) {}
 public func cv9(_ f: (@convention(block) (String) -> Bool)?) -> @convention(block) () -> Int { { 0 } }
 public func cv10(_ f: (@convention(c) (Int) -> Int, Int) -> Int) {}
 extension Made { public init(cv: @escaping @autoclosure () -> Int, b: @escaping @convention(block) () -> Void) { self.init(x: 0) } }
+
+public func sd0(_ a: sending Counter, _ b: sending String) {}
+public func sd1<T>(_ x: sending T) -> sending T? { nil }
+public func sd2() -> sending Counter { Counter() }
+public func sd3(_ f: @escaping @MainActor () async throws -> sending Counter) {}
+public func sd4(_ f: @escaping @Sendable () -> sending Counter) -> sending Counter { f() }
+extension Made { public init(sd: sending Counter) { self.init(x: 0) } }

@@ -167,3 +167,10 @@ public struct BlockHolder {
     public init(f: @escaping @convention(block) () -> Int) { self.f = f }
     public func call() -> Int { f() }
 }
+
+// A `sending` parameter is consumed (tests/swift_conventions.rs): the caller hands its reference over.
+nonisolated(unsafe) var adopted: Dog?
+nonisolated(unsafe) weak var adoptedWatch: Dog?
+public func adopt(_ d: sending Dog) { adopted = d; adoptedWatch = d }
+public func releaseAdopted() { adopted = nil }
+public func adoptedAlive() -> Bool { adoptedWatch != nil }

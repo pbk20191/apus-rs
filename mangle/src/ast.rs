@@ -116,6 +116,8 @@ pub struct FunctionTy {
     /// `@autoclosure`: a parameter's closure the caller writes as an expression; passed like any closure.
     pub autoclosure: bool,
     pub convention: Convention,
+    /// `-> sending R`: the result is in a disconnected region (`YT`); returned as any result is.
+    pub sending_result: bool,
 }
 
 /// A function type's representation (`@convention(…)`).
@@ -146,7 +148,8 @@ pub struct Param {
 pub enum Ownership {
     Consuming,
     Borrowing,
-    /// `__owned`, `__shared`: the older spellings, which always show in the symbol.
+    /// `__owned`, `__shared`: the older spellings, which always show in the symbol. `sending` is `__owned`
+    /// (SE-0430: the callee consumes it).
     Owned,
     Shared,
 }

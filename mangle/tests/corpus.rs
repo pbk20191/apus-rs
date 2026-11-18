@@ -161,6 +161,14 @@ const DECLARATIONS: &[&str] = &[
     "Probe.cv9(_: (@convention(block) (String) -> Bool)?) -> @convention(block) () -> Int",
     "Probe.cv10(_: (@convention(c) (Int) -> Int, Int) -> Int)",
     "Probe.Made(struct).init(cv: @escaping @autoclosure () -> Int, b: @escaping @convention(block) () -> Void)",
+    // `sending`: a parameter is consumed (`n`, an initializer's too); a declaration's result shows nothing, a function
+    // type's `YT`
+    "Probe.sd0(_: sending Counter(class), _: sending String)",
+    "Probe.sd1<T>(_: sending T) -> sending T?",
+    "Probe.sd2() -> sending Counter(class)",
+    "Probe.sd3(_: @escaping @MainActor () async throws -> sending Counter(class))",
+    "Probe.sd4(_: @escaping @Sendable () -> sending Counter(class)) -> sending Counter(class)",
+    "Probe.Made(struct).init(sd: sending Counter(class))",
     // initializers: the result is the type itself unless written (`-> T?` for a failable one)
     "Probe.Level(enum).init(rawValue: Int) -> Level(enum)?",
     "Probe.Made(struct).init(x: Int)",

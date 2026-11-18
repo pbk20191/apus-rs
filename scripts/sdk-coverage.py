@@ -322,7 +322,7 @@ def render(frags):
                 raise Untranslatable(f"attribute {spelling.strip()}")
             out.append(spelling.strip() + " ")
         elif kind == "keyword":
-            if spelling in ("sending", "each", "repeat"):
+            if spelling in ("each", "repeat"):
                 raise Untranslatable(f"keyword {spelling}")
             out.append(spelling + " ")
         else:

@@ -518,6 +518,9 @@ impl Mangler {
             self.nominal("_Concurrency", &[("MainActor".into(), Kind::Class)], None)?;
             self.push("Yc");
         }
+        if function.sending_result {
+            self.push("YT");
+        }
         let escaping = !in_parameter || function.escaping;
         self.push(match (function.convention, function.autoclosure, escaping) {
             (Convention::C, ..) => "XC",

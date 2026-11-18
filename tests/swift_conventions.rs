@@ -1,6 +1,6 @@
 //! Function conventions: an `@autoclosure` takes a `SwiftClosure`; a `@convention(c)` function an `extern "C" fn`;
 //! a `@convention(block)` function a block2 block (feature `block2`). The C function's and block's types are checked
-//! against the declared ones.
+//! against the declared ones. A `sending` argument is consumed.
 #[path = "common/mod.rs"]
 mod common;
 #[path = "common/probe.rs"]
@@ -22,6 +22,14 @@ apus::swift! {
     fn call_maybe_c(f: Option<extern "C" fn(i64) -> i64>) -> i64;
     #[swift_linked = "Res.cDoubler() -> @convention(c) (Int) -> Int"]
     fn c_doubler() -> extern "C" fn(i64) -> i64;
+    #[swift_linked = "Res.dog(name: String) -> Dog(class)"]
+    fn dog(name: &str) -> apus::swift::SwiftObject;
+    #[swift_linked = "Res.adopt(_: sending Dog(class))"]
+    fn adopt(d: &apus::swift::SwiftObject);
+    #[swift_linked = "Res.releaseAdopted()"]
+    fn release_adopted();
+    #[swift_linked = "Res.adoptedAlive() -> Bool"]
+    fn adopted_alive() -> bool;
 }
 
 extern "C" fn scaled(x: i32, by: f64) -> i32 {
@@ -34,6 +42,16 @@ extern "C" fn plus_one(x: i64) -> i64 {
 
 extern "C" fn ignored(_: i64) -> i32 {
     0
+}
+
+/// The callee consumes a `sending` argument: apus hands it a reference of its own, neither leaked nor over-released.
+fn sending_arguments_are_consumed() -> Result<(), Failed> {
+    let rex = dog("Rex").unwrap();
+    adopt(&rex).unwrap();
+    drop(rex);
+    check(adopted_alive().unwrap(), "kept by Swift after ours is gone")?;
+    release_adopted().unwrap();
+    check(!adopted_alive().unwrap(), "freed when Swift lets go")
 }
 
 fn autoclosures_are_swift_closures() -> Result<(), Failed> {
@@ -120,6 +138,7 @@ fn main() {
     let mut trials = vec![
         Trial::test("autoclosures_are_swift_closures", autoclosures_are_swift_closures),
         Trial::test("c_functions_are_function_pointers", c_functions_are_function_pointers),
+        Trial::test("sending_arguments_are_consumed", sending_arguments_are_consumed),
     ];
     #[cfg(feature = "block2")]
     trials.push(Trial::test("blocks_are_objective_c_blocks", blocks::blocks_are_objective_c_blocks));

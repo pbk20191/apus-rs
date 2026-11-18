@@ -879,6 +879,15 @@ mod isolation_tests {
     }
 
     #[test]
+    fn sending_parameters_are_consumed() {
+        use super::Declaration;
+        let parsed = Declaration::parse("M.f(_: sending Base(class), _: Int) -> sending Base(class)").unwrap();
+        assert_eq!(parsed.consumed(), vec![true, false]);
+        let error = super::mangle("M.f(_: ((sending Base(class)) -> Void))").unwrap_err().to_string();
+        assert!(error.contains("sending"), "{error}");
+    }
+
+    #[test]
     fn c_functions_and_blocks_are_single_pointers_of_a_checked_shape() {
         use super::{ArgumentKind, Declaration, ResultKind};
         let parsed = |d: &str| Declaration::parse(d).unwrap();

@@ -278,6 +278,9 @@ impl<'a> Parser<'a> {
                 if label.is_none() {
                     self.position = checkpoint;
                 }
+                if self.eat_keyword("sending") {
+                    return Err("a function type's `sending` parameter is not supported: Swift hands it over +1".into());
+                }
                 elements.push((label, self.ty()?));
             }
             let is_async = self.eat_keyword("async");
@@ -299,6 +302,7 @@ impl<'a> Parser<'a> {
                     return Err("an `@autoclosure` is a Swift closure".into());
                 }
                 let params = elements.into_iter().map(|(_, ty)| ty).collect();
+                let sending_result = self.eat_keyword("sending");
                 let result = self.ty()?;
                 return Ok(Ty::Function(Box::new(FunctionTy {
                     params,
@@ -310,6 +314,7 @@ impl<'a> Parser<'a> {
                     escaping,
                     autoclosure,
                     convention,
+                    sending_result,
                 })));
             }
             if attributed {
@@ -884,7 +889,13 @@ impl<'a> Parser<'a> {
                 let compile_time_const = self.eat_keyword("_const");
                 let inout = self.eat_keyword("inout");
                 let isolated = self.eat_keyword("isolated");
-                let ownership = [("consuming", Ownership::Consuming), ("borrowing", Ownership::Borrowing), ("__owned", Ownership::Owned), ("__shared", Ownership::Shared)]
+                let ownership = [
+                    ("consuming", Ownership::Consuming),
+                    ("borrowing", Ownership::Borrowing),
+                    ("__owned", Ownership::Owned),
+                    ("__shared", Ownership::Shared),
+                    ("sending", Ownership::Owned),
+                ]
                     .into_iter()
                     .find(|(word, _)| self.eat_keyword(word))
                     .map(|(_, ownership)| ownership);
@@ -914,6 +925,8 @@ impl<'a> Parser<'a> {
                 None
             };
             let result = if self.eat("->") {
+                // A declaration's `sending` result changes neither its symbol nor how it is returned.
+                self.eat_keyword("sending");
                 self.ty()?
             } else if member.name == "init" {
                 // An initializer returns the type itself (written out only for a failable one: `-> T?`).
