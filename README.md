@@ -334,7 +334,9 @@ One `some P` per result, without primary associated types (`some Collection<Int>
 
 A model is Swift: `@Model` is a macro that writes the `PersistentModel` conformance, and a container's schema takes
 `any PersistentModel.Type` values, whose lowering apus does not rely on. The rest is called from Rust
-(tests/swift_data.rs, with the model in tests/support/notes.swift):
+(tests/swift_data.rs, with the model in tests/support/notes.swift). `examples/swift-data` is the same as a program
+of its own: its build.rs compiles the model into a static library, and Rust inserts, edits, deletes, saves, fetches
+with a `#Predicate` and reopens the store (`cargo run -p apus-example-swift-data`):
 
 ```swift
 @Model public final class Note { public var title: String; public init(title: String) { self.title = title } }

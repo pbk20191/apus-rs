@@ -1,0 +1,10 @@
+[package]
+name = "apus-example-swift-data"
+version = "0.1.0"
+edition = "2021"
+description = "SwiftData from Rust: a Swift model, everything else called with apus"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+apus = { path = "../.." }
