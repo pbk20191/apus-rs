@@ -197,14 +197,18 @@ impl SwiftProtocol {
     /// ProtocolContextDescriptorFlags, whose bit 0 is the ProtocolClassConstraint: 0 for `Class`
     /// (include/swift/ABI/MetadataValues.h).
     pub(crate) fn is_class_bound(&self) -> Option<bool> {
-        let flags = unsafe { *(self.descriptor()? as *const u32) };
-        Some((flags >> 16) & 1 == 0)
+        Some(unsafe { descriptor_is_class_bound(self.descriptor()?) })
     }
 
     fn descriptor(&self) -> Option<*const c_void> {
         let address = *self.descriptor.get_or_init(|| lookup(self.symbol));
         (address != 0).then_some(address as *const c_void)
     }
+}
+
+/// See [`SwiftProtocol::is_class_bound`]; `descriptor` is a Swift protocol's descriptor.
+unsafe fn descriptor_is_class_bound(descriptor: *const c_void) -> bool {
+    (*(descriptor as *const u32) >> 16) & 1 == 0
 }
 
 /// A declaration's opaque result type (`some P`), named by its opaque type descriptor (`…QOMQ`, looked up once).
@@ -448,6 +452,8 @@ pub struct Opened {
     value: *mut c_void,
     ty: SwiftType,
     witness: WitnessTable,
+    /// `P` is class-bound: its requirements and extension methods take `self` as the reference itself, not by address.
+    by_reference: bool,
     /// The existential it was opened from (a copy), which owns the value (a box may be shared with the original).
     #[allow(dead_code)]
     container: SwiftValue,
@@ -468,6 +474,16 @@ impl Opened {
     }
 
     /// A copy of the value, of its dynamic type: what a call works on.
+    /// `self` for a call on `copy` (see [`Opened::copy`]): its address, or the reference it holds when `P` is
+    /// class-bound.
+    pub(crate) fn self_of(&self, copy: &SwiftValue) -> *mut c_void {
+        if self.by_reference {
+            unsafe { *(copy.as_ptr() as *const *mut c_void) }
+        } else {
+            copy.as_ptr()
+        }
+    }
+
     pub(crate) fn copy(&self) -> SwiftValue {
         let storage = UninitValue::new(self.ty);
         unsafe {
@@ -483,12 +499,14 @@ impl SwiftValue {
     pub fn conforming(&self, protocol: &SwiftProtocol) -> Option<Opened> {
         let witness = self.ty.conformance(protocol)?;
         let container = self.clone();
-        Some(Opened { value: container.as_ptr(), ty: self.ty, witness, container })
+        let by_reference = protocol.is_class_bound()?;
+        Some(Opened { value: container.as_ptr(), ty: self.ty, witness, by_reference, container })
     }
 
-    /// Opens an `any P` value of one protocol (not class-bound): its value, dynamic type and `P`'s witness table.
-    /// `None` for any other value. The container layout is the ABI's: a three-word buffer holding the value inline,
-    /// or a box when the value does not fit, then the metadata, then the witness table.
+    /// Opens an `any P` value of one protocol: its value, dynamic type and `P`'s witness table. `None` for any other
+    /// value. The container layout is the ABI's: a three-word buffer holding the value inline, or a box when the
+    /// value does not fit, then the metadata, then the witness table; a class existential's is the reference, then
+    /// the witness table.
     pub fn open(&self) -> Option<Opened> {
         let metadata = self.ty().as_ptr();
         unsafe {
@@ -498,8 +516,11 @@ impl SwiftValue {
             let flags = *(metadata.byte_add(std::mem::size_of::<usize>()) as *const u32);
             let opaque = flags & rt::EXISTENTIAL_ANY_CLASS_CONSTRAINT != 0;
             let special = flags & rt::EXISTENTIAL_SPECIAL_PROTOCOL_MASK != 0;
-            if !opaque || special || flags & rt::EXISTENTIAL_WITNESS_TABLES_MASK != 1 {
+            if special || flags & rt::EXISTENTIAL_WITNESS_TABLES_MASK != 1 {
                 return None;
+            }
+            if !opaque {
+                return self.open_class(metadata, flags);
             }
             // A copy keeps the value alive: inline values are copied, a box is shared.
             let container = self.clone();
@@ -514,7 +535,30 @@ impl SwiftValue {
             } else {
                 container.as_ptr()
             };
-            Some(Opened { value, ty, witness, container })
+            Some(Opened { value, ty, witness, by_reference: false, container })
         }
+    }
+
+    /// A class existential of one Swift protocol (TypeLayout.rst: the reference, then the witness table): its value
+    /// is the reference, its type the object's dynamic class (swift_getObjectType, include/swift/Runtime/Metadata.h).
+    /// Whether `self` is the reference itself depends on the protocol, read from the existential's metadata
+    /// (TargetExistentialTypeMetadata): `any P & AnyObject` is class-bound though `P` is not.
+    unsafe fn open_class(&self, metadata: *const c_void, flags: u32) -> Option<Opened> {
+        let word = std::mem::size_of::<usize>();
+        let protocols = *(metadata.byte_add(word + 4) as *const u32);
+        if protocols != 1 {
+            return None;
+        }
+        let superclass = (flags & rt::EXISTENTIAL_HAS_SUPERCLASS != 0) as usize;
+        let reference = *(metadata.byte_add(2 * word + superclass * word) as *const usize);
+        if reference & rt::PROTOCOL_DESCRIPTOR_REF_OBJC as usize != 0 {
+            return None;
+        }
+        let by_reference = descriptor_is_class_bound(reference as *const c_void);
+        let container = self.clone();
+        let words = container.as_ptr() as *const *mut c_void;
+        let ty = SwiftType::from_metadata(rt::swift_getObjectType(*words));
+        let witness = WitnessTable(*words.add(1) as *const c_void);
+        Some(Opened { value: container.as_ptr(), ty, witness, by_reference, container })
     }
 }

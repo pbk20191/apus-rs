@@ -539,7 +539,7 @@ impl<R> SwiftCall<R> {
         }
         let copy = opened.copy();
         let regs = call.regs.get_mut();
-        regs.self_ = copy.as_ptr();
+        regs.self_ = opened.self_of(&copy);
         regs.gpr[call.next_int] = opened.ty().as_ptr() as u64;
         regs.gpr[call.next_int + 1] = opened.witness().0 as u64;
         call.generic_args.extend([opened.ty().as_ptr(), opened.witness().0]);

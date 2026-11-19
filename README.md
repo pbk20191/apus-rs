@@ -166,7 +166,9 @@ the standard library spelled out:
   parameter (`Box<T>.item: T`) gets its type from there too. Its static members and initializers take the type's
   generic arguments after their own (each parameter's `SwiftType`, then witness tables), passed explicitly.
 - Protocol members: `Shop.Shape(protocol).area() -> Double`; the conforming type is `Self`. Call them on an
-  `any Shape` value opened with `SwiftValue::open()` (`self: &Opened`). Static members and initializers
+  `any Shape` value opened with `SwiftValue::open()` (`self: &Opened`); an existential of one protocol opens,
+  a class existential (`any Named`, `Named: AnyObject`) too, as its object's dynamic class. A class-bound protocol's
+  members take `self` as the reference itself, which `Opened` passes. Static members and initializers
   (`static Shop.Shape(protocol).make(_: Int) -> Self`, `Shop.Shape(protocol).init(n: Int)`) are called on a type with
   its conformance, `SwiftType::conforming(&protocol)` (`self: &OpenedType`). A `Self` result is a `SwiftValue` of the
   receiver's type. Under `where Self == Concrete` (SwiftUI's `.bordered`) a member belongs to that type and is called

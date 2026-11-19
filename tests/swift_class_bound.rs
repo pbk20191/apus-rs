@@ -5,7 +5,7 @@ mod common;
 #[path = "common/probe.rs"]
 mod probe;
 
-use apus::swift::{CallError, SwiftObject, SwiftType, SwiftValue};
+use apus::swift::{CallError, Opened, SwiftObject, SwiftType, SwiftValue};
 use common::{check, Failed, Trial};
 
 apus::swift! {
@@ -44,6 +44,10 @@ apus::swift! {
     fn maybe_named(name: &str) -> SwiftValue;
     #[swift_linked = "Res.labelOfMaybe(_: (any Named)?) -> String"]
     fn label_of_maybe(named: &SwiftValue) -> String;
+    #[swift_linked = "Res.Named(protocol).label: String { get }"]
+    fn named_label(self: &Opened) -> String;
+    #[swift_linked = "(extension in Res) Res.Named(protocol).shout() -> String"]
+    fn shout(self: &Opened) -> String;
     #[swift_linked = "Res.unitSymbol(_: __C.NSUnit(class)) -> String"]
     fn unit_symbol(unit: &SwiftObject) -> String;
     // Foundation's own: a member of a generic type whose parameter is class-bound.
@@ -90,6 +94,15 @@ fn class_existentials_are_passed_in_registers() -> Result<(), Failed> {
     check(matches!(&labels, [Ok(a), Ok(b)] if a == "named Fido" && b == "nobody"), format!("{labels:?}"))
 }
 
+/// An opened class existential: the dynamic class, and `self` passed as the reference.
+fn class_existentials_open() -> Result<(), Failed> {
+    let opened = any_named("Rex").unwrap().open().expect("any Named opens");
+    check(opened.ty().name() == "Res.Dog", opened.ty().name())?;
+    let (label, shouted) = (named_label(&opened), shout(&opened));
+    check(matches!((&label, &shouted), (Ok(l), Ok(s)) if l == "named Rex" && s == "named Rex!"), format!("{label:?} {shouted:?}"))?;
+    check(maybe_named("Fido").unwrap().open().is_none(), "an optional is not an existential")
+}
+
 fn metatypes_are_metadata() -> Result<(), Failed> {
     check(describe_type(SwiftType::of::<i64>()).unwrap() == "Int", "T.Type")?;
     check(any_type_name(SwiftType::of::<String>()).unwrap() == "String", "Any.Type")?;
@@ -106,6 +119,7 @@ fn main() {
         Trial::test("metatypes_are_metadata", metatypes_are_metadata),
         Trial::test("class_bound_protocols_are_checked", class_bound_protocols_are_checked),
         Trial::test("class_existentials_are_passed_in_registers", class_existentials_are_passed_in_registers),
+        Trial::test("class_existentials_open", class_existentials_open),
         Trial::test("members_of_class_bound_generic_types", members_of_class_bound_generic_types),
     ]);
 }

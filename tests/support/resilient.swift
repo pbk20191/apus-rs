@@ -199,3 +199,5 @@ public func anyNamed(_ name: String) -> any Named { Dog(name: name) }
 public func labelOfAny(_ x: any Named) -> String { x.label }
 public func maybeNamed(_ name: String) -> (any Named)? { name.isEmpty ? nil : Dog(name: name) }
 public func labelOfMaybe(_ x: (any Named)?) -> String { x?.label ?? "nobody" }
+// Opened from Rust: a class-bound protocol's requirements and extension methods take `self` as the reference itself.
+extension Named { public func shout() -> String { label + "!" } }

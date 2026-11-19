@@ -188,6 +188,11 @@ typedef struct { const void *function; void *indirect; SerialExecutorRef executo
 #define EXISTENTIAL_ANY_CLASS_CONSTRAINT 0x80000000u
 // Nonzero for a special protocol (`any Error`: a single-word box, not an opaque container).
 #define EXISTENTIAL_SPECIAL_PROTOCOL_MASK 0x3F000000u
+// Set when a superclass constraint's metadata precedes the protocols in TargetExistentialTypeMetadata (Metadata.h:
+// after Flags and NumProtocols, the superclass if any, then a ProtocolDescriptorRef per protocol).
+#define EXISTENTIAL_HAS_SUPERCLASS 0x40000000u
+// TargetProtocolDescriptorRef: the low bit marks an Objective-C protocol.
+#define PROTOCOL_DESCRIPTOR_REF_OBJC 0x1u
 // ValueWitnessFlags::IsNonInline: the value does not fit an existential's inline buffer; the buffer holds a box and
 // the value follows the box's HeapObject header, aligned.
 #define VALUE_WITNESS_IS_NON_INLINE 0x00020000u

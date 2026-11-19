@@ -142,7 +142,7 @@ impl<R> SwiftSyncCall<R> {
     /// the witness table follow the arguments.
     pub fn on_opened(mut self, opened: &super::value::Opened) -> Self {
         let copy = opened.copy();
-        self.lowering.regs.self_ = copy.as_ptr();
+        self.lowering.regs.self_ = opened.self_of(&copy);
         self.lowering.int(opened.ty().as_ptr() as u64);
         self.lowering.int(opened.witness().0 as u64);
         self.lowering.generic_args.extend([opened.ty().as_ptr(), opened.witness().0]);
