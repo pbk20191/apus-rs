@@ -125,9 +125,20 @@ pub enum ArgumentKind {
     CFunction(String),
     /// `@convention(block)`, optional or not: an Objective-C block, of the shape given.
     Block(String),
+    /// `any Error`, optional or not: one error box reference, a `SwiftError`.
+    Error,
     /// `any P`, optional or not: a class existential (its protocols class-bound) goes in registers, as its reference
     /// and witness tables; any other by address. Only the type's metadata tells which, at run time.
     Existential,
+}
+
+/// `any Error` or `(any Error)?`: Swift passes and returns it as one error box reference.
+fn is_error(ty: &ast::Ty) -> bool {
+    let ty = match ty {
+        ast::Ty::Optional(wrapped) => wrapped,
+        ty => ty,
+    };
+    matches!(ty, ast::Ty::Existential(p) if p.module == "Swift" && p.name == "Error")
 }
 
 /// A result whose Rust type the declaration fixes, for the same reason as [`ArgumentKind`].
@@ -137,6 +148,8 @@ pub enum ResultKind {
     ClassReference,
     /// A metatype, returned as the type's metadata.
     Metatype,
+    /// `any Error`, optional or not: an error box reference (+1), a `SwiftError`.
+    Error,
     /// A C function pointer.
     CFunction,
     /// An Objective-C block (+1).
@@ -482,6 +495,7 @@ impl Declaration {
         let kind = |ty: &ast::Ty| match ty {
             ast::Ty::Param(param) if class_bound.contains(param) => Some(ArgumentKind::ClassBound),
             ast::Ty::Metatype(_) => Some(ArgumentKind::Metatype),
+            ty if is_error(ty) => Some(ArgumentKind::Error),
             ast::Ty::Existential(_) => Some(ArgumentKind::Existential),
             ast::Ty::Optional(wrapped) if matches!(**wrapped, ast::Ty::Existential(_)) => Some(ArgumentKind::Existential),
             ty => foreign_function(ty).map(|function| match function.convention {
@@ -514,6 +528,7 @@ impl Declaration {
         match result {
             ast::Ty::Param(param) if class_bound_params(decl).contains(param) => Some(ResultKind::ClassReference),
             ast::Ty::Metatype(_) => Some(ResultKind::Metatype),
+            ty if is_error(ty) => Some(ResultKind::Error),
             ty => foreign_function(ty).map(|function| match function.convention {
                 ast::Convention::C => ResultKind::CFunction,
                 _ => ResultKind::Block,
@@ -1020,6 +1035,10 @@ mod isolation_tests {
         let existential = parsed("M.f<T>(_: any P, _: (any P)?, _: T, _: [any P])");
         assert_eq!(existential.argument_kinds().unwrap(), vec![Some(ArgumentKind::Existential), Some(ArgumentKind::Existential), None, None]);
         assert_eq!(parsed("M.f(_: isolated (any Actor)?, _: any P...)").argument_kinds().unwrap(), vec![None, None]);
+        // `any Error` is one box reference: a `SwiftError`.
+        let error = parsed("M.f(_: any Error, _: (any Error)?) -> (any Error)?");
+        assert_eq!(error.argument_kinds().unwrap(), vec![Some(ArgumentKind::Error), Some(ArgumentKind::Error)]);
+        assert_eq!(error.result_kind(), Some(ResultKind::Error));
         // A class-bound protocol (`protocol PersistentModel: AnyObject`) is marked `(AnyObject)`, which the
         // declaration cannot show otherwise; its symbol is the unmarked one's. The witness entry says what the
         // protocol's descriptor must say at run time.

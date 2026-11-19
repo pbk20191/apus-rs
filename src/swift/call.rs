@@ -100,6 +100,8 @@ pub(crate) enum Owned {
     /// A native heap object that is not a class instance (a closure context), released with swift_release:
     /// swift_unknownObjectRelease would read its metadata as a class and may take it for an ObjC object.
     Native(*mut c_void),
+    /// An `any Error` box, released with swift_errorRelease.
+    Error(*mut c_void),
     /// A `String`'s owner word.
     Bridge(u64),
     /// A value passed by address; dropped with the record.
@@ -128,7 +130,7 @@ impl Owned {
     /// Marks what this keeps alive for the callee to consume (+1), handed over when the call starts.
     pub(crate) fn pending(self) -> Owned {
         match self {
-            Owned::Object(_) | Owned::Native(_) | Owned::Bridge(_) | Owned::Value(_) => Owned::Pending(Box::new(self)),
+            Owned::Object(_) | Owned::Native(_) | Owned::Error(_) | Owned::Bridge(_) | Owned::Value(_) => Owned::Pending(Box::new(self)),
             #[cfg(feature = "block2")]
             Owned::Block(_) => Owned::Pending(Box::new(self)),
             other => other,
@@ -151,7 +153,7 @@ impl Owned {
     /// the callee's; a value passed by address becomes the callee's, its storage still ours until the call is over.
     fn hand_over(self) -> Option<Owned> {
         match self {
-            Owned::Object(_) | Owned::Native(_) | Owned::Bridge(_) => {
+            Owned::Object(_) | Owned::Native(_) | Owned::Error(_) | Owned::Bridge(_) => {
                 std::mem::forget(self);
                 None
             }
@@ -178,6 +180,7 @@ impl Drop for Owned {
             match *self {
                 Owned::Object(object) => rt::swift_unknownObjectRelease(object),
                 Owned::Native(object) => rt::swift_release(object),
+                Owned::Error(error) => rt::swift_errorRelease(error),
                 Owned::Bridge(word) => rt::swift_bridgeObjectRelease(word as *mut c_void),
                 #[cfg(feature = "block2")]
                 Owned::Block(block) => block2::ffi::_Block_release(block),

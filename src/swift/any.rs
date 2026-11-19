@@ -221,6 +221,11 @@ impl SwiftError {
         SwiftError { boxed }
     }
 
+    /// The box, still owned by this.
+    pub(crate) fn as_ptr(&self) -> *mut c_void {
+        self.boxed
+    }
+
     /// Gives up ownership of the box (+1).
     pub(crate) fn into_raw(self) -> *mut c_void {
         std::mem::ManuallyDrop::new(self).boxed

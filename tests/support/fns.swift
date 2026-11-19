@@ -292,6 +292,11 @@ public struct StructError: Error {
 @inline(never) public func throwStruct(code: Int) throws -> Int { throw StructError(code: code, detail: "bad") }
 @inline(never) public func throwNSError(code: Int) throws -> Int { throw NSError(domain: "probe.domain", code: code) }
 @inline(never) public func structErrorCode<E: Error>(_ error: E) -> Int { (error as? StructError)?.code ?? -1 }
+// `any Error` (tests/swift_errors.rs): one box reference, in a register.
+@inline(never) public func makeError(code: Int) -> any Error { StructError(code: code, detail: "made") }
+@inline(never) public func anyErrorCode(_ error: any Error) -> Int { (error as? StructError)?.code ?? -1 }
+@inline(never) public func maybeError(code: Int) -> (any Error)? { code == 0 ? nil : StructError(code: code, detail: "maybe") }
+@inline(never) public func maybeErrorCode(_ error: (any Error)?) -> Int { error.map { ($0 as? StructError)?.code ?? -1 } ?? 0 }
 
 // Rust closures as Swift closures (tests/swift_closures.rs).
 @inline(never) public func applyConcrete(_ f: (Int) async -> Int) async -> Int { await f(20) + 1 }

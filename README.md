@@ -228,6 +228,8 @@ static (extension in _Concurrency where Success == Never, Failure == Never)
   table per protocol; any other existential by address. Only the type's metadata tells which, so the call reads it
   (`Existential` wraps an argument declared `any P`; up to three protocols). A generic parameter's value goes by
   address whatever its type.
+- `any Error` is one error box reference, in a register: `&SwiftError` as an argument (borrowed), `SwiftError` as a
+  result (+1), `Option<…>` for `(any Error)?` (nil is null). Any other Rust type is a compile error.
 - These rest on swiftc's type lowering (one pointer each; a class existential's words in registers), which the
   calling-convention document does not spell out; Apple's frameworks export functions compiled that way, so ABI
   stability keeps it. So does a generic struct's members taking `Self`'s metadata.

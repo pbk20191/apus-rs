@@ -354,6 +354,7 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
                     apus_mangle::ArgumentKind::ClassBound => ("ClassBound", None),
                     apus_mangle::ArgumentKind::Metatype => ("Metatype", None),
                     apus_mangle::ArgumentKind::Existential => ("Existential", None),
+                    apus_mangle::ArgumentKind::Error => ("ErrorArg", None),
                     apus_mangle::ArgumentKind::CFunction(shape) => ("CFunctionArg", Some(shape)),
                     apus_mangle::ArgumentKind::Block(shape) => ("BlockArg", Some(shape)),
                 };
@@ -382,6 +383,12 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             }
             Some(apus_mangle::ResultKind::Metatype) if ret != "SwiftType" => {
                 return item_compile_error(&format!("`{declaration}` returns a metatype, the type's metadata: declare `-> SwiftType`"))
+            }
+            // `DirectValue` takes the box as an opaque value of type `any Error`.
+            Some(apus_mangle::ResultKind::Error) if !ret.contains("SwiftError") && !ret.contains("DirectValue") => {
+                return item_compile_error(&format!(
+                    "`{declaration}` returns an `any Error`, an error box (+1): declare `-> SwiftError` (`Option<SwiftError>` if optional)"
+                ))
             }
             Some(apus_mangle::ResultKind::CFunction) if !ret.contains("extern \"C\" fn") => {
                 return item_compile_error(&format!(

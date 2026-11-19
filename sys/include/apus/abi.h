@@ -256,6 +256,7 @@ struct ValueWitnessTable {
 
 extern void *swift_retain(void *object) APUS_C;
 extern void swift_release(void *object) APUS_C;
+extern void *swift_errorRetain(void *error) APUS_C;
 extern void swift_errorRelease(void *error) APUS_C;
 extern void *swift_allocObject(const void *metadata, size_t size, size_t alignment_mask) APUS_C;
 extern void swift_deallocObject(void *object, size_t size, size_t alignment_mask) APUS_C;

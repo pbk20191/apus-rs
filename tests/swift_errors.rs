@@ -16,6 +16,14 @@ apus::swift! {
     fn sync_throw(fail: bool) throws -> i64;
     #[swift_linked = "Probe.structErrorCode<E: Error>(_: E) -> Int"]
     fn struct_error_code(error: &SwiftValue, ty: SwiftType, error_witness: WitnessTable) -> i64;
+    #[swift_linked = "Probe.makeError(code: Int) -> any Error"]
+    fn make_error(code: i64) -> SwiftError;
+    #[swift_linked = "Probe.anyErrorCode(_: any Error) -> Int"]
+    fn any_error_code(error: &SwiftError) -> i64;
+    #[swift_linked = "Probe.maybeError(code: Int) -> (any Error)?"]
+    fn maybe_error(code: i64) -> Option<SwiftError>;
+    #[swift_linked = "Probe.maybeErrorCode(_: (any Error)?) -> Int"]
+    fn maybe_error_code(error: Option<&SwiftError>) -> i64;
 }
 
 static ERROR: SwiftProtocol = SwiftProtocol::new("$ss5ErrorMp");
@@ -50,9 +58,26 @@ fn domain_and_code() -> Result<(), Failed> {
     check(enumeration.domain() == "Probe.DemoError" && enumeration.code() == 0, format!("enum {} {}", enumeration.domain(), enumeration.code()))
 }
 
+/// `any Error` is one box reference, passed and returned in a register.
+fn any_error_in_registers() -> Result<(), Failed> {
+    let error = make_error(7).unwrap();
+    check(error.description().contains("made"), error.description())?;
+    let code = any_error_code(&error);
+    check(matches!(code, Ok(7)), format!("{code:?}"))?;
+    // A thrown error passed back.
+    let thrown = thrown(throw_struct(5));
+    check(matches!(any_error_code(&thrown), Ok(5)), "a thrown error")?;
+    // Optional: nil is a null box.
+    let some = maybe_error(3).unwrap();
+    check(some.is_some() && maybe_error(0).unwrap().is_none(), "(any Error)? results")?;
+    let codes = (maybe_error_code(some.as_ref()), maybe_error_code(None));
+    check(matches!(codes, (Ok(3), Ok(0))), format!("{codes:?}"))
+}
+
 fn main() {
     common::run(vec![
         Trial::test("downcast_to_the_thrown_type", downcast_to_the_thrown_type),
         Trial::test("domain_and_code", domain_and_code),
+        Trial::test("any_error_in_registers", any_error_in_registers),
     ]);
 }

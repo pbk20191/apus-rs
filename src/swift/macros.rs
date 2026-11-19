@@ -77,12 +77,20 @@
 /// - A value of a class-bound generic type (`T: SomeClass`, `T: AnyObject`, `T: P(AnyObject)` for a protocol declared
 ///   `: AnyObject`) is a class reference, not a `SwiftValue`: `&SwiftObject` (or `&Retained<T>`) as an argument,
 ///   `SwiftObject` as a result. A metatype (`T.Type`, a class's, `Any.Type`) is a `SwiftType`; a struct's or enum's
-///   (passed as nothing) is refused.
+///   (passed as nothing) is refused. `any Error` is an error box: `&SwiftError` as an argument, `SwiftError` as a
+///   result (`Option<…>` for `(any Error)?`).
 ///
 /// ```compile_fail
 /// apus::swift! {
 ///     #[swift = "SwiftData.ModelContext(class).insert<T: PersistentModel(AnyObject)>(_: T)"]
 ///     fn insert(self: &apus::swift::SwiftObject, model: &apus::swift::SwiftValue); // a model is a class reference
+/// }
+/// ```
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "Probe.makeError(code: Int) -> any Error"]
+///     fn make_error(code: i64) -> apus::swift::SwiftValue; // one box reference: SwiftError
 /// }
 /// ```
 ///
@@ -417,7 +425,7 @@ macro_rules! __swift_call {
         $crate::__swift_call!($function [$($f,)* __apus_self_type $(, $g)*] [$($generic)*] declared)
     }};
     // `wrapped [(argument Wrapper)…]`: arguments whose Rust type the declaration fixes (`ClassBound`, `Metatype`,
-    // `Existential`, `CFunctionArg`, `BlockArg`).
+    // `Existential`, `ErrorArg`, `CFunctionArg`, `BlockArg`).
     // A C function's or block's wrapper also takes the declared shape.
     ($function:ident [$($arg:ident),*] [wrapped [$(($wa:ident $wk:ident $($ws:literal)?))*] $($generic:tt)*] $declared:expr) => {{
         $(let $wa = $crate::swift::$wk($wa $(, $ws)?);)*

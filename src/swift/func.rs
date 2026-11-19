@@ -6,7 +6,7 @@
 //! two integer registers, passed guaranteed (+0). Direct results come back in the first result registers,
 //! owned (+1): `String` in two, `Array`/`Dictionary`/objects as one reference, `Int?` as value + nil flag.
 
-use super::any::{FromSwiftAny, SwiftAny, SwiftHashable};
+use super::any::{FromSwiftAny, SwiftAny, SwiftError, SwiftHashable};
 use super::call::{AsyncFunctionPointer, CallError, CallRegs, IndirectSlot, Owned, RetRegs, SwiftCall};
 use super::rt;
 use super::value::{IntoSwift, SwiftType, SwiftValue, UninitValue, WitnessTable};
@@ -314,6 +314,40 @@ impl SwiftArg for Existential<'_> {
     }
 }
 
+/// An `any Error` argument, optional or not: one error box reference, passed guaranteed; the call keeps it alive.
+/// `swift!` wraps an argument declared `any Error` (`&SwiftError`) or `(any Error)?` (`Option<&SwiftError>`).
+#[doc(hidden)]
+pub struct ErrorArg<A>(pub A);
+
+#[doc(hidden)]
+pub trait ErrorRef {
+    fn boxed(&self) -> Option<&SwiftError>;
+}
+
+impl ErrorRef for &SwiftError {
+    fn boxed(&self) -> Option<&SwiftError> {
+        Some(self)
+    }
+}
+
+impl ErrorRef for Option<&SwiftError> {
+    fn boxed(&self) -> Option<&SwiftError> {
+        *self
+    }
+}
+
+impl<A: ErrorRef> SwiftArg for ErrorArg<A> {
+    fn lower(&self, into: &mut ArgLowering) {
+        match self.0.boxed() {
+            Some(error) => {
+                into.owned.push(Owned::Error(unsafe { rt::swift_errorRetain(error.as_ptr()) }));
+                into.int(error.as_ptr() as u64)
+            }
+            None => into.int(0), // nil: a null box
+        }
+    }
+}
+
 /// A concrete `[T]` parameter: an array is one reference, passed directly.
 impl<T: IntoSwift + Clone> SwiftArg for Vec<T> {
     fn lower(&self, into: &mut ArgLowering) {
@@ -504,6 +538,9 @@ direct_ret! {
     // A thick metatype (`T.Type`, a class's, `Any.Type`): the type's metadata, which is not reference counted.
     SwiftType: |ret| SwiftType::from_metadata(ret.0.gpr[0] as *const c_void),
     Option<SwiftObject>: |ret| NonNull::new(ret.0.gpr[0] as *mut c_void).map(SwiftObject),
+    // `any Error`: one owned box reference; `(any Error)?`: nil is null.
+    SwiftError: |ret| SwiftError::from_raw(ret.0.gpr[0] as *mut c_void),
+    Option<SwiftError>: |ret| (ret.0.gpr[0] != 0).then(|| SwiftError::from_raw(ret.0.gpr[0] as *mut c_void)),
 }
 
 impl SwiftRet for f64 {

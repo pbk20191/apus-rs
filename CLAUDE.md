@@ -24,7 +24,8 @@ Judge every change by two questions, in this order:
   metatype is thin (passed as nothing); an `@autoclosure` parameter is passed as the closure it is; an instance member
   of a generic struct or enum takes `Self`'s metadata after its formal arguments, and a static member or initializer
   the type's generic arguments; (2026-11-19) a class existential (`any P`, P class-bound, optional or not) is passed
-  and returned in registers as its reference and witness tables. Apple's frameworks are compiled this way, so ABI
+  and returned in registers as its reference and witness tables, and `any Error` (optional or not) as its one box
+  reference, as closures' `any Error` parameters already were. Apple's frameworks are compiled this way, so ABI
   stability fixes it.
 - Anything else (runtime internals, compiler-computed layouts of non-resilient types, private SPI, behavior observed
   but not documented) is **not** built on silently: stop and tell the owner what is unguaranteed and the alternatives,
