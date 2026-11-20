@@ -725,3 +725,15 @@ mod tests {
         assert!(take_registered_from(&calls, false, false).is_none());
     }
 }
+
+impl<R> super::func::ClassSelf for SwiftCall<R> {
+    fn class_self(mut self, class: Result<super::SwiftType, CallError>) -> Self {
+        match class {
+            Ok(ty) => self.on_type(ty),
+            Err(error) => {
+                self.invalid.get_or_insert(error);
+                self
+            }
+        }
+    }
+}

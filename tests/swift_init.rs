@@ -18,6 +18,10 @@ apus::swift! {
     fn minted(self: &SwiftType, n: i64) -> SwiftObject;
     #[swift_linked = "static Probe.Minted(class).twice(_: Int) -> Minted(class)"]
     fn twice(self: &SwiftType, n: i64) -> SwiftObject;
+    #[swift_linked = "Probe.Minted(class).init(n: Int)"]
+    fn minted_implicit(n: i64) -> SwiftObject;
+    #[swift = "static Probe.Minted(class).twice(_: Int) -> Minted(class)"]
+    fn twice_implicit(n: i64) -> SwiftObject;
     #[swift_linked = "Probe.Minted(class).value: Int { get }"]
     fn value(self: &SwiftObject) -> i64;
     #[swift_linked = "Probe.mintedGone(_: Int) -> Bool"]
@@ -49,6 +53,12 @@ fn classes_pass_themselves() -> Result<(), Failed> {
     check(value(&twice(&class, 4).unwrap()).unwrap() == 8, "Minted.twice(4)")
 }
 
+/// Without `self`, the declared class's own metadata is `self`.
+fn classes_pass_themselves_implicitly() -> Result<(), Failed> {
+    check(value(&minted_implicit(7).unwrap()).unwrap() == 7, "Minted(n: 7)")?;
+    check(value(&twice_implicit(4).unwrap()).unwrap() == 8, "Minted.twice(4)")
+}
+
 fn initializer_arguments_are_consumed() -> Result<(), Failed> {
     let minted_class = SwiftType::from_mangled_name("5Probe6MintedC").unwrap();
     let holder_class = SwiftType::from_mangled_name("5Probe6HolderC").unwrap();
@@ -68,6 +78,7 @@ fn initializer_arguments_are_consumed() -> Result<(), Failed> {
 fn main() {
     common::run(vec![
         Trial::test("value_types_pass_no_self", value_types_pass_no_self),
+        Trial::test("classes_pass_themselves_implicitly", classes_pass_themselves_implicitly),
         Trial::test("classes_pass_themselves", classes_pass_themselves),
         Trial::test("initializer_arguments_are_consumed", initializer_arguments_are_consumed),
     ]);

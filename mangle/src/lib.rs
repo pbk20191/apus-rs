@@ -331,6 +331,24 @@ impl Declaration {
         parse::parse(declaration).map(Declaration).map_err(Error)
     }
 
+    /// The mangled name (no `$s`) of the type a static member or initializer belongs to, as the runtime resolves it:
+    /// `"5Probe6MintedC"`. `None` for a generic type (its name needs the generic arguments) or a free function.
+    pub fn context_type_name(&self) -> Option<String> {
+        let decl = &self.0;
+        let ty = match fixed_self(decl) {
+            Some(ty) => ty.clone(),
+            None if decl.context.is_empty() || decl.context_params > 0 => return None,
+            None => ast::Ty::Nominal {
+                module: decl.module.clone(),
+                path: decl.context.clone(),
+                args: Vec::new(),
+                split: Vec::new(),
+                extension: decl.context_extension.clone().map(Box::new),
+            },
+        };
+        mangler::type_name(&ty).ok()
+    }
+
     /// See [`isolation`].
     pub fn isolation(&self) -> Isolation {
         let decl = &self.0;
@@ -906,6 +924,10 @@ mod isolation_tests {
         assert_eq!(super::result_type(bordered).unwrap().as_deref(), Some("1M8BorderedV"));
         assert_eq!(of("static (extension in M where Self == Klass(class)) M.Style(protocol).klass: Self { get }"), TypeSelf::Thick);
         assert_eq!(of("M.Tally(actor).init()"), TypeSelf::Thick);
+        let name = |d: &str| Declaration::parse(d).unwrap().context_type_name();
+        assert_eq!(name("M.Built(class).init(n: Int)").as_deref(), Some("1M5BuiltC"));
+        assert_eq!(name("M.Crate(class)<T>.init(_: T)"), None, "a generic class has no one name");
+        assert_eq!(of("M.Crate(class)<T>.init(_: T)"), TypeSelf::Thick);
         assert_eq!(super::isolation("M.Tally(actor).init()").unwrap(), Isolation::None, "an actor's init is nonisolated");
     }
 

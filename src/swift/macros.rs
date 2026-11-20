@@ -29,13 +29,15 @@
 /// - A leading `self: &SwiftObject` or `self: &SwiftValue` declares a method or property of that receiver:
 ///   `fn total(self: &SwiftValue) -> i64;` is called as `total(&cart)`.
 /// - An initializer (`Module.Type(kind).init(…)`, returning the type unless written: `-> T?` when failable) or a
-///   static member takes the type's metatype as `self`: a class's is `self: &SwiftType` (its metadata), a struct's or
-///   enum's is nothing. The wrong one is a compile error:
+///   static member takes the type's metatype as `self`: a class's is its metadata, a struct's or enum's is nothing.
+///   For a class, declare no `self` and apus passes the declared class (looked up by name; `CallError::Unavailable`
+///   if missing), or `self: &SwiftType` to pass another (a subclass). A generic class's needs `self: &SwiftType`, the
+///   specialized class's metadata. The wrong one is a compile error:
 ///
 /// ```compile_fail
 /// apus::swift! {
-///     #[swift = "Probe.Minted(class).init(n: Int)"]
-///     fn minted(n: i64) -> apus::swift::SwiftObject; // needs `self: &SwiftType`
+///     #[swift = "Res.Crate(class)<T>.init(_: T)"]
+///     fn new_crate(x: &apus::swift::SwiftValue) -> apus::swift::SwiftObject; // which `Crate<T>`? needs `self: &SwiftType`
 /// }
 /// ```
 ///
@@ -189,7 +191,9 @@
 /// ```
 /// apus::swift! {
 ///     #[swift = "Probe.Minted(class).init(n: Int)"]
-///     fn minted(self: &apus::swift::SwiftType, n: i64) -> apus::swift::SwiftObject;
+///     fn minted(n: i64) -> apus::swift::SwiftObject;
+///     #[swift = "Probe.Minted(class).init(n: Int)"]
+///     fn minted_as(self: &apus::swift::SwiftType, n: i64) -> apus::swift::SwiftObject;
 ///     #[swift = "Probe.Made(struct).init(x: Int)"]
 ///     fn made(x: i64) -> apus::swift::SwiftValue;
 /// }
@@ -435,6 +439,13 @@ macro_rules! __swift_call {
         let declared = $declared;
         $(let declared = declared.of_type(__apus_self_type.generic_argument($n));)?
         $crate::__swift_call!($function [$($f,)* __apus_self_type $(, $g)*] [$($generic)*] declared)
+    }};
+    // `classself "name"`: a class's initializer or static member declared without `self`: the class's metadata,
+    // found by its mangled name, is `self`.
+    ($function:ident [$($arg:ident),*] [classself $class:literal $($generic:tt)*] $declared:expr) => {{
+        static CLASS: ::std::sync::OnceLock<::core::option::Option<$crate::swift::SwiftType>> = ::std::sync::OnceLock::new();
+        let call = $crate::__swift_call!($function [$($arg),*] [$($generic)*] $declared);
+        $crate::swift::ClassSelf::class_self(call, $crate::swift::__declared_class(&CLASS, $class))
     }};
     // `wrapped [(argument Wrapper)…]`: arguments whose Rust type the declaration fixes (`ClassBound`, `Metatype`,
     // `Existential`, `ErrorArg`, `CFunctionArg`, `BlockArg`).

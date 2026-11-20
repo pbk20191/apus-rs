@@ -39,7 +39,7 @@ pub use generic::{
     __generic_args, __metatype_of, __object_type_of, __type_of, AsMetatype, ClassBound, ClassReference, GenericArgs, HasSwiftType, ProtocolLayout, ValueReceiver, __self_type,
     Metatype,
 };
-pub use func::{__bind, __bind_sync, BindAsyncReceiver, BindReceiver, Consumed, DeclaredResult, ErrorSlot, ArgLowering, DirectValue, ErrorArg, ErrorRef, Existential, SwiftArg, SwiftArgs, SwiftAsyncFn, SwiftObject, SwiftReceiver, SwiftRet};
+pub use func::{__bind, __bind_sync, __declared_class, BindAsyncReceiver, ClassSelf, BindReceiver, Consumed, DeclaredResult, ErrorSlot, ArgLowering, DirectValue, ErrorArg, ErrorRef, Existential, SwiftArg, SwiftArgs, SwiftAsyncFn, SwiftObject, SwiftReceiver, SwiftRet};
 pub use current::{cancelled, current_task, is_cancelled, priority, Cancelled, TaskRef};
 pub use join::{JoinHandle, MainOnlyHandle};
 pub use timer::{sleep, within, Sleep};

@@ -175,7 +175,9 @@ the standard library spelled out:
   like that type's own.
 - Initializers: `Shop.Cart(struct).init(items: [String])`, `Shop.Level(enum).init(rawValue: Int) -> Level(enum)?`
   (the result is the type unless written; a failable one returns an optional). An initializer or `static` member of a
-  class or actor takes the class as `self` (`self: &SwiftType`, its metadata); a struct's or enum's takes no `self`.
+  class or actor takes the class's metadata as `self`: declare no `self` and `swift!` passes the declared class
+  (looked up by name once; `CallError::Unavailable` if it is missing), or `self: &SwiftType` to pass another (a
+  subclass, or a generic class specialized, which needs it). A struct's or enum's takes no `self`.
   `swift!` refuses the wrong one. An initializer consumes its arguments (Swift passes them +1): `swift!` hands them
   over. Protocol initializers and static protocol requirements are not supported.
 - A value receiver (`self: &SwiftValue`, `self: &Opened`) is passed as a copy. A struct's setter
@@ -348,7 +350,7 @@ public func noteContainer() throws -> ModelContainer {
 ```rust
 apus::swift! {
     #[swift = "SwiftData.ModelContext(class).init(_: ModelContainer(class))"]
-    fn new_context(self: &SwiftType, container: &SwiftObject) -> SwiftObject;
+    fn new_context(container: &SwiftObject) -> SwiftObject;
     #[swift = "SwiftData.ModelContext(class).insert<T: PersistentModel(AnyObject)>(_: T)"]
     fn insert(self: &SwiftObject, model: &SwiftObject);
     #[swift = "SwiftData.ModelContext(class).save() throws"]

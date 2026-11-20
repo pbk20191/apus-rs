@@ -253,7 +253,13 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     // A static member or initializer gets its type as `self`: a class's metadata, nothing for a struct or enum.
     if let Some((declaration, parsed)) = &declared {
         match parsed.type_self() {
-            apus_mangle::TypeSelf::Thick if !receiver.as_deref().is_some_and(|r| r.ends_with("SwiftType")) => {
+            // Without `self`, the declared class's own metadata (`classself`, added last below).
+            apus_mangle::TypeSelf::Thick if receiver.is_none() && parsed.context_type_name().is_none() => {
+                return item_compile_error(&format!(
+                    "`{declaration}` belongs to a generic class: declare `self: &SwiftType` first, the specialized class's metadata"
+                ));
+            }
+            apus_mangle::TypeSelf::Thick if receiver.as_deref().is_some_and(|r| !r.ends_with("SwiftType")) => {
                 return item_compile_error(&format!("`{declaration}` takes its class as `self`: declare `self: &SwiftType` first"));
             }
             apus_mangle::TypeSelf::Conformance if !receiver.as_deref().is_some_and(|r| r.ends_with("OpenedType")) => {
@@ -501,6 +507,20 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             return item_compile_error(&format!(
                 "`{declaration}` has typed throws: pass an `ErrorSlot` argument after its generic arguments, where the callee writes its error"
             ));
+        }
+    }
+    // Outermost marker: `__swift_call!` reads it before the others.
+    if let Some((_, parsed)) = &declared {
+        if parsed.type_self() == apus_mangle::TypeSelf::Thick && receiver.is_none() {
+            let name = parsed.context_type_name().expect("checked above");
+            let mut front: TokenStream = [
+                TokenTree::Ident(proc_macro::Ident::new("classself", proc_macro::Span::call_site())),
+                TokenTree::Literal(Literal::string(&name)),
+            ]
+            .into_iter()
+            .collect();
+            front.extend(generic);
+            generic = front;
         }
     }
     let hop = match declared.as_ref().map(|(d, parsed)| (parsed.isolation(), d)) {

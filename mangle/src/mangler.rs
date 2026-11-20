@@ -923,6 +923,13 @@ fn is_concrete(ty: &Ty) -> bool {
     }
 }
 
+/// A type's mangled name, as the runtime resolves type names (no `$s`).
+pub(crate) fn type_name(ty: &Ty) -> Result<String, String> {
+    let mut m = Mangler::default();
+    m.ty(ty)?;
+    Ok(m.buffer)
+}
+
 /// The mangled name of the declaration's result type (a function's result, a getter's type), as the runtime
 /// resolves type names; `None` when it depends on a generic parameter.
 pub fn result_type(decl: &Decl) -> Result<Option<String>, String> {

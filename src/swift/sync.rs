@@ -263,3 +263,15 @@ fn actor_executor(actor: *mut c_void) -> Option<super::rt::SerialExecutorRef> {
         (!witness.is_null()).then(|| rt::apus_actor_unowned_executor(actor, ty, witness))
     }
 }
+
+impl<R> super::func::ClassSelf for SwiftSyncCall<R> {
+    fn class_self(mut self, class: Result<SwiftType, CallError>) -> Self {
+        match class {
+            Ok(ty) => self.on_type(ty),
+            Err(error) => {
+                self.invalid.get_or_insert(error);
+                self
+            }
+        }
+    }
+}

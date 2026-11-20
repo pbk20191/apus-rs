@@ -397,6 +397,19 @@ impl BindReceiver for &mut SwiftValue {
     }
 }
 
+/// The class a `swift!` initializer or static member belongs to when no `self` is declared: its metadata, looked up by
+/// mangled name once (`swift_getTypeByMangledNameInContext`), is `self` (swiftself), as `self: &SwiftType` passes it.
+#[doc(hidden)]
+pub fn __declared_class(class: &'static OnceLock<Option<SwiftType>>, name: &'static str) -> Result<SwiftType, CallError> {
+    class.get_or_init(|| SwiftType::from_mangled_name(name)).ok_or(CallError::Unavailable(name))
+}
+
+/// Binds [`__declared_class`]'s result as `self`; a class not found is reported when the call is made.
+#[doc(hidden)]
+pub trait ClassSelf: Sized {
+    fn class_self(self, class: Result<SwiftType, CallError>) -> Self;
+}
+
 /// Binds `self`; for a `consuming` method (`consumes`), what the binding keeps alive goes to the callee instead:
 /// the receiver is a copy (a value) or an extra reference (an object) that the callee consumes.
 #[doc(hidden)]
