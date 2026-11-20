@@ -47,7 +47,7 @@ Judge every change by two questions, in this order:
 | `src/dispatch/` | the libdispatch backend |
 | `sys/` | `apus-sys`: the whole runtime ABI in `sys/include/apus/abi.h`, C funclets/thunks in `sys/csrc/`, bindings generated from the header and committed |
 | `mangle/` | `apus-mangle`: Swift declaration → symbol, call kind, ownership, generic plan |
-| `macros/` | `swift!`'s routing (`__swift_route`), `mangle!`, `result_type!` |
+| `macros/` | `swift!`'s routing (`__swift_route`), `mangle!`, `result_type!`; SDK `.tbd` symbol check (`sdk.rs`), symbol graphs (`graphs.rs`) and declarations by name (`short.rs`) |
 | `tests/support/*.swift` | Swift probes: `probe.swift`/`fns.swift` (module `Probe`, no library evolution), `resilient.swift` (module `Res`, library evolution, like Apple's frameworks), `notes.swift` (module `Notes`: a SwiftData model) |
 | `builder/` | `apus-build`: a build script's helper compiling a program's own Swift module (library evolution) and linking it |
 | `examples/swift-data/` | a SwiftData program: its build.rs compiles the Swift model with `apus-build` (a workspace member) |

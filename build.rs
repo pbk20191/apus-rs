@@ -23,11 +23,19 @@ fn main() {
             .status()
             .expect("failed to run swiftc for the test probe");
         assert!(status.success(), "swiftc failed for the test probes");
+        let graphs = out.join("symbolgraphs");
+        std::fs::create_dir_all(&graphs).unwrap();
+        println!("cargo:rustc-env=APUS_SYMBOL_GRAPHS={}", graphs.display());
         // A second module built for library evolution, like Apple's frameworks (tests/swift_existential.rs).
         let status = Command::new("xcrun")
             .args(["swiftc", "-O", "-parse-as-library", "-static", "-emit-library", "-enable-library-evolution", "-swift-version", "5"])
             .args(["-target", &target, "-module-name", "Res", "tests/support/resilient.swift", "-o"])
             .arg(out.join("libapus_resilient_probe.a"))
+            // Its symbol graph, from which `swift!` takes the kinds a declaration leaves out.
+            .args(["-emit-module", "-emit-module-path"])
+            .arg(graphs.join("Res.swiftmodule"))
+            .args(["-emit-symbol-graph", "-emit-symbol-graph-dir"])
+            .arg(&graphs)
             .status()
             .expect("failed to run swiftc for the resilient test probe");
         assert!(status.success(), "swiftc failed for the resilient test probe");
@@ -36,6 +44,10 @@ fn main() {
             .args(["swiftc", "-O", "-parse-as-library", "-static", "-emit-library", "-enable-library-evolution", "-swift-version", "5"])
             .args(["-target", &target, "-module-name", "Notes", "tests/support/notes.swift", "-o"])
             .arg(out.join("libapus_notes_probe.a"))
+            .args(["-emit-module", "-emit-module-path"])
+            .arg(graphs.join("Notes.swiftmodule"))
+            .args(["-emit-symbol-graph", "-emit-symbol-graph-dir"])
+            .arg(&graphs)
             .status()
             .expect("failed to run swiftc for the SwiftData test probe");
         assert!(status.success(), "swiftc failed for the SwiftData test probe");

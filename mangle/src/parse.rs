@@ -24,6 +24,8 @@ pub struct Parser<'a> {
     /// The constrained extensions a type in the signature may name, with the types they extend: the one an
     /// enclosing type is declared in, and the declaration's own (for a type declared beside it).
     known_extensions: Vec<(String, Vec<(String, Kind)>, ContextExtension)>,
+    /// Kinds of names written without one, and whether protocols are class-bound (a symbol graph's).
+    resolver: Option<&'a dyn crate::KindResolver>,
 }
 
 type Parsed<T> = Result<T, String>;
@@ -172,6 +174,17 @@ impl<'a> Parser<'a> {
         None
     }
 
+    /// The kind of a type named without one, from the resolver.
+    fn resolve(&self, module: &str, path: &[&str]) -> Option<Kind> {
+        Some(match self.resolver?.kind(module, path)? {
+            crate::TypeKind::Struct => Kind::Struct,
+            crate::TypeKind::Class => Kind::Class,
+            crate::TypeKind::Actor => Kind::Actor,
+            crate::TypeKind::Enum => Kind::Enum,
+            crate::TypeKind::Protocol => Kind::Protocol,
+        })
+    }
+
     fn generic_param(&self, name: &str) -> Option<GenericParam> {
         self.generics.iter().find(|(known, _)| known == name).map(|(_, param)| *param)
     }
@@ -180,6 +193,9 @@ impl<'a> Parser<'a> {
         let mut protocol = self.protocol_name()?;
         // `(AnyObject)`: a class-bound protocol (`protocol P: AnyObject`), whose conforming types are classes.
         protocol.class_bound = self.eat("(AnyObject)");
+        if !protocol.class_bound && protocol.module != "Swift" && protocol.module != "_Concurrency" {
+            protocol.class_bound = self.resolver.and_then(|r| r.class_bound(&protocol.module, &protocol.name)).unwrap_or(false);
+        }
         Ok(protocol)
     }
 
@@ -408,11 +424,15 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
+            if let Some(kind) = self.resolve(&module, &[name.as_str()]) {
+                return Ok(Ty::Nominal { module, path: vec![(name.clone(), kind)], args, split, extension: None });
+            }
             return Err(format!("unknown type `{name}`: write `{name}(struct)`, `{name}(class)` or `{name}(enum)`"));
         }
         let mut resolved = Vec::new();
-        for (name, kind, _) in path {
-            let kind = kind.ok_or_else(|| needs_kind(name))?;
+        for (i, (name, kind, _)) in path.iter().enumerate() {
+            let names: Vec<&str> = path[..=i].iter().map(|(n, _, _)| n.as_str()).collect();
+            let kind = kind.or_else(|| self.resolve(&module, &names)).ok_or_else(|| needs_kind(name))?;
             if matches!(kind, Kind::TypedefStruct | Kind::TypedefClass) && (module != "__C" || path.len() != 1) {
                 return Err(format!("`{name}`: a typedef kind names an imported C type, `__C.{name}(typedef …)`"));
             }
@@ -797,10 +817,13 @@ impl<'a> Parser<'a> {
                     extended_constrained: context_is_constrained,
                 });
             }
+            let names: Vec<&str> = context.iter().map(|(n, _): &(String, Kind)| n.as_str()).chain([segment.name.as_str()]).collect();
             let kind = match segment.kind {
                 Some(kind) => kind,
-                None if lone_context => standard_kind(&self.module, &segment.name).ok_or_else(|| needs_kind(&segment.name))?,
-                None => return Err(needs_kind(&segment.name)),
+                None if lone_context => standard_kind(&self.module, &segment.name)
+                    .or_else(|| self.resolve(&self.module, &names))
+                    .ok_or_else(|| needs_kind(&segment.name))?,
+                None => self.resolve(&self.module, &names).ok_or_else(|| needs_kind(&segment.name))?,
             };
             if matches!(kind, Kind::TypedefStruct | Kind::TypedefClass) && (self.module != "__C" || !context.is_empty()) {
                 return Err(format!("`{}`: a typedef kind names an imported C type, `__C.{}(typedef …)`", segment.name, segment.name));
@@ -1141,6 +1164,19 @@ fn anonymous_generics(ty: &Ty, depth: usize, count: &mut usize, requirements: &m
 const OPERATOR_CHARS: &str = "/=-+!*%<>&|^~?.";
 
 pub fn parse(text: &str) -> Parsed<Decl> {
-    Parser { text, position: 0, module: String::new(), home: String::new(), generics: Vec::new(), associated: Vec::new(), known_extensions: Vec::new() }
-        .declaration()
+    parse_resolving(text, crate::kind_resolver())
+}
+
+pub fn parse_resolving<'a>(text: &'a str, resolver: Option<&'a dyn crate::KindResolver>) -> Parsed<Decl> {
+    Parser {
+        text,
+        position: 0,
+        module: String::new(),
+        home: String::new(),
+        generics: Vec::new(),
+        associated: Vec::new(),
+        known_extensions: Vec::new(),
+        resolver,
+    }
+    .declaration()
 }

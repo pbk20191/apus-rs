@@ -15,7 +15,8 @@ apus::swift! {
     fn notes_by_title() -> SwiftValue;
     #[swift_linked = "Notes.Note(class).init(title: String)"]
     fn new_note(self: &SwiftType, title: &str) -> SwiftObject;
-    #[swift_linked = "Notes.Note(class).title: String { get }"]
+    // By name: `title` is a `@Model` property, `{ get set }` in Notes's symbol graph.
+    #[swift_linked = "Notes.Note.title { get }"]
     fn title(self: &SwiftObject) -> String;
 
     #[swift = "SwiftData.ModelContext(class).init(_: ModelContainer(class))"]

@@ -181,6 +181,36 @@ pub enum Isolation {
     MainActor,
 }
 
+/// A type's kind, which a declaration writes after its name (`(class)`) unless a [`KindResolver`] knows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TypeKind {
+    Struct,
+    Class,
+    Actor,
+    Enum,
+    Protocol,
+}
+
+/// What a declaration leaves out and a symbol graph knows: the kind of a type named without one, and whether a
+/// protocol is class-bound (`protocol P: AnyObject`, written `P(AnyObject)`). `None` where it does not know.
+pub trait KindResolver: Sync {
+    /// The kind of the type at `path` (`["FetchDescriptor"]`, outermost first) in `module`.
+    fn kind(&self, module: &str, path: &[&str]) -> Option<TypeKind>;
+    fn class_bound(&self, module: &str, protocol: &str) -> Option<bool>;
+}
+
+static KIND_RESOLVER: std::sync::OnceLock<&'static dyn KindResolver> = std::sync::OnceLock::new();
+
+/// Resolves kinds left out in every declaration parsed from now on in this process (`swift!`'s proc macros set
+/// their symbol graphs'). Only the first call takes effect.
+pub fn set_kind_resolver(resolver: &'static dyn KindResolver) {
+    let _ = KIND_RESOLVER.set(resolver);
+}
+
+fn kind_resolver() -> Option<&'static dyn KindResolver> {
+    KIND_RESOLVER.get().copied()
+}
+
 /// How a call checks an instance member's receiver against the declaration's type, by its runtime type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReceiverCheck {
@@ -407,6 +437,16 @@ pub struct Declaration(ast::Decl);
 impl Declaration {
     pub fn parse(declaration: &str) -> Result<Self, Error> {
         parse::parse(declaration).map(Declaration).map_err(Error)
+    }
+
+    /// Like [`parse`](Self::parse), with names written without a kind resolved by `resolver`.
+    pub fn parse_resolving(declaration: &str, resolver: &dyn KindResolver) -> Result<Self, Error> {
+        parse::parse_resolving(declaration, Some(resolver)).map(Declaration).map_err(Error)
+    }
+
+    /// The declaration's own symbol (`$s…`), as [`mangle`] gives it.
+    pub fn symbol(&self) -> Result<String, Error> {
+        mangler::mangle(&self.0).map_err(Error)
     }
 
     /// The mangled name (no `$s`) of the type a static member or initializer belongs to, as the runtime resolves it:
@@ -1242,6 +1282,33 @@ mod isolation_tests {
         assert_eq!(of("@MainActor M.onMain() -> Bool"), Isolation::MainActor);
         assert_eq!(of("@MainActor M.onMain() async -> Bool"), Isolation::None);
         assert_eq!(of("M.Counter(class).bump(by: Int) -> Int"), Isolation::None);
+    }
+
+    #[test]
+    fn kinds_come_from_a_resolver() {
+        use super::{Declaration, KindResolver, TypeKind};
+        struct Graph;
+        impl KindResolver for Graph {
+            fn kind(&self, module: &str, path: &[&str]) -> Option<TypeKind> {
+                match (module, path) {
+                    ("SwiftData", ["ModelContext"]) => Some(TypeKind::Class),
+                    ("SwiftData", ["FetchDescriptor"]) => Some(TypeKind::Struct),
+                    ("SwiftData", ["PersistentModel"]) => Some(TypeKind::Protocol),
+                    _ => None,
+                }
+            }
+            fn class_bound(&self, module: &str, protocol: &str) -> Option<bool> {
+                Some(module == "SwiftData" && protocol == "PersistentModel")
+            }
+        }
+        let symbol = |d: &str| Declaration::parse_resolving(d, &Graph).and_then(|d| d.symbol()).map_err(|e| e.to_string());
+        let kinded = "SwiftData.ModelContext(class).fetch<T: PersistentModel(AnyObject)>(_: FetchDescriptor(struct)<T>) throws -> [T]";
+        let bare = "SwiftData.ModelContext.fetch<T: PersistentModel>(_: FetchDescriptor<T>) throws -> [T]";
+        assert_eq!(symbol(bare), symbol(kinded));
+        let bound = [("T", "Todos.Todo(class)")];
+        let plan = Declaration::parse_resolving(bare, &Graph).unwrap().bind(&bound).unwrap();
+        assert_eq!(plan, Declaration::parse(kinded).unwrap().bind(&bound).unwrap(), "class-bound from the resolver");
+        assert!(symbol("SwiftData.Unknown.f()").unwrap_err().contains("needs its kind"));
     }
 
     #[test]

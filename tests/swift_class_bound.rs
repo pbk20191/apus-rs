@@ -31,9 +31,10 @@ apus::swift! {
     fn meters(value: f64) -> SwiftValue;
     #[swift_linked = "Res.labelOf<T: Named(AnyObject)>(_: T) -> String"]
     fn label_of(named: &SwiftObject) -> String;
-    // The same function declared without the mark, and a protocol wrongly marked: refused before the call.
+    // The same function declared without the mark, which Res's symbol graph gives; a protocol wrongly marked is
+    // refused before the call (the mark written wins over the graph).
     #[swift_linked = "Res.labelOf<T: Named>(_: T) -> String"]
-    fn label_of_unmarked(named: &SwiftValue) -> String;
+    fn label_of_unmarked(named: &SwiftObject) -> String;
     #[swift_linked = "Res.isTagged<T: Tagged(AnyObject)>(_: T) -> Bool"]
     fn is_tagged_marked(tagged: &SwiftObject) -> bool;
     #[swift_linked = "Res.anyNamed(_: String) -> any Named"]
@@ -77,9 +78,8 @@ fn class_bound_values_are_references() -> Result<(), Failed> {
 fn class_bound_protocols_are_checked() -> Result<(), Failed> {
     let rex = dog("Rex").unwrap();
     check(label_of(&rex).unwrap() == "named Rex", "marked")?;
-    let boxed = SwiftValue::new(7i64);
-    let unmarked = label_of_unmarked(&boxed);
-    check(matches!(unmarked, Err(CallError::InvalidArgument(_))), format!("unmarked: {unmarked:?}"))?;
+    let unmarked = label_of_unmarked(&rex);
+    check(matches!(&unmarked, Ok(l) if l == "named Rex"), format!("unmarked: {unmarked:?}"))?;
     let mismarked = is_tagged_marked(&rex);
     check(matches!(mismarked, Err(CallError::InvalidArgument(_))), format!("mismarked: {mismarked:?}"))
 }

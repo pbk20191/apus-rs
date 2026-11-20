@@ -3,46 +3,45 @@
 //! Run: cargo run -p apus-example-swift-data
 apus::swift! {
     // The Swift types this program uses, each a Rust type: calls are checked against their declarations.
-    class Todo = "Todos.Todo(class)";
-    class ModelContainer = "SwiftData.ModelContainer(class)";
-    class ModelContext = "SwiftData.ModelContext(class)";
-    struct Query = "SwiftData.FetchDescriptor(struct)<Todos.Todo(class)>";
+    class Todo = "Todos.Todo";
+    class ModelContainer = "SwiftData.ModelContainer";
+    class ModelContext = "SwiftData.ModelContext";
+    struct Query = "SwiftData.FetchDescriptor<Todos.Todo>";
 
-    // The model module's own declarations, linked from the static library.
-    #[swift_linked = "Todos.todoContainer(path: String) throws -> SwiftData.ModelContainer(class)"]
+    // Declared by name: the rest comes from the modules' symbol graphs (apus-build emits the model module's).
+    #[swift_linked = "Todos.todoContainer(path:)"]
     fn todo_container(path: &str) throws -> ModelContainer;
-    #[swift_linked = "Todos.allTodos() -> SwiftData.FetchDescriptor(struct)<Todo(class)>"]
+    #[swift_linked = "Todos.allTodos()"]
     fn all_todos() -> Query;
-    #[swift_linked = "Todos.openTodos() -> SwiftData.FetchDescriptor(struct)<Todo(class)>"]
+    #[swift_linked = "Todos.openTodos()"]
     fn open_todos() -> Query;
 
     impl Todo {
-        #[swift_linked = "Todos.Todo(class).init(title: String, priority: Int)"]
+        #[swift_linked = "Todos.Todo.init(title:priority:)"]
         fn new(title: &str, priority: i64) -> Todo;
-        #[swift_linked = "Todos.Todo(class).title: String { get }"]
+        #[swift_linked = "Todos.Todo.title { get }"]
         fn title(&self) -> String;
-        #[swift_linked = "Todos.Todo(class).priority: Int { get }"]
+        #[swift_linked = "Todos.Todo.priority { get }"]
         fn priority(&self) -> i64;
-        #[swift_linked = "Todos.Todo(class).done: Bool { get }"]
+        #[swift_linked = "Todos.Todo.done { get }"]
         fn done(&self) -> bool;
-        #[swift_linked = "Todos.Todo(class).done: Bool { set }"]
+        #[swift_linked = "Todos.Todo.done { set }"]
         fn set_done(&self, done: bool);
     }
 
     // SwiftData's, looked up in the framework when first called.
     impl ModelContext {
-        #[swift = "SwiftData.ModelContext(class).init(_: ModelContainer(class))"]
+        #[swift = "SwiftData.ModelContext.init(_:)"]
         fn new(container: &ModelContainer) -> ModelContext;
-        #[swift = "SwiftData.ModelContext(class).insert<T: PersistentModel(AnyObject)>(_: T)"]
+        #[swift = "SwiftData.ModelContext.insert(_:)"]
         fn insert(&self, model: &Todo);
-        #[swift = "SwiftData.ModelContext(class).delete<T: PersistentModel(AnyObject)>(_: T)"]
+        #[swift = "SwiftData.ModelContext.delete(_:)"]
         fn delete(&self, model: &Todo);
-        #[swift = "SwiftData.ModelContext(class).save() throws"]
+        #[swift = "SwiftData.ModelContext.save()"]
         fn save(&self) throws;
         // Generic over the model, which no argument's type gives: bound to `Todo`. The array is read through its
         // `Sequence` conformance.
-        #[swift = "SwiftData.ModelContext(class).fetch<T: PersistentModel(AnyObject)>(_: FetchDescriptor(struct)<T>) \
-                   throws -> [T]", T = "Todos.Todo(class)"]
+        #[swift = "SwiftData.ModelContext.fetch(_:)", T = "Todos.Todo"]
         fn fetch(&self, query: &Query) throws -> Vec<Todo>;
     }
 }

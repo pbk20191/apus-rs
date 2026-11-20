@@ -1,6 +1,8 @@
 //! Procedural macros of `apus`. Use them through that crate.
 
+mod graphs;
 mod sdk;
+mod short;
 
 use proc_macro::{Delimiter, Group, Literal, Punct, Spacing, TokenStream, TokenTree};
 
@@ -23,6 +25,13 @@ fn compile_error(message: &str) -> TokenStream {
 /// A compile error where an item is expected (`swift!` expands to items).
 fn item_compile_error(message: &str) -> TokenStream {
     format!("::core::compile_error! {{ {message:?} }}").parse().expect("a compile_error! invocation")
+}
+
+/// A declaration literal's text, a declaration by name (`SwiftData.ModelContext.fetch(_:)`) written in full from the
+/// module's symbol graph (`__swift_route` reports one that cannot be).
+fn declaration_literal(token: &TokenTree) -> Option<String> {
+    let text = string_literal(token)?;
+    Some(short::expand(&text).ok().flatten().unwrap_or(text))
 }
 
 /// The text of a plain or raw string literal token.
@@ -58,10 +67,11 @@ fn string_literal(token: &TokenTree) -> Option<String> {
 /// A second string literal is appended to the symbol (`"Tu"` gives an async function pointer symbol).
 #[proc_macro]
 pub fn mangle(input: TokenStream) -> TokenStream {
+    graphs::graphs();
     let tokens = flatten(input);
     let (declaration, suffix) = match tokens.as_slice() {
-        [declaration] => (string_literal(declaration), Some(String::new())),
-        [declaration, TokenTree::Punct(comma), suffix] if comma.as_char() == ',' => (string_literal(declaration), string_literal(suffix)),
+        [declaration] => (declaration_literal(declaration), Some(String::new())),
+        [declaration, TokenTree::Punct(comma), suffix] if comma.as_char() == ',' => (declaration_literal(declaration), string_literal(suffix)),
         _ => (None, None),
     };
     let (Some(declaration), Some(suffix)) = (declaration, suffix) else {
@@ -77,11 +87,12 @@ pub fn mangle(input: TokenStream) -> TokenStream {
 /// `Some("SaySSG")` for `-> [String]`, `None` when the result depends on a generic parameter.
 #[proc_macro]
 pub fn result_type(input: TokenStream) -> TokenStream {
+    graphs::graphs();
     let tokens = flatten(input);
     let [declaration] = tokens.as_slice() else {
         return compile_error("expected a Swift declaration as a string literal");
     };
-    let Some(declaration) = string_literal(declaration) else {
+    let Some(declaration) = declaration_literal(declaration) else {
         return compile_error("expected a Swift declaration as a string literal");
     };
     match apus_mangle::result_type(&declaration) {
@@ -109,6 +120,7 @@ fn single_literal(input: TokenStream) -> Option<String> {
 /// ```
 #[proc_macro]
 pub fn swift_type(input: TokenStream) -> TokenStream {
+    graphs::graphs();
     let Some(ty) = single_literal(input) else {
         return compile_error("expected a Swift type as a string literal, e.g. swift_type!(\"Todos.Todo(class)\")");
     };
@@ -123,6 +135,7 @@ pub fn swift_type(input: TokenStream) -> TokenStream {
 #[doc(hidden)]
 #[proc_macro]
 pub fn __swift_wrapper_names(input: TokenStream) -> TokenStream {
+    graphs::graphs();
     let tokens = flatten(input);
     let [TokenTree::Ident(kind), literal] = tokens.as_slice() else {
         return compile_error("__swift_wrapper_names: expected `class|struct|enum \"Module.Type(kind)\"`");
@@ -153,6 +166,7 @@ pub fn __swift_wrapper_names(input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro]
 pub fn swift_protocol(input: TokenStream) -> TokenStream {
+    graphs::graphs();
     let Some(protocol) = single_literal(input) else {
         return compile_error("expected a Swift protocol as a string literal, e.g. swift_protocol!(\"SwiftData.PersistentModel\")");
     };
@@ -167,8 +181,9 @@ pub fn swift_protocol(input: TokenStream) -> TokenStream {
 #[doc(hidden)]
 #[proc_macro]
 pub fn __opaque_descriptor(input: TokenStream) -> TokenStream {
+    graphs::graphs();
     let tokens = flatten(input);
-    let Some(declaration) = tokens.first().and_then(string_literal) else {
+    let Some(declaration) = tokens.first().and_then(declaration_literal) else {
         return compile_error("expected a Swift declaration as a string literal");
     };
     match apus_mangle::opaque_descriptor(&declaration) {
@@ -182,8 +197,9 @@ pub fn __opaque_descriptor(input: TokenStream) -> TokenStream {
 #[doc(hidden)]
 #[proc_macro]
 pub fn __consumes_self(input: TokenStream) -> TokenStream {
+    graphs::graphs();
     let tokens = flatten(input);
-    let Some(declaration) = tokens.first().and_then(string_literal) else {
+    let Some(declaration) = tokens.first().and_then(declaration_literal) else {
         return compile_error("expected a Swift declaration as a string literal");
     };
     match apus_mangle::Declaration::parse(&declaration) {
@@ -196,8 +212,9 @@ pub fn __consumes_self(input: TokenStream) -> TokenStream {
 #[doc(hidden)]
 #[proc_macro]
 pub fn __returns_self(input: TokenStream) -> TokenStream {
+    graphs::graphs();
     let tokens = flatten(input);
-    let Some(declaration) = tokens.first().and_then(string_literal) else {
+    let Some(declaration) = tokens.first().and_then(declaration_literal) else {
         return compile_error("expected a Swift declaration as a string literal");
     };
     match apus_mangle::Declaration::parse(&declaration) {
@@ -213,6 +230,7 @@ pub fn __returns_self(input: TokenStream) -> TokenStream {
 #[doc(hidden)]
 #[proc_macro]
 pub fn __swift_route(input: TokenStream) -> TokenStream {
+    graphs::graphs();
     let tokens: Vec<TokenTree> = input.into_iter().collect();
     let Some(split) = tokens.iter().position(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ';')) else {
         return item_compile_error("__swift_route: expected `PATH ; …`");
@@ -232,7 +250,14 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             _ => return item_compile_error("expected generic parameters bound as `T = \"Module.Type(kind)\"` after the declaration"),
         }
     }
-    let declaration = tail.last().and_then(|t| flatten(t.clone().into()).first().and_then(string_literal));
+    let written = tail.last().and_then(|t| flatten(t.clone().into()).first().and_then(string_literal));
+    // A declaration by name: written in full from the module's symbol graph.
+    let expanded = match written.as_deref().map(short::expand) {
+        Some(Err(error)) => return item_compile_error(&error),
+        Some(Ok(full)) => full,
+        None => None,
+    };
+    let declaration = expanded.clone().or(written.clone());
     // A declared call's declaration, parsed once for every question below.
     let declared = match (how.to_string().as_str(), declaration) {
         ("declared", Some(declaration)) => match apus_mangle::Declaration::parse(&declaration) {
@@ -241,6 +266,16 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         },
         _ => None,
     };
+    // The symbol of a declaration written from a graph must be the one the graph names.
+    if let (Some((declaration, parsed)), Some(_), Some(written)) = (&declared, &expanded, &written) {
+        let symbol = parsed.symbol().map_err(|e| e.to_string());
+        let expected = short::expected_symbol(written);
+        if symbol.as_ref().ok() != expected.as_ref() {
+            return item_compile_error(&format!(
+                "`{written}`, written as `{declaration}`, mangles to {symbol:?}, not to {expected:?} as its symbol graph says: write the declaration in full"
+            ));
+        }
+    }
     let concrete = match (&declared, bound.is_empty()) {
         (_, true) => None,
         (None, false) => return item_compile_error("binding generic parameters (`T = \"…\"`) needs a Swift declaration: #[swift = \"…\"] or #[swift_linked = \"…\"]"),
@@ -951,9 +986,10 @@ fn rust_argument_names(tail: &[TokenTree]) -> Vec<proc_macro::Ident> {
 #[doc(hidden)]
 #[proc_macro]
 pub fn __dispatch_thunk(input: TokenStream) -> TokenStream {
+    graphs::graphs();
     let tokens = flatten(input);
     let Some(declaration) = (match tokens.as_slice() {
-        [declaration] => string_literal(declaration),
+        [declaration] => declaration_literal(declaration),
         _ => None,
     }) else {
         return compile_error("expected a Swift declaration as a string literal");
@@ -968,10 +1004,11 @@ pub fn __dispatch_thunk(input: TokenStream) -> TokenStream {
 #[doc(hidden)]
 #[proc_macro]
 pub fn __call_symbol(input: TokenStream) -> TokenStream {
+    graphs::graphs();
     let tokens = flatten(input);
     let (declaration, suffix) = match tokens.as_slice() {
-        [declaration] => (string_literal(declaration), Some(String::new())),
-        [declaration, TokenTree::Punct(comma), suffix] if comma.as_char() == ',' => (string_literal(declaration), string_literal(suffix)),
+        [declaration] => (declaration_literal(declaration), Some(String::new())),
+        [declaration, TokenTree::Punct(comma), suffix] if comma.as_char() == ',' => (declaration_literal(declaration), string_literal(suffix)),
         _ => (None, None),
     };
     let (Some(declaration), Some(suffix)) = (declaration, suffix) else {

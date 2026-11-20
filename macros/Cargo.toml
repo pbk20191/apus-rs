@@ -11,3 +11,4 @@ proc-macro = true
 
 [dependencies]
 apus-mangle = { path = "../mangle" }
+serde_json = "1"

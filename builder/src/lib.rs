@@ -69,10 +69,17 @@ impl SwiftModule {
             swiftc.arg("-enable-library-evolution");
         }
         swiftc.args(&self.flags).args(&sources).arg("-o").arg(out.join(format!("lib{library}.a")));
+        // The module's symbol graph, from which `swift!` takes what a declaration leaves out (kinds, or all but the
+        // name): found through APUS_SYMBOL_GRAPHS, which the crate's proc macros read.
+        let graphs = out.join("symbolgraphs");
+        std::fs::create_dir_all(&graphs).unwrap_or_else(|e| panic!("apus-build: {}: {e}", graphs.display()));
+        swiftc.args(["-emit-module", "-emit-module-path"]).arg(graphs.join(format!("{}.swiftmodule", self.name)));
+        swiftc.args(["-emit-symbol-graph", "-emit-symbol-graph-dir"]).arg(&graphs);
         let status = swiftc.status().unwrap_or_else(|e| panic!("apus-build: cannot run `xcrun swiftc`: {e}"));
         assert!(status.success(), "apus-build: swiftc failed for module {}", self.name);
         println!("cargo:rustc-link-search=native={}", out.display());
         println!("cargo:rustc-link-lib=static={library}");
+        println!("cargo:rustc-env=APUS_SYMBOL_GRAPHS={}", graphs.display());
         // The toolchain's compatibility libraries, which a static Swift library may reference.
         let found = Command::new("xcrun").args(["--find", "swiftc"]).output().expect("xcrun --find swiftc");
         let swiftc = PathBuf::from(String::from_utf8(found.stdout).expect("a path").trim());

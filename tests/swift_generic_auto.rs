@@ -109,6 +109,52 @@ fn typed_wrappers() -> Result<(), Failed> {
     check(matches!(minted.name(), Err(CallError::InvalidArgument(_))), "a Minted is no Animal")
 }
 
+// Kinds left out: the module's symbol graph gives them (`Named` is class-bound, so `T` is a reference).
+apus::swift! {
+    #[swift_linked = "Res.Meter.value: Double { get }"]
+    fn meter_value_bare(self: &SwiftValue) -> f64;
+    #[swift_linked = "Res.labelOf<T: Named>(_: T) -> String", T = "Res.Dog"]
+    fn label_of_bare(dog: &Dog) -> String;
+}
+
+// Declarations by name: the rest comes from the module's symbol graph.
+apus::swift! {
+    #[swift_linked = "Res.Meter.init(_:)"]
+    fn meter_named(value: f64) -> SwiftValue;
+    #[swift_linked = "Res.Meter.value { get }"]
+    fn meter_value_named(self: &SwiftValue) -> f64;
+    #[swift_linked = "Res.Tray.add(_:)"]
+    fn add_named(self: &mut SwiftValue, n: i64);
+    #[swift_linked = "Res.Tray.size(plus:)"]
+    fn size_named(n: i64, t: SwiftType) -> i64;
+    #[swift_linked = "Res.sumOf(_:)", T = "Swift.Int"]
+    fn sum_of_named(values: Vec<i64>) -> SwiftValue;
+    #[swift_linked = "Res.labelOf(_:)", T = "Res.Dog"]
+    fn label_of_named(dog: &Dog) -> String;
+    #[swift_linked = "Res.renamed(_:suffix:)"]
+    fn renamed_named(dog: &SwiftObject, suffix: &str) -> SwiftObject;
+}
+
+fn declarations_by_name() -> Result<(), Failed> {
+    let meter = meter_named(2.0).unwrap();
+    check(meter_value_named(&meter).unwrap() == 2.0, "Res.Meter.init(_:), .value")?;
+    let mut tray = pear_tray(1).unwrap();
+    add_named(&mut tray, 2).unwrap();
+    check(count(&tray).unwrap() == 3, "Res.Tray.add(_:), mutating")?;
+    check(size_named(4, SwiftType::of::<String>()).unwrap() == size(4, SwiftType::of::<String>()).unwrap(), "static Res.Tray.size(plus:)")?;
+    check(sum_of_named(vec![2, 3]).unwrap().get::<i64>() == Some(5), "Res.sumOf(_:) bound to Int")?;
+    let dogs = dog_list(vec!["rex".into()]).unwrap();
+    check(label_of_named(&dogs[0]).unwrap() == "named rex", "Res.labelOf(_:)")?;
+    let renamed = Dog::try_from(renamed_named(&dogs[0], "!").unwrap()).unwrap();
+    check(renamed.name().unwrap() == "rex!", "Res.renamed(_:suffix:), a superclass requirement")
+}
+
+fn kinds_from_symbol_graphs() -> Result<(), Failed> {
+    check(meter_value_bare(&meter(1.5).unwrap()).unwrap() == 1.5, "Res.Meter.value")?;
+    let dogs = dog_list(vec!["rex".into()]).unwrap();
+    check(label_of_bare(&dogs[0]).unwrap() == "named rex", "Res.labelOf<T: Named> bound to Res.Dog")
+}
+
 /// A receiver of another type than the declaration's is refused before Swift runs: a class's object (a subclass's
 /// passes), a struct's value, a generic struct's value of another struct.
 fn receivers_are_checked() -> Result<(), Failed> {
@@ -194,5 +240,7 @@ fn main() {
         Trial::test("sequences_iterate", sequences_iterate),
         Trial::test("receivers_are_checked", receivers_are_checked),
         Trial::test("typed_wrappers", typed_wrappers),
+        Trial::test("kinds_from_symbol_graphs", kinds_from_symbol_graphs),
+        Trial::test("declarations_by_name", declarations_by_name),
     ]);
 }

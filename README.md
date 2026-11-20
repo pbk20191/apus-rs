@@ -287,6 +287,21 @@ println!("{}", products.description());                                     // S
 - `SwiftFn` calls **synchronous** Swift functions the same way, on the current thread:
   `TOTAL.call::<i64>(()).on_value(&big).invoke()?` (a getter of a struct passed by address).
 
+**Symbol graphs.** A declaration need not spell everything out when its module has a symbol graph: an SDK
+module's is extracted once (`swift-symbolgraph-extract`, about four seconds, cached under the temporary directory per
+SDK), a program's own module's is emitted by `apus-build` (and found through `APUS_SYMBOL_GRAPHS`).
+
+- Kinds may be left out: `SwiftData.ModelContext.fetch<T: PersistentModel>(_: FetchDescriptor<T>) throws -> [T]`
+  (`ModelContext` is a class, `PersistentModel` class-bound, as `(class)` and `(AnyObject)` would say). A kind or mark
+  written wins.
+- Or the declaration is written by name, its labels, and `{ get }`/`{ set }` for a property or subscript:
+  `SwiftData.ModelContext.fetch(_:)`, `Todos.Todo.title { get }`, `Todos.Todo.init(title:priority:)`. The rest comes
+  from the graph (`static`, `mutating`, effects, generic requirements); bindings (`T = "Todos.Todo"`) apply as usual.
+  A name with several declarations or none, or one apus cannot write (a constrained extension's member, an imported
+  C type in its signature), is a compile error: write that one in full.
+- apus still mangles the declaration itself; one written from a graph must mangle to the symbol the graph names, and
+  an SDK module's must be exported by the SDK (see `#[swift]` above), or it is a compile error.
+
 Names need not be mangled by hand: `apus::swift_type!("SwiftData.FetchResultsCollection(struct)<Todos.Todo(class)>")`
 and `apus::swift_protocol!("SwiftData.PersistentModel")` expand to the mangled type name and the protocol descriptor
 symbol, for `SwiftType::from_mangled_name` and `SwiftProtocol::new`.
@@ -423,7 +438,8 @@ fn main() {
 ```
 
 It is optimized (`-O`) in release builds only (`-Onone` otherwise, to build fast). Its declarations are then
-`#[swift_linked = "Todos.…"]` (bound at link time). `examples/swift-data` is the whole
+`#[swift_linked = "Todos.…"]` (bound at link time), by name if wanted (`Todos.Todo.title { get }`): apus-build also emits
+the module's symbol graph. `examples/swift-data` is the whole
 setup. In this repository, `.vscode/settings.json` gives rust-analyzer its own target directory: sharing the one
 terminal builds rewrite makes its proc-macro server fail now and then while it reads a macro being rebuilt.
 

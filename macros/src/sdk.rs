@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 /// The SDK this build compiles against: `SDKROOT`, else `xcrun --sdk macosx --show-sdk-path`; `None` if neither.
-fn sdk() -> Option<&'static Path> {
+pub fn sdk() -> Option<&'static Path> {
     static SDK: OnceLock<Option<PathBuf>> = OnceLock::new();
     SDK.get_or_init(|| {
         if let Some(root) = std::env::var_os("SDKROOT").filter(|r| !r.is_empty()) {
@@ -17,6 +17,17 @@ fn sdk() -> Option<&'static Path> {
         output.status.success().then(|| PathBuf::from(path.trim()))
     })
     .as_deref()
+}
+
+/// The SDK's version (`27.3`): `xcrun --sdk macosx --show-sdk-version`.
+pub fn sdk_version() -> Option<&'static str> {
+    static VERSION: OnceLock<Option<String>> = OnceLock::new();
+    VERSION
+        .get_or_init(|| {
+            let output = std::process::Command::new("xcrun").args(["--sdk", "macosx", "--show-sdk-version"]).output().ok()?;
+            output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        })
+        .as_deref()
 }
 
 /// The symbols module `module` exports in the SDK (its framework's and its Swift overlay's stubs, with the

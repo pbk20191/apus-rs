@@ -308,6 +308,27 @@
 /// }
 /// ```
 ///
+/// **Symbol graphs.** For a module with a symbol graph (an SDK module, extracted once and cached; a program's own module
+/// built by `apus-build`), a declaration may leave out kinds (`SwiftData.ModelContext.fetch<T: PersistentModel>(_:
+/// FetchDescriptor<T>) throws -> [T]`: `ModelContext` is a class, `PersistentModel` class-bound), or be written by name
+/// only, the rest taken from the graph: `SwiftData.ModelContext.fetch(_:)`, `Todos.Todo.title { get }`,
+/// `Todos.Todo.init(title:priority:)`. apus mangles it like any declaration, and its symbol must be the one the graph
+/// names. A name with several declarations, or none, is a compile error:
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "SwiftData.ModelContainer.init(for:configurations:)"]
+///     fn container(models: &apus::swift::SwiftValue, configurations: &apus::swift::SwiftValue) throws -> apus::swift::SwiftObject; // two of them
+/// }
+/// ```
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "SwiftData.ModelContext.fetchAll(_:)"]
+///     fn fetch_all(self: &apus::swift::SwiftObject, descriptor: &apus::swift::SwiftValue) throws; // no such method
+/// }
+/// ```
+///
 /// A declaration that cannot be mangled is a compile error:
 ///
 /// ```compile_fail
