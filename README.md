@@ -310,6 +310,9 @@ graph is emitted by `apus-build` (and found through `APUS_SYMBOL_GRAPHS`).
   (`Foundation.Predicate(struct)<Pack{T}>`). A name with several declarations or none, or one apus cannot write (an
   imported C enum, struct or typedef, a protocol's associated type, a standard library typealias), is a compile error:
   write that one in full.
+- A type that moved to another module keeps the module it was defined in in its symbols (`@_originallyDefinedIn`,
+  docs/ReferenceGuides/UnderscoredAttributes.md): apus reads which ones did from the SDK's `.swiftinterface`
+  (`CoreFoundation.CGFloat` is mangled as CoreGraphics', SwiftUICore's types as SwiftUI's).
 - apus still mangles the declaration itself; one written from a graph must mangle to the symbol the graph names, and
   an SDK module's must be exported by the SDK (see `#[swift]` above), or it is a compile error.
 
