@@ -236,7 +236,17 @@
 /// ```
 /// - Parameter and result types are the ones [`SwiftAsyncFn::call`](crate::swift::SwiftAsyncFn::call) accepts,
 ///   and must match the Swift signature: nothing checks them. A `SwiftValue` (returned by address) or
-///   `DirectValue` (returned in registers) result takes its Swift type from the `#[swift = …]` declaration.
+///   `DirectValue` (returned in registers) result takes its Swift type from the `#[swift = …]` declaration. An
+///   `Array`, `Dictionary`, `Set` or `String` result (or an `Optional` of one) comes in registers, so `SwiftValue` is
+///   a compile error for it (as for a class instance, a `SwiftObject`); iterate a sequence with
+///   [`SwiftIter`](crate::swift::SwiftIter):
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift_linked = "Res.dogs(_: [String]) -> [Dog(class)]"]
+///     fn dogs(names: Vec<String>) -> apus::swift::SwiftValue; // an array comes in registers: DirectValue
+/// }
+/// ```
 ///
 /// A declaration that cannot be mangled is a compile error:
 ///

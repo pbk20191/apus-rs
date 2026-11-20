@@ -691,6 +691,29 @@ impl Declaration {
         }
     }
 
+    /// Whether Swift returns the result in registers whatever module calls it, so that it cannot be read by address
+    /// (`SwiftValue`): a standard library `Array`, `Dictionary`, `Set` or `String` (frozen: one or two words), a class
+    /// instance, or an `Optional` of one of these.
+    pub fn result_in_registers(&self) -> bool {
+        fn direct(ty: &ast::Ty) -> bool {
+            match ty {
+                ast::Ty::Optional(wrapped) => direct(wrapped),
+                ast::Ty::AnyObject => true,
+                ast::Ty::Nominal { module, path, .. } => match path.last() {
+                    Some((_, ast::Kind::Class | ast::Kind::Actor)) => true,
+                    Some((name, _)) => module == "Swift" && path.len() == 1 && ["Array", "Dictionary", "Set", "String"].contains(&name.as_str()),
+                    None => false,
+                },
+                _ => false,
+            }
+        }
+        match &self.0.signature {
+            ast::Signature::Function { result: ty, .. } | ast::Signature::Getter(ty) => direct(ty),
+            ast::Signature::Subscript { result, setter: false, .. } => direct(result),
+            _ => false,
+        }
+    }
+
     /// See [`nonsending`].
     pub fn nonsending(&self) -> bool {
         self.0.nonsending
@@ -1227,6 +1250,14 @@ mod isolation_tests {
             assert!(error.contains("standard library"), "{frozen}: {error}");
         }
         assert!(super::check_callable("static Swift.Array<Element>.f() -> Int").is_ok());
+        // Results Swift returns in registers, which a by-address `SwiftValue` would read as garbage.
+        let in_registers = |d: &str| super::Declaration::parse(d).unwrap().result_in_registers();
+        for direct in ["M.f() -> [M.S(struct)]", "M.f() -> [String: Int]?", "M.f() -> Set<Int>", "M.f() -> M.C(class)?", "M.v: String { get }"] {
+            assert!(in_registers(direct), "{direct}");
+        }
+        for by_address in ["M.f() -> M.S(struct)", "M.f() -> M.S(struct)?", "M.f<T>() -> T", "M.f() -> (Int, Int)", "M.f() -> any Hashable"] {
+            assert!(!in_registers(by_address), "{by_address}");
+        }
     }
 
     #[test]

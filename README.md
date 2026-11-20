@@ -293,9 +293,9 @@ is the one with the bindings substituted:
 
 ```rust
 apus::swift! {
-    #[swift = "SwiftData.ModelContext(class).fetch<T: PersistentModel(AnyObject)>(_: FetchDescriptor(struct)<T>, \
-               batchSize: Int) throws -> FetchResultsCollection(struct)<T>", T = "Todos.Todo(class)"]
-    fn fetch_todos(self: &SwiftObject, descriptor: &SwiftValue, batch_size: i64) throws -> SwiftValue;
+    #[swift = "SwiftData.ModelContext(class).fetch<T: PersistentModel(AnyObject)>(_: FetchDescriptor(struct)<T>) \
+               throws -> [T]", T = "Todos.Todo(class)"]
+    fn fetch_todos(self: &SwiftObject, descriptor: &SwiftValue) throws -> DirectValue;
 }
 ```
 
@@ -380,13 +380,11 @@ apus::swift! {
     fn insert(self: &SwiftObject, model: &SwiftObject);
     #[swift = "SwiftData.ModelContext(class).save() throws"]
     fn save(self: &SwiftObject) throws;
-    #[swift = "SwiftData.FetchResultsCollection(struct)<Element>.subscript(_: Int) -> Element { get }"]
-    fn element(self: &SwiftValue, index: i64) -> SwiftValue;     // `.into_object()` for the model
 }
 ```
 
-`fetch<T>(_:batchSize:) -> FetchResultsCollection<T>` is generic over the model, which no argument's type gives: bind
-`T = "Todos.Todo(class)"` (see Generic functions above). Sort descriptors and predicates take key paths and
+`fetch<T>(_:) -> [T]` is generic over the model, which no argument's type gives: bind `T = "Todos.Todo(class)"` (see
+Generic functions above), and walk the array with `SwiftIter` (see Sequences below). Sort descriptors and predicates take key paths and
 `#Predicate`, which only the compiler makes: they come from Swift too.
 
 ### Using a Swift module of your own
@@ -416,6 +414,22 @@ It is optimized (`-O`) in release builds only (`-Onone` otherwise, to build fast
 `#[swift_linked = "Todos.…"]` (bound at link time). `examples/swift-data` is the whole
 setup. In this repository, `.vscode/settings.json` gives rust-analyzer its own target directory: sharing the one
 terminal builds rewrite makes its proc-macro server fail now and then while it reads a macro being rebuilt.
+
+### Sequences
+
+Any value whose type is a Swift `Sequence` (an `Array`, bridged or not, a `Set`, a `Dictionary`, a framework's
+collection) is a Rust `Iterator` of its elements, through the conformance's `makeIterator()` and `next()`:
+
+```rust
+use apus::swift::SwiftIter;
+
+for todo in SwiftIter::new(todos.0)? {                         // `todos`: a `-> [Todo]` result (DirectValue)
+    let todo = todo.into_object().expect("a class instance");  // each element a SwiftValue of `element_type()`
+}
+```
+
+An `Array`, `Dictionary`, `Set` or `String` result comes back in registers: `swift!` refuses `-> SwiftValue` for one
+and takes `-> DirectValue`.
 
 ### Async sequences
 

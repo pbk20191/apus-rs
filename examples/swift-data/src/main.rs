@@ -1,7 +1,7 @@
 //! SwiftData from Rust. The model is Swift (swift/Todos.swift, built by build.rs); the context, inserts, edits,
 //! deletes, saves and fetches are SwiftData's own API, called from Rust.
 //! Run: cargo run -p apus-example-swift-data
-use apus::swift::{SwiftObject, SwiftValue};
+use apus::swift::{DirectValue, SwiftIter, SwiftObject, SwiftValue};
 
 apus::swift! {
     // The model module's own declarations, linked from the static library.
@@ -31,17 +31,11 @@ apus::swift! {
     fn delete(self: &SwiftObject, model: &SwiftObject);
     #[swift = "SwiftData.ModelContext(class).save() throws"]
     fn save(self: &SwiftObject) throws;
-    // Generic over the model, which no argument's type gives: bound to `Todo`. (`fetch(_:) -> [T]` returns an
-    // `Array`, whose elements apus cannot reach; the batched form returns a collection it can index.)
-    #[swift = "SwiftData.ModelContext(class).fetch<T: PersistentModel(AnyObject)>(_: FetchDescriptor(struct)<T>, \
-               batchSize: Int) throws -> FetchResultsCollection(struct)<T>", T = "Todos.Todo(class)"]
-    fn fetch_todos(self: &SwiftObject, descriptor: &SwiftValue, batch_size: i64) throws -> SwiftValue;
-    #[swift = "SwiftData.FetchDescriptor(struct)<T: PersistentModel(AnyObject)>.includePendingChanges: Bool { set }"]
-    fn set_include_pending_changes(self: &mut SwiftValue, include: bool);
-    #[swift = "SwiftData.FetchResultsCollection(struct)<Element>.endIndex: Int { get }"]
-    fn count(self: &SwiftValue) -> i64;
-    #[swift = "SwiftData.FetchResultsCollection(struct)<Element>.subscript(_: Int) -> Element { get }"]
-    fn element(self: &SwiftValue, index: i64) -> SwiftValue;
+    // Generic over the model, which no argument's type gives: bound to `Todo`. The array comes back in registers
+    // (`DirectValue`), and `SwiftIter` walks it through its `Sequence` conformance.
+    #[swift = "SwiftData.ModelContext(class).fetch<T: PersistentModel(AnyObject)>(_: FetchDescriptor(struct)<T>) \
+               throws -> [T]", T = "Todos.Todo(class)"]
+    fn fetch_todos(self: &SwiftObject, descriptor: &SwiftValue) throws -> DirectValue;
 }
 
 struct Store {
@@ -58,11 +52,10 @@ impl Store {
         insert(&self.context, &new_todo(title, priority).unwrap()).unwrap();
     }
 
-    /// The todos `descriptor` selects. Fetching in batches leaves out unsaved changes, so save first.
-    fn fetch(&self, mut descriptor: SwiftValue) -> Vec<SwiftObject> {
-        set_include_pending_changes(&mut descriptor, false).unwrap();
-        let found = fetch_todos(&self.context, &descriptor, 16).expect("fetch");
-        (0..count(&found).unwrap()).map(|i| element(&found, i).unwrap().into_object().expect("a Todo is an object")).collect()
+    /// The todos `descriptor` selects.
+    fn fetch(&self, descriptor: SwiftValue) -> Vec<SwiftObject> {
+        let found = fetch_todos(&self.context, &descriptor).expect("fetch");
+        SwiftIter::new(found.0).expect("an array").map(|todo| todo.into_object().expect("a Todo is an object")).collect()
     }
 
     fn save(&self) {

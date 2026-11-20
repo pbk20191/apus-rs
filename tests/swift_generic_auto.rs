@@ -5,7 +5,7 @@ mod common;
 #[path = "common/probe.rs"]
 mod probe;
 
-use apus::swift::{spawn, CallError, SwiftObject, SwiftType, SwiftValue};
+use apus::swift::{spawn, CallError, DirectValue, SwiftIter, SwiftObject, SwiftType, SwiftValue};
 use common::{block, check, Failed, Trial};
 
 apus::swift! {
@@ -53,6 +53,17 @@ apus::swift! {
     fn minted(n: i64) -> SwiftObject;
     #[swift_linked = "Res.nopeType() -> Any.Type"]
     fn nope_type() -> SwiftType;
+    #[swift_linked = "Res.dogs(_: [String]) -> [Dog(class)]"]
+    fn dogs(names: Vec<String>) -> DirectValue; // an Array: returned in registers
+}
+
+/// Any Sequence, through its conformance: an Array of objects, element by element, then the end.
+fn sequences_iterate() -> Result<(), Failed> {
+    let pack = SwiftIter::new(dogs(vec!["rex".into(), "fido".into()]).unwrap().0).unwrap();
+    let labels: Vec<String> = pack.map(|dog| label_of_dog(&dog.into_object().unwrap()).unwrap()).collect();
+    check(labels == ["named rex", "named fido"], format!("{labels:?}"))?;
+    let not_a_sequence = SwiftIter::new(make_boom(1).unwrap());
+    check(matches!(not_a_sequence, Err(CallError::InvalidArgument(_))), "a Boom is not a Sequence")
 }
 
 /// Generic parameters bound to concrete types: their metadata and witness tables come from the types named.
@@ -116,5 +127,6 @@ fn main() {
         Trial::test("a_value_that_does_not_conform", a_value_that_does_not_conform),
         Trial::test("members_of_generic_structs", members_of_generic_structs),
         Trial::test("concrete_bindings", concrete_bindings),
+        Trial::test("sequences_iterate", sequences_iterate),
     ]);
 }

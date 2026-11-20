@@ -308,6 +308,15 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         if let Err(error) = parsed.check_callable() {
             return item_compile_error(&format!("`{declaration}`: {error}"));
         }
+        // A `SwiftValue` result is read by address; these come in registers.
+        let rust_result = rust_return(tail);
+        let last_segment = rust_result.rsplit([':', ' ']).next().unwrap_or_default();
+        if parsed.result_in_registers() && last_segment == "SwiftValue" {
+            return item_compile_error(&format!(
+                "`{declaration}` returns an array, dictionary, set, string or class instance, in registers, not by address: \
+                 declare `-> DirectValue` (or `SwiftObject` for an object)"
+            ));
+        }
         match parsed.typed_throws() {
             Ok(false) if rust_error_slot => {
                 return item_compile_error(&format!("`{declaration}` has no typed throws: it takes no `ErrorSlot`"))

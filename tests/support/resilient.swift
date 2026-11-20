@@ -132,6 +132,8 @@ public func sumOf<T: AdditiveArithmetic>(_ values: [T]) -> T { values.reduce(.ze
 public func doubled<T: AdditiveArithmetic>(_ x: T) -> T { x + x }
 public struct Nope {}
 public func nopeType() -> Any.Type { Nope.self }
+// Sequences (SwiftIter): an Array of class instances.
+public func dogs(_ names: [String]) -> [Dog] { names.map { Dog(name: $0) } }
 public func meters(_ value: Double) -> Measurement<UnitLength> { Measurement(value: value, unit: .meters) }
 public func unitSymbol(_ unit: Unit) -> String { unit.symbol }
 // A class-bound protocol (`Named: AnyObject`): its parameter is one reference; `Tagged` is not class-bound.
