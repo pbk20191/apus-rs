@@ -1,5 +1,7 @@
 //! Procedural macros of `apus`. Use them through that crate.
 
+mod sdk;
+
 use proc_macro::{Delimiter, Group, Literal, Punct, Spacing, TokenStream, TokenTree};
 
 /// The tokens with invisible groups opened: a literal forwarded through `macro_rules!` arrives wrapped in one.
@@ -334,6 +336,12 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     if let Some((declaration, parsed)) = &declared {
         if let Err(error) = parsed.check_callable() {
             return item_compile_error(&format!("`{declaration}`: {error}"));
+        }
+        // The symbol a member of an SDK module is called through must be one the module exports.
+        if std::env::var_os("APUS_NO_SDK_CHECK").is_none() {
+            if let Err(error) = check_sdk_symbol(declaration, parsed) {
+                return item_compile_error(&error);
+            }
         }
         // A `SwiftValue` result is read by address; these come in registers.
         let rust_result = rust_return(tail);
@@ -798,6 +806,28 @@ fn rust_receiver(tail: &[TokenTree]) -> Option<String> {
     let text: String = flatten(receiver.stream()).iter().map(|t| t.to_string()).collect::<Vec<_>>().join(" ");
     let ty = text.split_once(':').map_or(text.as_str(), |(_, ty)| ty).trim();
     (!ty.is_empty()).then(|| ty.to_string())
+}
+
+/// Whether the SDK module declaring `declaration` exports the symbol apus calls it through (its dispatch thunk or its
+/// own symbol; an async function's `…Tu` pointer). `Ok` when no module the declaration names is in the SDK.
+fn check_sdk_symbol(declaration: &str, parsed: &apus_mangle::Declaration) -> Result<(), String> {
+    let modules = parsed.binary_modules();
+    let exported: Vec<_> = modules.iter().filter_map(|m| sdk::exported_symbols(m)).collect();
+    if exported.is_empty() {
+        return Ok(());
+    }
+    let suffix = if parsed.is_async() { "Tu" } else { "" };
+    let symbol = apus_mangle::call_symbol(declaration).map_err(|e| e.to_string())?;
+    let thunk = apus_mangle::dispatch_thunk(declaration).map_err(|e| e.to_string())?;
+    let found = std::iter::once(&symbol).chain(thunk.as_ref()).any(|s| exported.iter().any(|set| set.contains(&format!("{s}{suffix}"))));
+    if found {
+        return Ok(());
+    }
+    Err(format!(
+        "`{declaration}`: the SDK's {} does not export `{symbol}{suffix}`: check the declaration's names, labels, types \
+         and kinds against the framework's interface (APUS_NO_SDK_CHECK=1 skips this check)",
+        modules.join(" / ")
+    ))
 }
 
 /// The Rust types in the signature's `n`th bracket group (2: the receiver, 3: the arguments, 5: the result), each

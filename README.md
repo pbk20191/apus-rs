@@ -111,7 +111,9 @@ let text = greet("Kim", 2).await?;          // a SwiftCall<String>: `.child()` a
 - `async fn` is a Swift `async` function, a plain `fn` a synchronous one (it returns `Result<_, CallError>`);
   `throws` after the parameters marks a throwing function.
 - `#[swift = "…"]` resolves the function at run time (missing → `CallError::Unavailable`), `#[swift_linked = "…"]`
-  at link time. `#[symbol = "$s…"]` / `#[linked = "$s…"]` take a mangled symbol as is.
+  at link time. A member of an SDK module (`SwiftData`, `StoreKit`, the standard library, …) whose symbol the SDK's
+  module does not export (its `.tbd` text stub) is a compile error: a wrong name, label, type or kind shows when it
+  is written, not when it is called. Modules not in the SDK are not checked; `APUS_NO_SDK_CHECK=1` skips the check. `#[symbol = "$s…"]` / `#[linked = "$s…"]` take a mangled symbol as is.
 - **Methods and properties**: a leading `self: &SwiftObject` (a class instance) or `self: &SwiftValue` (a struct
   passed by address) is the receiver. With a declaration (`#[swift]`, `#[swift_linked]`) its type is checked when
   the call is made, before Swift runs (`CallError::InvalidArgument` if it is another's): an object must be an

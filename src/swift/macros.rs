@@ -296,6 +296,18 @@
 /// }
 /// ```
 ///
+/// A declaration of an SDK module's member (`SwiftData`, `StoreKit`, `Foundation`, the standard library, …) whose
+/// symbol the SDK's module does not export (its `.tbd`) is a compile error: a misspelled name or label, or a wrong
+/// type or kind, would otherwise only show as `CallError::Unavailable` (or a link error). The check is skipped for
+/// modules not in the SDK (a program's own) and with `APUS_NO_SDK_CHECK=1` set.
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "SwiftData.ModelContext(class).sav() throws"]
+///     fn save(self: &apus::swift::SwiftObject) throws; // `save()`
+/// }
+/// ```
+///
 /// A declaration that cannot be mangled is a compile error:
 ///
 /// ```compile_fail

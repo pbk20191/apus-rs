@@ -590,6 +590,20 @@ impl Declaration {
         }
     }
 
+    /// The modules whose binaries may define the declaration's symbol: its own, and the modules of the extensions it is
+    /// declared in (`(extension in _Concurrency) Swift.Task…` is in `_Concurrency`).
+    pub fn binary_modules(&self) -> Vec<String> {
+        let decl = &self.0;
+        let mut modules = vec![decl.module.clone()];
+        let extensions = decl.extension.iter().map(|e| &e.module).chain(decl.context_extension.iter().map(|e| &e.module));
+        for module in extensions {
+            if !modules.contains(module) {
+                modules.push(module.clone());
+            }
+        }
+        modules
+    }
+
     /// See [`TypeSelf`].
     pub fn type_self(&self) -> TypeSelf {
         let decl = &self.0;
