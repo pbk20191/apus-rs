@@ -149,7 +149,15 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
             ("keyword", "class") => modifiers.push("static".into()),
             ("keyword", "final" | "open" | "public" | "override" | "required" | "convenience" | "nonmutating") => {}
             ("attribute", "@discardableResult" | "@preconcurrency") => {}
+            // The framework exports the function on the systems it names (`.tbd`-checked as any other).
+            (_, a) if a.trim_start().starts_with("@backDeployed") => {}
             ("attribute", "@MainActor") => modifiers.push("@MainActor".into()),
+            // `@` then `MainActor` as a type.
+            ("attribute", "@") if fragments.get(i + 1).is_some_and(|n| n.spelling == "MainActor") => {
+                modifiers.push("@MainActor".into());
+                i += 1;
+            }
+            ("attribute", "nonisolated") => modifiers.push("nonisolated".into()),
             ("text", t) if t.trim().is_empty() => {}
             (_, other) => return Err(format!("`{other}` in `{}`: write the declaration in full", declaration_text(fragments))),
         }
@@ -280,6 +288,13 @@ fn requirement(kind: &str, lhs: &str, rhs: &str, usr: Option<&str>, params: &[&s
 /// and (for a type) its kind.
 fn named(spelling: &str, usr: Option<&str>, module: &str) -> Result<String, String> {
     let Some(usr) = usr else { return Ok(spelling.to_string()) };
+    // An Objective-C class is mangled by its Objective-C name (`So10CLLocationC`), whatever Swift calls it.
+    if let Some(class) = usr.strip_prefix("c:objc(cs)") {
+        return Ok(format!("__C.{class}(class)"));
+    }
+    if usr == "s:s4Voida" {
+        return Ok("()".into());
+    }
     let owner = graphs::usr_module(usr).ok_or_else(|| format!("`{spelling}`: unknown type"))?;
     // A standard library type with a substitution (`s:Si`, `s:SS`) apus knows by its bare name; one spelled out
     // (`s:s7DecoderP`, `s:s6HasherV`) is written with its module, or it would be taken for the declaring module's.
@@ -362,6 +377,21 @@ mod tests {
         let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
         assert_eq!(Some(symbol), super::expected_symbol(text));
     }
+    /// Imported Objective-C classes (by their Objective-C name), `@backDeployed` and `@MainActor` attributes.
+    #[test]
+    fn imported_classes_and_attributes() {
+        let check = |text: &str, contains: &str| {
+            let expanded = super::expand(text).unwrap().unwrap();
+            assert!(expanded.contains(contains), "{expanded}");
+            let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+            assert_eq!(Some(symbol), super::expected_symbol(text), "{expanded}");
+        };
+        check("WeatherKit.WeatherMetadata.location { get }", "location: __C.CLLocation(class) { get }");
+        check("WeatherKit.DayWeather.highTemperature { get }", "Foundation.Measurement(struct)<__C.NSUnitTemperature(class)>");
+        check("StoreKit.Product.SubscriptionPeriod.weekly { get }", "static StoreKit.Product(struct).SubscriptionPeriod(struct).weekly");
+        check("StoreKit.AppStore.presentMultiSeatInvitationSheet(from:originalTransactionID:)", "@MainActor static");
+    }
+
     /// A nested type in a signature: its module once, each enclosing type with its kind.
     #[test]
     fn nested_types() {
@@ -425,7 +455,12 @@ mod coverage {
                 total += 1;
                 let path: Vec<&str> = symbol.path.iter().map(String::as_str).collect();
                 let outcome = (|| {
-                    let declaration = rewrite(name, module, &path[..path.len() - 1], symbol, accessor).map_err(|e| reason("rewrite", &e))?;
+                    let declaration = rewrite(name, module, &path[..path.len() - 1], symbol, accessor).map_err(|e| {
+                        if std::env::var_os("APUS_COVERAGE_DETAIL").is_some() {
+                            println!("REWRITE {}\n  {e}", path.join("."));
+                        }
+                        reason("rewrite", &e)
+                    })?;
                     let parsed = apus_mangle::Declaration::parse_resolving(&declaration, graphs::graphs()).map_err(|e| {
                         if std::env::var_os("APUS_COVERAGE_DETAIL").is_some() {
                             println!("PARSE {declaration}\n  {e}");
