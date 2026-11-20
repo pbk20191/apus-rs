@@ -149,8 +149,10 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
             ("keyword", "class") => modifiers.push("static".into()),
             ("keyword", "final" | "open" | "public" | "override" | "required" | "convenience" | "nonmutating") => {}
             ("attribute", "@discardableResult" | "@preconcurrency") => {}
-            // The framework exports the function on the systems it names (`.tbd`-checked as any other).
-            (_, a) if a.trim_start().starts_with("@backDeployed") => {}
+            // The framework exports the function on the systems it names (`.tbd`-checked as any other); its body
+            // offered for inlining, or for dynamic replacement, the symbol stays the one to call.
+            (_, a) if a.trim_start().starts_with("@backDeployed") || a.trim_start().starts_with("@export(") => {}
+            ("keyword" | "attribute", "dynamic") => {}
             ("attribute", "@MainActor") => modifiers.push("@MainActor".into()),
             // `@` then `MainActor` as a type.
             ("attribute", "@") if fragments.get(i + 1).is_some_and(|n| n.spelling == "MainActor") => {
@@ -189,6 +191,18 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
                 body.push_str(&generic_clause(&own_params, &symbol.constraints, module_name)?);
                 body.push_str(rest);
                 own_generics_skipped = true;
+            }
+            // A parameter's result builder (`@ContentBuilder actions:`): a compile-time feature, not part of the type.
+            "attribute" if f.spelling == "@" && fragments.get(i + 1).is_some_and(|n| n.kind == "attribute" && n.spelling.ends_with("Builder")) => {
+                i += 1;
+                if fragments.get(i + 1).is_some_and(|n| n.kind == "text" && n.spelling == " ") {
+                    i += 1;
+                }
+            }
+            "attribute" if f.spelling.starts_with('@') && f.spelling.ends_with("Builder") => {
+                if fragments.get(i + 1).is_some_and(|n| n.kind == "text" && n.spelling == " ") {
+                    i += 1;
+                }
             }
             "typeIdentifier" => body.push_str(&type_fragment(fragments, i, &all_params, module_name, 0)?),
             _ => body.push_str(&f.spelling),
@@ -367,7 +381,8 @@ fn named(spelling: &str, usr: Option<&str>, module: &str) -> Result<String, Stri
 fn type_fragment(fragments: &[Fragment], i: usize, params: &[&str], module: &str, depth: usize) -> Result<String, String> {
     let f = &fragments[i];
     let nested = i >= 2 && fragments[i - 1].spelling.ends_with('.') && fragments[i - 2].kind == "typeIdentifier";
-    let alias = f.precise.as_deref().filter(|usr| usr.ends_with('a') && !usr.ends_with("Qa") && usr.starts_with("s:"));
+    // `Void` is written `()` (see `named`).
+    let alias = f.precise.as_deref().filter(|usr| usr.ends_with('a') && !usr.ends_with("Qa") && usr.starts_with("s:") && *usr != "s:s4Voida");
     match (alias, nested) {
         (Some(usr), false) if depth < 4 => {
             let declared = graphs::usr_module(usr).and_then(|m| graphs::graphs().module(&m));
@@ -554,6 +569,29 @@ mod tests {
         assert_eq!(Some(symbol), super::expected_symbol(text), "{expanded}");
     }
 
+    /// A type that moved to another module (`@_originallyDefinedIn`) is mangled with the module it was defined in, as
+    /// the framework exports it: `CGFloat` is CoreFoundation's, defined in CoreGraphics.
+    #[test]
+    fn moved_types() {
+        crate::graphs::graphs();
+        let expanded = super::expand("Foundation.AffineTransform.m11 { get }").unwrap().unwrap();
+        let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(symbol, "$s10Foundation15AffineTransformV3m1112CoreGraphics7CGFloatVvg", "{expanded}");
+        assert!(crate::sdk::exported_symbols("Foundation").unwrap().contains(&symbol));
+    }
+
+    /// A parameter's result builder (`@ContentBuilder`) is a compile-time feature: left out, the closure stays.
+    #[test]
+    fn result_builder_parameters() {
+        let module = crate::graphs::graphs().module("SwiftUI").unwrap();
+        let path = ["AlertScene", "init(_:isPresented:actions:message:)"];
+        let symbol = module.find(&path).find(|s| s.fragments.iter().any(|f| f.spelling == "LocalizedStringKey")).unwrap();
+        let expanded = super::rewrite("SwiftUI", module, &path[..1], symbol, None).unwrap();
+        assert!(expanded.contains("isPresented: SwiftUI.Binding(struct)<Bool>, actions: () -> Actions, message: () -> Message)"), "{expanded}");
+        let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(mangled), super::usr_symbol(&symbol.usr, None), "{expanded}");
+    }
+
     /// A nested type in a signature: its module once, each enclosing type with its kind.
     #[test]
     fn nested_types() {
@@ -630,7 +668,8 @@ mod coverage {
                         reason("parse", &e.to_string())
                     })?;
                     let mangled = parsed.symbol().map_err(|e| reason("mangle", &e.to_string()))?;
-                    if let Some(expected) = usr_symbol(&symbol.usr, accessor).filter(|expected| *expected != mangled) {
+                    let exported_as_mangled = crate::exported_by_sdk(&parsed, &mangled);
+                    if let Some(expected) = usr_symbol(&symbol.usr, accessor).filter(|expected| *expected != mangled && !exported_as_mangled) {
                         if std::env::var_os("APUS_COVERAGE_DETAIL").is_some() {
                             println!("DIFF {declaration}\n  want {expected}\n  got  {mangled}");
                         }
@@ -644,6 +683,9 @@ mod coverage {
                     let suffix = if parsed.is_async() { "Tu" } else { "" };
                     if let Some(exported) = exported {
                         if !std::iter::once(&call).chain(thunk.as_ref()).any(|s| exported.contains(&format!("{s}{suffix}"))) {
+                            if std::env::var_os("APUS_COVERAGE_DETAIL").is_some() {
+                                println!("EXPORT {declaration}\n  {call}{suffix}");
+                            }
                             return Err("not exported (inlinable, or a protocol's default implementation)".to_string());
                         }
                     }

@@ -270,7 +270,10 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     if let (Some((declaration, parsed)), Some(_), Some(written)) = (&declared, &expanded, &written) {
         let symbol = parsed.symbol().map_err(|e| e.to_string());
         let expected = short::expected_symbol(written);
-        if symbol.as_ref().ok() != expected.as_ref() {
+        // A type that moved modules is mangled as defined (`@_originallyDefinedIn`), which the graph's USR is not:
+        // the symbol the SDK exports is the one meant.
+        let exported = symbol.as_ref().is_ok_and(|s| exported_by_sdk(parsed, s));
+        if symbol.as_ref().ok() != expected.as_ref() && !exported {
             return item_compile_error(&format!(
                 "`{written}`, written as `{declaration}`, mangles to {symbol:?}, not to {expected:?} as its symbol graph says: write the declaration in full"
             ));
@@ -885,6 +888,11 @@ fn rust_receiver(tail: &[TokenTree]) -> Option<String> {
     let text: String = flatten(receiver.stream()).iter().map(|t| t.to_string()).collect::<Vec<_>>().join(" ");
     let ty = text.split_once(':').map_or(text.as_str(), |(_, ty)| ty).trim();
     (!ty.is_empty()).then(|| ty.to_string())
+}
+
+/// Whether an SDK module the declaration names exports `symbol`.
+fn exported_by_sdk(parsed: &apus_mangle::Declaration, symbol: &str) -> bool {
+    parsed.binary_modules().iter().filter_map(|m| sdk::exported_symbols(m)).any(|set| set.contains(symbol))
 }
 
 /// Whether the SDK module declaring `declaration` exports the symbol apus calls it through (its dispatch thunk or its

@@ -237,7 +237,7 @@ impl Mangler {
             return Ok(());
         }
         if path.len() == 1 {
-            self.module(module)?;
+            self.module(&crate::original_module(module, name).unwrap_or_else(|| module.to_string()))?;
         } else {
             self.nominal(module, &path[..path.len() - 1], extension)?;
         }
@@ -267,7 +267,7 @@ impl Mangler {
             return Ok(());
         }
         // A protocol is not an entry of its own: only its module and name identifiers are substituted.
-        self.module(&protocol.module)?;
+        self.module(&crate::original_module(&protocol.module, &protocol.name).unwrap_or_else(|| protocol.module.clone()))?;
         self.identifier(&protocol.name)
     }
 

@@ -14,13 +14,15 @@
 
 ## 결과 (호출 가능 / 전체)
 
-| 모듈 | 처음 | extension, stdlib 이름 | 중첩 타입 | ObjC 클래스, 속성 | 기본값, typealias, 팩 |
-|---|---|---|---|---|---|
-| StoreKit | 265/804 | 343/804 | 524/804 | 590/804 | 602/804 |
-| SwiftData | 268/505 | 347/505 | 383/505 | 390/505 | 425/505 |
-| MusicKit | 657/974 | 828/974 | 857/974 | 861/974 | 862/974 |
-| WeatherKit | 187/382 | 267/382 | 275/382 | 335/382 | 336/382 |
-| AppIntents | 480/3771 | 654/3771 | 665/3771 | 678/3771 | 749/3771 |
+| 모듈 | 처음 | extension, stdlib 이름 | 중첩 타입 | ObjC 클래스, 속성 | 기본값, typealias, 팩 | 옮겨진 타입, builder |
+|---|---|---|---|---|---|---|
+| StoreKit | 265/804 | 343/804 | 524/804 | 590/804 | 602/804 | 602/804 |
+| SwiftData | 268/505 | 347/505 | 383/505 | 390/505 | 425/505 | 426/505 |
+| MusicKit | 657/974 | 828/974 | 857/974 | 861/974 | 862/974 | 864/974 |
+| WeatherKit | 187/382 | 267/382 | 275/382 | 335/382 | 336/382 | 336/382 |
+| AppIntents | 480/3771 | 654/3771 | 665/3771 | 678/3771 | 749/3771 | 751/3771 |
+| SwiftUI | | | | | 1358/2956 | 1584/2956 |
+| Foundation | | | | | 3001/9848 | 3020/9848 |
 
 ## 고친 것 (rewrite, ABI와 무관)
 
@@ -55,7 +57,24 @@
     - `Predicate<E>`는 `x_QP`로 mangle된다.
   - 파라미터가 팩 하나뿐인 타입만 쓴다.
 
+- 옮겨진 타입(`@_originallyDefinedIn`):
+  - 예: `CoreFoundation.CGFloat`는 CoreGraphics에 정의되어 있었고, SwiftUICore에는 이런 표시가 6597개 있다.
+  - 심볼은 원래 모듈 이름으로 mangle된다. graph에는 이 속성이 없고 USR도 지금 모듈을 쓴다.
+  - 그래서 SDK의 `.swiftinterface`에서 이 속성이 붙은 맨 위 수준 타입을 모아 두고, mangler가 원래 모듈 이름을 쓴다.
+    `KindResolver::original_module`로 한다.
+  - SDK 검사는 선언에 적힌 모듈의 `.tbd`를 그대로 본다. 옮겨진 타입의 심볼은 지금 모듈의 바이너리에 있기 때문이다.
+  - 이름으로 쓴 선언의 심볼이 USR과 다르더라도 SDK가 그 심볼을 export하면 받아들인다.
+- 속성 처리:
+  - 파라미터의 result builder(`@ContentBuilder actions:`)는 컴파일 시점 기능이므로 지운다.
+  - `@export(implementation)`와 `dynamic`도 지운다. 심볼은 `.tbd`로 검사한다.
+- `Void`가 typealias 분기에 먼저 걸리던 것을 고쳤다.
+
 ## 남은 큰 항목
+
+- 생성자에 붙은 `where`가 타입 파라미터를 고정하는 경우(`init(…) where Message == EmptyView`). 넘기는 generic 인자가
+  달라지므로 지금처럼 거부한다. SwiftUI에서 많다.
+- Foundation: "export 안 됨" 2878개. 일부는 `@inlinable`이다. 일부는 `_System_Foundation` 같은 다시 내보낸 모듈의
+  extension인데, graph는 Foundation의 멤버로 보여 준다. 예: `URL.init(_: FilePath)`.
 
 - 가져온 C 타입(enum `c:@E@`, struct `c:@SA@`, typedef `c:@T@`)과 Objective-C에서 온 멤버(`So…` 심볼): rewrite가 거부한다.
 - 프로토콜의 associated type(`…Qa`, `Self.Filter`)과 stdlib typealias.

@@ -197,6 +197,16 @@ pub trait KindResolver: Sync {
     /// The kind of the type at `path` (`["FetchDescriptor"]`, outermost first) in `module`.
     fn kind(&self, module: &str, path: &[&str]) -> Option<TypeKind>;
     fn class_bound(&self, module: &str, protocol: &str) -> Option<bool>;
+    /// The module a top-level type of `module` was defined in before it moved (`@_originallyDefinedIn`), which its
+    /// mangled name keeps: CoreFoundation's `CGFloat` is mangled as CoreGraphics'.
+    fn original_module(&self, _module: &str, _name: &str) -> Option<String> {
+        None
+    }
+}
+
+/// See [`KindResolver::original_module`].
+pub(crate) fn original_module(module: &str, name: &str) -> Option<String> {
+    kind_resolver()?.original_module(module, name)
 }
 
 static KIND_RESOLVER: std::sync::OnceLock<&'static dyn KindResolver> = std::sync::OnceLock::new();

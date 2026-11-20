@@ -123,6 +123,53 @@ impl apus_mangle::KindResolver for Graphs {
     fn class_bound(&self, module: &str, protocol: &str) -> Option<bool> {
         self.class_bound_at(module, protocol, 0)
     }
+
+    fn original_module(&self, module: &str, name: &str) -> Option<String> {
+        static MOVED: OnceLock<Mutex<HashMap<String, &'static HashMap<String, String>>>> = OnceLock::new();
+        let mut modules = MOVED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+        let moved = *modules.entry(module.to_string()).or_insert_with(|| Box::leak(Box::new(moved_types(module))));
+        moved.get(name).cloned()
+    }
+}
+
+/// The top-level types of an SDK module that moved there from another (`@_originallyDefinedIn(module: "M", macOS …)`
+/// in its `.swiftinterface`; symbol graphs leave the attribute out), by name, with the module they were defined in.
+fn moved_types(module: &str) -> HashMap<String, String> {
+    let mut moved = HashMap::new();
+    if matches!(module, "Swift" | "_Concurrency" | "__C") {
+        return moved;
+    }
+    let Some(sdk) = crate::sdk::sdk() else { return moved };
+    let arch = if cfg!(target_arch = "aarch64") { ["arm64e", "arm64"] } else { ["x86_64", "x86_64"] };
+    let dirs = [
+        sdk.join(format!("System/Library/Frameworks/{module}.framework/Modules/{module}.swiftmodule")),
+        sdk.join(format!("usr/lib/swift/{module}.swiftmodule")),
+    ];
+    let interface = dirs.iter().flat_map(|dir| arch.map(|a| dir.join(format!("{a}-apple-macos.swiftinterface")))).find(|f| f.exists());
+    let Some(text) = interface.and_then(|f| std::fs::read_to_string(f).ok()) else { return moved };
+    let mut original: Option<&str> = None;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("@_originallyDefinedIn(module: \"") {
+            if rest.contains("macOS") {
+                original = rest.split('"').next();
+            }
+            continue;
+        }
+        let Some(from) = original else { continue };
+        // The declaration the attributes are on (`@frozen public struct CGFloat …`, `public protocol View …`); other
+        // attributes and `#if` lines may come between.
+        let words: Vec<&str> = line.split(|c: char| c.is_whitespace() || c == ':' || c == '<' || c == '{').filter(|w| !w.is_empty()).collect();
+        let introducer = words.iter().position(|w| matches!(*w, "struct" | "class" | "enum" | "protocol" | "actor" | "typealias"));
+        match introducer.and_then(|at| words.get(at + 1)) {
+            Some(name) => {
+                moved.insert(name.trim_matches('`').to_string(), from.to_string());
+                original = None;
+            }
+            None if line.starts_with('@') || line.starts_with('#') => {}
+            None => original = None,
+        }
+    }
+    moved
 }
 
 impl Graphs {
