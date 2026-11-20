@@ -412,7 +412,8 @@ fn main() {
 }
 ```
 
-Its declarations are then `#[swift_linked = "Todos.…"]` (bound at link time). `examples/swift-data` is the whole
+It is optimized (`-O`) in release builds only (`-Onone` otherwise, to build fast). Its declarations are then
+`#[swift_linked = "Todos.…"]` (bound at link time). `examples/swift-data` is the whole
 setup. In this repository, `.vscode/settings.json` gives rust-analyzer its own target directory: sharing the one
 terminal builds rewrite makes its proc-macro server fail now and then while it reads a macro being rebuilt.
 

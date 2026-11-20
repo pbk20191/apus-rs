@@ -42,7 +42,10 @@ impl SwiftModule {
     /// build stops with that message).
     pub fn build(self) {
         println!("cargo:rerun-if-changed={}", self.sources.display());
-        println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
+        // What selects the toolchain and SDK `xcrun` runs with.
+        for variable in ["MACOSX_DEPLOYMENT_TARGET", "DEVELOPER_DIR", "SDKROOT", "TOOLCHAINS"] {
+            println!("cargo:rerun-if-env-changed={variable}");
+        }
         if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
             panic!("apus-build: only macOS targets are supported");
         }

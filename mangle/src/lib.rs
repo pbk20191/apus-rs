@@ -83,9 +83,6 @@ fn leading_module(ty: &str) -> &str {
     if end > 0 && ty[end..].starts_with('.') { &ty[..end] } else { "Swift" }
 }
 
-/// The mangled name of a concrete type written as in a declaration (`Todos.Todo(class)`,
-/// `SwiftData.FetchResultsCollection(struct)<Todos.Todo(class)>`), in the form the Swift runtime resolves
-/// (`swift_getTypeByMangledNameInContext`): `"5Todos4TodoC"`. A bare name belongs to the leading module.
 /// A type written as in a declaration, parsed (bare names belong to the leading module).
 fn parse_type(ty: &str) -> Result<ast::Ty, Error> {
     let declaration = format!("{}.__apus_type() -> {ty}", leading_module(ty));
@@ -95,6 +92,9 @@ fn parse_type(ty: &str) -> Result<ast::Ty, Error> {
     }
 }
 
+/// The mangled name of a concrete type written as in a declaration (`Todos.Todo(class)`,
+/// `SwiftData.FetchResultsCollection(struct)<Todos.Todo(class)>`), in the form the Swift runtime resolves
+/// (`swift_getTypeByMangledNameInContext`): `"5Todos4TodoC"`. A bare name belongs to the leading module.
 pub fn type_name(ty: &str) -> Result<String, Error> {
     let declaration = format!("{}.__apus_type() -> {ty}", leading_module(ty));
     result_type(&declaration)
@@ -390,6 +390,10 @@ impl Declaration {
         let mut bound = Vec::new();
         let mut types = Vec::new();
         for name in names {
+            // An opaque parameter (`_: some P`) is an unnamed generic parameter, which no binding can name.
+            if name == "_" {
+                return Err(Error("an opaque `some` parameter cannot be bound: declare it as a named generic parameter".into()));
+            }
             let Some((_, ty)) = bindings.iter().find(|(n, _)| n == name) else {
                 return Err(Error(format!("`{name}` is not bound: write `{name} = \"Module.Type(kind)\"`")));
             };
@@ -1114,6 +1118,7 @@ mod isolation_tests {
         assert!(error("M.f<T>(_: Int) -> (T, Int)", &[("T", "Swift.Int")]).contains("only as a parameter or result itself"));
         assert!(error("M.f<T: Hashable & Comparable>(_: T)", &[("T", "Swift.Int")]).contains("more than one protocol"));
         assert!(error("M.f(_: Int)", &[("T", "Swift.Int")]).contains("not generic"));
+        assert!(error("M.f<T>(_: T, _: some Hashable)", &[("T", "Swift.Int")]).contains("opaque `some` parameter"));
         // A variadic `T...` is one `[T]`, an `inout T` a `&mut SwiftValue`: neither is the by-address `&SwiftValue`.
         assert_eq!(bind("M.f<T>(_: T..., _: inout T) -> Int", &[("T", "Swift.Int")]).unwrap().by_address, [false, false]);
         assert!(error("M.g<S: AsyncSequence>(_: [S]) throws(S.Failure) -> Int", &[("S", "Swift.Int")]).contains("typed throws"));
