@@ -923,6 +923,24 @@ fn is_concrete(ty: &Ty) -> bool {
     }
 }
 
+/// The mangled name of `ty`, a type in `decl`'s signature, with the declaration's own generic parameters bound to
+/// `bound` (in order); `None` if it is still not concrete (an associated type).
+pub(crate) fn bound_type_name(decl: &Decl, ty: &Ty, bound: &[Ty]) -> Result<Option<String>, String> {
+    let mut same_types = all_same_types(decl);
+    for (index, concrete) in bound.iter().enumerate() {
+        same_types.params.insert(GenericParam { depth: 0, index }, concrete.clone());
+    }
+    let ty = canonical(ty, &same_types);
+    if !is_concrete(&ty) {
+        return Ok(None);
+    }
+    type_name(&ty).map(Some)
+}
+
+pub(crate) fn is_concrete_type(ty: &Ty) -> bool {
+    is_concrete(ty)
+}
+
 /// A type's mangled name, as the runtime resolves type names (no `$s`).
 pub(crate) fn type_name(ty: &Ty) -> Result<String, String> {
     let mut m = Mangler::default();

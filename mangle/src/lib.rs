@@ -86,6 +86,15 @@ fn leading_module(ty: &str) -> &str {
 /// The mangled name of a concrete type written as in a declaration (`Todos.Todo(class)`,
 /// `SwiftData.FetchResultsCollection(struct)<Todos.Todo(class)>`), in the form the Swift runtime resolves
 /// (`swift_getTypeByMangledNameInContext`): `"5Todos4TodoC"`. A bare name belongs to the leading module.
+/// A type written as in a declaration, parsed (bare names belong to the leading module).
+fn parse_type(ty: &str) -> Result<ast::Ty, Error> {
+    let declaration = format!("{}.__apus_type() -> {ty}", leading_module(ty));
+    match parse::parse(&declaration).map_err(|e| Error(format!("`{ty}`: {e}")))?.signature {
+        ast::Signature::Function { result, .. } => Ok(result),
+        _ => unreachable!("a function declaration"),
+    }
+}
+
 pub fn type_name(ty: &str) -> Result<String, Error> {
     let declaration = format!("{}.__apus_type() -> {ty}", leading_module(ty));
     result_type(&declaration)
@@ -347,6 +356,83 @@ impl Declaration {
             },
         };
         mangler::type_name(&ty).ok()
+    }
+
+    /// Binds the declaration's own generic parameters, by name, to concrete types written as in a declaration
+    /// (`[("T", "Todos.Todo(class)")]`). The function stays generic: its values of type `T` go by address and its
+    /// generic arguments are the bound types' metadata and witness tables, after the formal arguments.
+    pub fn bind(&self, bindings: &[(&str, &str)]) -> Result<ConcretePlan, Error> {
+        use ast::Ty;
+        let decl = &self.0;
+        let ast::Signature::Function { params, result, typed_error, .. } = &decl.signature else {
+            return Err(Error("only a function's generic parameters can be bound".into()));
+        };
+        if decl.generic_params == 0 {
+            return Err(Error("the declaration is not generic: it takes no bound types".into()));
+        }
+        if decl.context_params > 0 {
+            return Err(Error("generic members of generic types cannot be bound: pass the generic arguments explicitly".into()));
+        }
+        if matches!(typed_error, Some(Ty::Param(_))) {
+            return Err(Error("typed throws of a generic error type cannot be bound: pass the generic arguments explicitly".into()));
+        }
+        let names = &decl.generic_names;
+        for (name, _) in bindings {
+            if !names.iter().any(|n| n == name) {
+                return Err(Error(format!("the declaration has no generic parameter `{name}`")));
+            }
+        }
+        let mut bound = Vec::new();
+        let mut types = Vec::new();
+        for name in names {
+            let Some((_, ty)) = bindings.iter().find(|(n, _)| n == name) else {
+                return Err(Error(format!("`{name}` is not bound: write `{name} = \"Module.Type(kind)\"`")));
+            };
+            let parsed = parse_type(ty)?;
+            if !mangler::is_concrete_type(&parsed) {
+                return Err(Error(format!("`{ty}`: a bound type must be concrete")));
+            }
+            types.push(mangler::type_name(&parsed).map_err(Error)?);
+            bound.push(parsed);
+        }
+        // Where Swift abstracts a generic parameter, the bound type's own lowering is not the generic one: only a
+        // parameter or result that is `T` itself (by address, or a reference if class-bound) or names `T` among a
+        // nominal type's arguments (whose layout does not depend on it) keeps to what apus lowers.
+        fn placed(ty: &Ty, top: bool) -> Result<(), Error> {
+            match ty {
+                Ty::Param(_) if top => Ok(()),
+                Ty::Param(_) | Ty::Member(..) => {
+                    Err(Error("a bound generic parameter is supported only as a parameter or result itself, or among a type's generic arguments".into()))
+                }
+                Ty::Nominal { args, .. } => args.iter().try_for_each(|arg| nominal_argument(arg)),
+                Ty::Optional(wrapped) => placed(wrapped, false),
+                Ty::Metatype(instance) => match &**instance {
+                    Ty::Param(_) if top => Ok(()),
+                    other => placed(other, false),
+                },
+                Ty::Pack(elements) => elements.iter().try_for_each(|e| placed(e, false)),
+                Ty::Tuple(elements) => elements.iter().try_for_each(|(_, e)| placed(e, false)),
+                Ty::Function(function) => function.params.iter().chain([&function.result]).try_for_each(|t| placed(t, false)),
+                Ty::Any | Ty::AnyObject | Ty::Existential(_) | Ty::Opaque(_) => Ok(()),
+            }
+        }
+        fn nominal_argument(ty: &Ty) -> Result<(), Error> {
+            match ty {
+                Ty::Param(_) => Ok(()),
+                other => placed(other, false),
+            }
+        }
+        params.iter().try_for_each(|p| placed(&p.ty, true))?;
+        placed(result, true)?;
+        let class_bound = class_bound_params(decl);
+        let abstract_value = |ty: &Ty| matches!(ty, Ty::Param(param) if !class_bound.contains(param));
+        Ok(ConcretePlan {
+            types,
+            witnesses: witness_requirements(decl)?,
+            result: mangler::bound_type_name(decl, result, &bound).map_err(Error)?,
+            by_address: params.iter().map(|p| abstract_value(&p.ty)).collect(),
+            result_by_address: abstract_value(result),
+        })
     }
 
     /// See [`isolation`].
@@ -774,6 +860,23 @@ pub struct GenericPlan {
     pub witness_layouts: Vec<ProtocolLayout>,
 }
 
+/// A generic function's generic arguments fixed to concrete types (`swift!`'s `#[swift = "…", T = "Type"]`): what
+/// [`Declaration::bind`] computes, all known at compile time but the lookups themselves.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConcretePlan {
+    /// Per generic parameter, in order: the mangled name (no `$s`) of the type it is bound to.
+    pub types: Vec<String>,
+    /// Witness tables in canonical order: (generic parameter index, protocol descriptor, layout).
+    pub witnesses: Vec<(usize, String, ProtocolLayout)>,
+    /// The result type with the bindings substituted, when it is concrete then.
+    pub result: Option<String>,
+    /// Per formal parameter: its type is exactly a generic parameter that is not class-bound, which a generic function
+    /// takes by address whatever the type bound to it (the Rust argument must be a `&SwiftValue`).
+    pub by_address: Vec<bool>,
+    /// The result is exactly such a parameter, returned by address (`SwiftValue`).
+    pub result_by_address: bool,
+}
+
 /// The requirements of the extension a declaration is in.
 fn extension_requirements(decl: &ast::Decl) -> impl Iterator<Item = &ast::Requirement> {
     decl.extension.iter().flat_map(|e| e.requirements.iter())
@@ -811,8 +914,48 @@ pub fn generic_plan(declaration: &str) -> Result<Option<GenericPlan>, Error> {
     Declaration::parse(declaration)?.generic_plan()
 }
 
+/// The witness tables a generic function's own parameters take, in the ABI's canonical requirement order: (generic
+/// parameter index, protocol descriptor, what the descriptor must say). Errors name what neither automatic nor bound
+/// generic arguments handle.
+fn witness_requirements(decl: &ast::Decl) -> Result<Vec<(usize, String, ProtocolLayout)>, Error> {
+    use ast::{Requirement, Subject};
+    let explicit = |why: String| Err(Error(format!("{why}: pass the generic arguments explicitly (type metadata, then witness tables)")));
+    let class_bound = class_bound_params(decl);
+    // Marker protocols take no witness table.
+    let marker = ast::Protocol::is_marker;
+    let mut witnesses = Vec::new();
+    let mut conformances_per_param = vec![0usize; decl.generic_params];
+    for requirement in mangler::sorted_requirements(&decl.requirements) {
+        match requirement {
+            Requirement::Conforms(_, ref protocol) if marker(protocol) => {}
+            Requirement::Conforms(Subject::Param(param), protocol) => {
+                conformances_per_param[param.index] += 1;
+                if conformances_per_param[param.index] > 1 {
+                    // The canonical signature drops a conformance another one implies; only the explicit form is sure.
+                    return explicit(format!("generic parameter {} has more than one protocol requirement", param.index + 1));
+                }
+                if protocol.module == "__C" {
+                    return explicit("Objective-C protocol requirements (they take no witness table)".into());
+                }
+                let layout = match (protocol.class_bound, class_bound.contains(&param)) {
+                    (true, _) => ProtocolLayout::Class,
+                    (false, false) => ProtocolLayout::Any,
+                    (false, true) => ProtocolLayout::Either,
+                };
+                witnesses.push((param.index, mangler::protocol_descriptor(&protocol).map_err(Error)?, layout));
+            }
+            Requirement::Conforms(Subject::Member(..), _) => return explicit("requirements on associated types".into()),
+            Requirement::SameType(Subject::Param(_), _) => return explicit("generic parameters fixed to a type".into()),
+            Requirement::SameType(Subject::Member(..), _) => {}
+            // No witness table: a class-bound parameter's value is a reference (see `check_lowering`).
+            Requirement::Superclass(..) | Requirement::AnyObject(_) => {}
+        }
+    }
+    Ok(witnesses)
+}
+
 fn generic_plan_of(decl: &ast::Decl) -> Result<Option<GenericPlan>, Error> {
-    use ast::{GenericParam, Requirement, Subject, Ty};
+    use ast::{GenericParam, Ty};
     let explicit = |why: String| Err(Error(format!("{why}: pass the generic arguments explicitly (type metadata, then witness tables)")));
     let ast::Signature::Function { params, typed_error, result, .. } = &decl.signature else { return Ok(None) };
     // A member of a generic type gets its type's generic arguments through `self` / `Self`: nothing to fill unless
@@ -846,36 +989,11 @@ fn generic_plan_of(decl: &ast::Decl) -> Result<Option<GenericPlan>, Error> {
             None => return explicit(format!("generic parameter {} is not the type of one of its parameters", index + 1)),
         }
     }
-    // Marker protocols take no witness table.
-    let marker = ast::Protocol::is_marker;
     let mut witnesses = Vec::new();
     let mut witness_layouts = Vec::new();
-    let mut conformances_per_param = vec![0usize; decl.generic_params];
-    for requirement in mangler::sorted_requirements(&decl.requirements) {
-        match requirement {
-            Requirement::Conforms(_, ref protocol) if marker(protocol) => {}
-            Requirement::Conforms(Subject::Param(param), protocol) => {
-                conformances_per_param[param.index] += 1;
-                if conformances_per_param[param.index] > 1 {
-                    // The canonical signature drops a conformance another one implies; only the explicit form is sure.
-                    return explicit(format!("generic parameter {} has more than one protocol requirement", param.index + 1));
-                }
-                if protocol.module == "__C" {
-                    return explicit("Objective-C protocol requirements (they take no witness table)".into());
-                }
-                witnesses.push((metadata_from[param.index], mangler::protocol_descriptor(&protocol).map_err(Error)?));
-                witness_layouts.push(match (protocol.class_bound, class_bound.contains(&param)) {
-                    (true, _) => ProtocolLayout::Class,
-                    (false, false) => ProtocolLayout::Any,
-                    (false, true) => ProtocolLayout::Either,
-                });
-            }
-            Requirement::Conforms(Subject::Member(..), _) => return explicit("requirements on associated types".into()),
-            Requirement::SameType(Subject::Param(_), _) => return explicit("generic parameters fixed to a type".into()),
-            Requirement::SameType(Subject::Member(..), _) => {}
-            // No witness table: a class-bound parameter's value is a reference (see `check_lowering`).
-            Requirement::Superclass(..) | Requirement::AnyObject(_) => {}
-        }
+    for (param, descriptor, layout) in witness_requirements(decl)? {
+        witnesses.push((metadata_from[param], descriptor));
+        witness_layouts.push(layout);
     }
     let error_slot_from = match typed_error {
         Some(Ty::Param(param)) => Some(metadata_from[param.index]),
@@ -942,6 +1060,37 @@ mod isolation_tests {
         assert_eq!(of("@MainActor M.onMain() -> Bool"), Isolation::MainActor);
         assert_eq!(of("@MainActor M.onMain() async -> Bool"), Isolation::None);
         assert_eq!(of("M.Counter(class).bump(by: Int) -> Int"), Isolation::None);
+    }
+
+    #[test]
+    fn bind_fixes_generic_parameters() {
+        use super::{ConcretePlan, Declaration, ProtocolLayout};
+        let bind = |d: &str, b: &[(&str, &str)]| Declaration::parse(d).unwrap().bind(b);
+        let fetch = "SwiftData.ModelContext(class).fetch<T: PersistentModel(AnyObject)>(_: FetchDescriptor(struct)<T>, \
+                     batchSize: Int) throws -> FetchResultsCollection(struct)<T>";
+        assert_eq!(
+            bind(fetch, &[("T", "Todos.Todo(class)")]).unwrap(),
+            ConcretePlan {
+                types: vec!["5Todos4TodoC".into()],
+                witnesses: vec![(0, "$s9SwiftData15PersistentModelMp".into(), ProtocolLayout::Class)],
+                result: Some("9SwiftData22FetchResultsCollectionVy5Todos4TodoCG".into()),
+                by_address: vec![false, false],
+                result_by_address: false,
+            }
+        );
+        let zero = bind("Res.zeroOf<T: AdditiveArithmetic>() -> T", &[("T", "Swift.Int")]).unwrap();
+        assert_eq!(zero.types, ["Si"]);
+        assert_eq!(zero.result.as_deref(), Some("Si"));
+        assert!(zero.result_by_address, "a generic result is returned by address");
+        assert!(bind("M.f<T>(_: T) -> Int", &[("T", "Swift.Int")]).unwrap().by_address == [true]);
+        let error = |d: &str, b: &[(&str, &str)]| bind(d, b).unwrap_err().to_string();
+        assert!(error("M.f<T>(_: T) -> Int", &[]).contains("`T` is not bound"));
+        assert!(error("M.f<T>(_: T) -> Int", &[("T", "Swift.Int"), ("U", "Swift.Int")]).contains("no generic parameter `U`"));
+        assert!(error("M.f<T>(_: T) -> Int", &[("T", "some Hashable")]).contains("concrete"));
+        assert!(error("M.f<T>(_: T?) -> Int", &[("T", "Swift.Int")]).contains("only as a parameter or result itself"));
+        assert!(error("M.f<T>(_: Int) -> (T, Int)", &[("T", "Swift.Int")]).contains("only as a parameter or result itself"));
+        assert!(error("M.f<T: Hashable & Comparable>(_: T)", &[("T", "Swift.Int")]).contains("more than one protocol"));
+        assert!(error("M.f(_: Int)", &[("T", "Swift.Int")]).contains("not generic"));
     }
 
     #[test]

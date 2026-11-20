@@ -1046,7 +1046,13 @@ impl<'a> Parser<'a> {
         if !self.rest().is_empty() {
             return Err(self.error("unexpected text"));
         }
+        let mut generic_names: Vec<(usize, String)> =
+            self.generics.iter().filter(|(name, param)| param.depth == own_depth && name != "Self").map(|(name, param)| (param.index, name.clone())).collect();
+        generic_names.sort();
+        let mut generic_names: Vec<String> = generic_names.into_iter().map(|(_, name)| name).collect();
+        generic_names.resize(generic_params, "_".into());
         Ok(Decl {
+            generic_names,
             module: self.module.clone(),
             context,
             context_extension,
