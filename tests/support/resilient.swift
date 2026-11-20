@@ -129,6 +129,7 @@ public func zero<T: AdditiveArithmetic>(_ t: T.Type) -> T { T.zero }
 // Generic parameters bound to concrete types in `swift!` (T is no argument's own type); `Nope` conforms to nothing.
 public func sumText<T: AdditiveArithmetic>(_ values: [T]) -> String { "\(values.reduce(.zero, +))" }
 public func sumOf<T: AdditiveArithmetic>(_ values: [T]) -> T { values.reduce(.zero, +) }
+public func doubled<T: AdditiveArithmetic>(_ x: T) -> T { x + x }
 public struct Nope {}
 public func nopeType() -> Any.Type { Nope.self }
 public func meters(_ value: Double) -> Measurement<UnitLength> { Measurement(value: value, unit: .meters) }

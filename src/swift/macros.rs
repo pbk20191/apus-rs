@@ -100,8 +100,9 @@
 ///   `#[swift = "SwiftData.ModelContext(class).fetch<T: PersistentModel(AnyObject)>(…) throws -> FetchResultsCollection(struct)<T>", T = "Todos.Todo(class)"]`.
 ///   The Rust signature lists the declaration's parameters only: the bound types' metadata and witness tables are
 ///   found by name when the call is made (`CallError::Unavailable` if a type is missing, `NotConforming` if it does not
-///   conform), and the result's type is the one with `T` substituted. The function is still generic: a value of type
-///   `T` goes by address whatever type is bound (`&SwiftValue`, `-> SwiftValue`); a class-bound one is a reference.
+///   conform), and the result's type is the one with `T` substituted. An argument whose type names `T` must hold that
+///   type exactly (`CallError::InvalidArgument`). The function is still generic: a value of type `T` goes by address
+///   whatever type is bound (`&SwiftValue`, `-> SwiftValue`); a class-bound one is a reference.
 ///
 /// ```compile_fail
 /// apus::swift! {
@@ -502,15 +503,20 @@ macro_rules! __swift_call {
         $crate::__swift_call!(@ $function [$($arg),*] [] [$($generic)*] $declared)
     };
     // `concrete [type…] [(parameter protocol layout)…] [result?]`: generic parameters bound to the types named.
-    (@ $function:ident [$($arg:ident),*] $o:tt [concrete [$($t:literal)*] [$(($wp:literal $p:literal $pl:ident))*] [$($result:literal)?] $($closures:tt)*] $declared:expr) => {{
+    // `[(argument function "type")…]`: arguments whose type names a bound parameter, checked against that type.
+    (@ $function:ident [$($arg:ident),*] $o:tt [concrete [$($t:literal)*] [$(($wp:literal $p:literal $pl:ident))*] [$($result:literal)?] [$(($ca:ident $cf:ident $ct:literal))*] $($closures:tt)*] $declared:expr) => {{
         static TYPES: [(&str, ::std::sync::OnceLock<::core::option::Option<$crate::swift::SwiftType>>); [$($t),*].len()] =
             [$(($t, ::std::sync::OnceLock::new())),*];
+        static CHECKED: [(&str, ::std::sync::OnceLock<::core::option::Option<$crate::swift::SwiftType>>); <[&str]>::len(&[$($ct),*])] =
+            [$(($ct, ::std::sync::OnceLock::new())),*];
         let generic = $crate::swift::__concrete_args(
             &TYPES,
             &[$(($wp, {
                 static PROTOCOL: $crate::swift::SwiftProtocol = $crate::swift::SwiftProtocol::new($p);
                 &PROTOCOL
             }, $crate::swift::ProtocolLayout::$pl)),*],
+            &CHECKED,
+            &[$($crate::swift::$cf(&$ca)),*],
         );
         #[allow(unused_mut)]
         let mut declared = $declared;

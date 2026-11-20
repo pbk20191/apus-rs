@@ -135,32 +135,55 @@ pub fn __generic_args(
 /// The generic arguments of a function whose generic parameters `swift!` binds to concrete types
 /// (`#[swift = "…", T = "Type"]`): each bound type found by its mangled name once, then lowered as [`GenericArgs`].
 #[doc(hidden)]
-pub struct ConcreteArgs(Result<GenericArgs, &'static str>);
+pub struct ConcreteArgs(Result<GenericArgs, Refused>);
 
-/// `types`: each generic parameter's bound type, (mangled name, where it is kept once found); `witnesses`: (generic
-/// parameter index, protocol, layout) in canonical order.
+enum Refused {
+    /// A type named by the binding is not in the process.
+    Missing(&'static str),
+    /// An argument does not hold the type its declared type is with the bindings substituted.
+    Mismatch,
+}
+
+/// A type found by its mangled name once, kept where `swift!` put it.
+type Named = (&'static str, std::sync::OnceLock<Option<SwiftType>>);
+
+fn find((name, found): &'static Named) -> Result<SwiftType, Refused> {
+    found.get_or_init(|| SwiftType::from_mangled_name(name)).ok_or(Refused::Missing(name))
+}
+
+/// `types`: each generic parameter's bound type; `witnesses`: (generic parameter index, protocol, layout) in canonical
+/// order; `checked` and `actual`: the type each checked argument must hold, and the one it holds.
 #[doc(hidden)]
 pub fn __concrete_args(
-    types: &'static [(&'static str, std::sync::OnceLock<Option<SwiftType>>)],
+    types: &'static [Named],
     witnesses: &[(usize, &'static SwiftProtocol, ProtocolLayout)],
+    checked: &'static [Named],
+    actual: &[SwiftType],
 ) -> ConcreteArgs {
-    // A type not found is reported by its name.
-    let metadata: Result<Vec<SwiftType>, &'static str> = types
-        .iter()
-        .map(|(name, found)| found.get_or_init(|| SwiftType::from_mangled_name(name)).ok_or(*name))
-        .collect();
-    ConcreteArgs(metadata.map(|metadata| GenericArgs {
-        witnesses: witnesses.iter().map(|&(param, protocol, layout)| (metadata[param], protocol, layout)).collect(),
-        metadata,
-        error_slot: None,
-    }))
+    let build = || {
+        let metadata = types.iter().map(find).collect::<Result<Vec<_>, _>>()?;
+        for (expected, actual) in checked.iter().zip(actual) {
+            if find(expected)? != *actual {
+                return Err(Refused::Mismatch);
+            }
+        }
+        Ok(GenericArgs {
+            witnesses: witnesses.iter().map(|&(param, protocol, layout)| (metadata[param], protocol, layout)).collect(),
+            metadata,
+            error_slot: None,
+        })
+    };
+    ConcreteArgs(build())
 }
 
 impl SwiftArg for ConcreteArgs {
     fn lower(&self, into: &mut ArgLowering) {
         match &self.0 {
             Ok(generic) => generic.lower(into),
-            Err(name) => into.fail(CallError::Unavailable(name)),
+            Err(Refused::Missing(name)) => into.fail(CallError::Unavailable(name)),
+            Err(Refused::Mismatch) => into.fail(CallError::InvalidArgument(
+                "an argument does not hold the type its generic parameter is bound to (a subclass's object: bind the subclass)",
+            )),
         }
     }
 }

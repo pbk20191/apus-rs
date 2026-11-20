@@ -370,6 +370,9 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
                 "`{declaration}`: with its generic parameters bound, the Rust signature lists exactly the declaration's parameters"
             ));
         }
+        if parsed.nonsending() {
+            return item_compile_error(&format!("`{declaration}`: bound generic parameters with nonisolated(nonsending): pass them explicitly"));
+        }
         let by_address = |ty: &str| ty.replace(' ', "").starts_with('&') && !ty.replace(' ', "").starts_with("&mut") && ty.ends_with("SwiftValue");
         for (i, (address, ty)) in plan.by_address.iter().zip(&argument_types).enumerate() {
             if *address && !by_address(ty) {
@@ -398,11 +401,34 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
                 TokenTree::Group(Group::new(Delimiter::Parenthesis, entry.into_iter().collect()))
             })
             .collect();
+        // Arguments whose type names a bound parameter, checked against that type when the call is made: a value by
+        // its type, a class reference by its dynamic class (as automatic generic arguments would read them).
+        let kinds = parsed.argument_kinds().unwrap_or_default();
+        let checks = plan
+            .argument_types
+            .iter()
+            .enumerate()
+            .filter_map(|(i, ty)| {
+                let ty = ty.as_ref()?;
+                let function = match (kinds.get(i), argument_types.get(i)) {
+                    (Some(Some(apus_mangle::ArgumentKind::ClassBound)), _) => "__object_type_of",
+                    (Some(None), Some(rust)) if by_address(rust) => "__type_of",
+                    _ => return None,
+                };
+                let entry = vec![
+                    TokenTree::Ident(rust_args[i].clone()),
+                    TokenTree::Ident(proc_macro::Ident::new(function, proc_macro::Span::call_site())),
+                    literal(ty),
+                ];
+                Some(TokenTree::Group(Group::new(Delimiter::Parenthesis, entry.into_iter().collect())))
+            })
+            .collect();
         generic = [
             TokenTree::Ident(proc_macro::Ident::new("concrete", proc_macro::Span::call_site())),
             bracket(plan.types.iter().map(|t| literal(t)).collect()),
             bracket(witnesses),
             bracket(plan.result.iter().map(|r| literal(r)).collect()),
+            bracket(checks),
         ]
         .into_iter()
         .collect();

@@ -47,6 +47,10 @@ apus::swift! {
     fn label_of_dog(x: &SwiftObject) -> String;
     #[swift_linked = "Res.dog(name: String) -> Dog(class)"]
     fn dog(name: &str) -> SwiftObject;
+    #[swift = "Res.doubled<T: AdditiveArithmetic>(_: T) -> T", T = "Swift.Int"]
+    fn doubled_int(x: &SwiftValue) -> SwiftValue;
+    #[swift_linked = "Probe.Minted(class).init(n: Int)"]
+    fn minted(n: i64) -> SwiftObject;
     #[swift_linked = "Res.nopeType() -> Any.Type"]
     fn nope_type() -> SwiftType;
 }
@@ -58,6 +62,10 @@ fn concrete_bindings() -> Result<(), Failed> {
     check(sum.ty() == SwiftType::of::<i64>(), "sumOf<Int> is an Int")?;
     check(sum.description() == "6", sum.description())?;
     check(label_of_dog(&dog("Rex").unwrap()).unwrap() == "named Rex", "labelOf<Dog>")?;
+    check(doubled_int(&SwiftValue::new(21i64)).unwrap().description() == "42", "doubled<Int>")?;
+    // Arguments must hold the bound types: Dog's witness table on another object, or Int's on a String, is refused.
+    check(matches!(doubled_int(&SwiftValue::new("21".to_string())), Err(CallError::InvalidArgument(_))), "a String for Int")?;
+    check(matches!(label_of_dog(&minted(1).unwrap()), Err(CallError::InvalidArgument(_))), "another class for Dog")?;
     let _ = nope_type(); // keeps Nope in the archive
     check(matches!(sum_of_nope(Vec::new()), Err(CallError::NotConforming { .. })), "Nope is not AdditiveArithmetic")
 }

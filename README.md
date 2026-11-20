@@ -300,9 +300,12 @@ apus::swift! {
 ```
 
 The bound types and their conformances are looked up when the call is made (`CallError::Unavailable` if a type is
-missing, `NotConforming` if it does not conform). The function is still generic, so a value of type `T` goes by
-address whatever is bound (`&SwiftValue`, `-> SwiftValue`; `swift!` refuses another Rust type), and `T` may appear
-only as a parameter or result itself or among a type's generic arguments (not in `T?`, a tuple or a closure).
+missing, `NotConforming` if it does not conform), and a `SwiftValue` or class reference argument whose type names `T`
+must hold exactly that type (`InvalidArgument` otherwise; for an object of a subclass, bind the subclass). The
+function is still generic, so a value of type `T` goes by address whatever is bound (`&SwiftValue`, `-> SwiftValue`;
+`swift!` refuses another Rust type), and `T` may appear only as a parameter or result itself or among a type's
+generic arguments (not in `T?`, a tuple or a closure). Not bindable: superclass constraints, typed throws of a
+generic error type, `nonisolated(nonsending)` functions, members of generic types; a class-bound `T` takes a class.
 
 ### Enums
 

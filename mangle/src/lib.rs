@@ -373,8 +373,13 @@ impl Declaration {
         if decl.context_params > 0 {
             return Err(Error("generic members of generic types cannot be bound: pass the generic arguments explicitly".into()));
         }
-        if matches!(typed_error, Some(Ty::Param(_))) {
+        // A generic error type (`throws(E)`, `throws(S.Failure)`) takes an error slot after the generic arguments.
+        if typed_error.as_ref().is_some_and(|ty| !mangler::is_concrete_type(ty)) {
             return Err(Error("typed throws of a generic error type cannot be bound: pass the generic arguments explicitly".into()));
+        }
+        // A superclass constraint would need the bound class checked against it at run time.
+        if decl.requirements.iter().any(|r| matches!(r, ast::Requirement::Superclass(..))) {
+            return Err(Error("a generic parameter with a superclass constraint cannot be bound: pass the generic arguments explicitly".into()));
         }
         let names = &decl.generic_names;
         for (name, _) in bindings {
@@ -391,6 +396,12 @@ impl Declaration {
             let parsed = parse_type(ty)?;
             if !mangler::is_concrete_type(&parsed) {
                 return Err(Error(format!("`{ty}`: a bound type must be concrete")));
+            }
+            let param = ast::GenericParam { depth: 0, index: bound.len() };
+            let class = matches!(&parsed, Ty::Nominal { path, .. }
+                if matches!(path.last(), Some((_, ast::Kind::Class | ast::Kind::Actor | ast::Kind::TypedefClass))));
+            if class_bound_params(decl).contains(&param) && !class {
+                return Err(Error(format!("`{name}` is class-bound, and `{ty}` is not a class")));
             }
             types.push(mangler::type_name(&parsed).map_err(Error)?);
             bound.push(parsed);
@@ -430,8 +441,16 @@ impl Declaration {
             types,
             witnesses: witness_requirements(decl)?,
             result: mangler::bound_type_name(decl, result, &bound).map_err(Error)?,
-            by_address: params.iter().map(|p| abstract_value(&p.ty)).collect(),
+            // A variadic `T...` is passed as one `[T]`, an `inout T` by address as `&mut SwiftValue`.
+            by_address: params.iter().map(|p| abstract_value(&p.ty) && !p.variadic && !p.inout).collect(),
             result_by_address: abstract_value(result),
+            argument_types: params
+                .iter()
+                .map(|p| match mangler::is_concrete_type(&p.ty) {
+                    true => Ok(None),
+                    false => mangler::bound_type_name(decl, &p.ty, &bound).map_err(Error),
+                })
+                .collect::<Result<_, _>>()?,
         })
     }
 
@@ -875,6 +894,9 @@ pub struct ConcretePlan {
     pub by_address: Vec<bool>,
     /// The result is exactly such a parameter, returned by address (`SwiftValue`).
     pub result_by_address: bool,
+    /// Per formal parameter whose type names a bound parameter: that type with the bindings substituted, which the
+    /// argument's own type must be (with automatic generic arguments the argument gives the type; here it does not).
+    pub argument_types: Vec<Option<String>>,
 }
 
 /// The requirements of the extension a declaration is in.
@@ -1076,6 +1098,7 @@ mod isolation_tests {
                 result: Some("9SwiftData22FetchResultsCollectionVy5Todos4TodoCG".into()),
                 by_address: vec![false, false],
                 result_by_address: false,
+                argument_types: vec![Some("9SwiftData15FetchDescriptorVy5Todos4TodoCG".into()), None],
             }
         );
         let zero = bind("Res.zeroOf<T: AdditiveArithmetic>() -> T", &[("T", "Swift.Int")]).unwrap();
@@ -1091,6 +1114,14 @@ mod isolation_tests {
         assert!(error("M.f<T>(_: Int) -> (T, Int)", &[("T", "Swift.Int")]).contains("only as a parameter or result itself"));
         assert!(error("M.f<T: Hashable & Comparable>(_: T)", &[("T", "Swift.Int")]).contains("more than one protocol"));
         assert!(error("M.f(_: Int)", &[("T", "Swift.Int")]).contains("not generic"));
+        // A variadic `T...` is one `[T]`, an `inout T` a `&mut SwiftValue`: neither is the by-address `&SwiftValue`.
+        assert_eq!(bind("M.f<T>(_: T..., _: inout T) -> Int", &[("T", "Swift.Int")]).unwrap().by_address, [false, false]);
+        assert!(error("M.g<S: AsyncSequence>(_: [S]) throws(S.Failure) -> Int", &[("S", "Swift.Int")]).contains("typed throws"));
+        assert!(error("M.k<T: Animal(class)>(_: T)", &[("T", "M.Rock(class)")]).contains("superclass"));
+        assert!(error("M.h<T: AnyObject>(_: T)", &[("T", "Swift.Int")]).contains("not a class"));
+        // Each argument whose type names a bound parameter: its type then, which the call checks the value against.
+        let fetch = bind(fetch, &[("T", "Todos.Todo(class)")]).unwrap();
+        assert_eq!(fetch.argument_types, [Some("9SwiftData15FetchDescriptorVy5Todos4TodoCG".to_string()), None]);
     }
 
     #[test]
