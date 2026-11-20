@@ -118,9 +118,13 @@ let text = greet("Kim", 2).await?;          // a SwiftCall<String>: `.child()` a
   passed by address) is the receiver. With a declaration (`#[swift]`, `#[swift_linked]`) its type is checked when
   the call is made, before Swift runs (`CallError::InvalidArgument` if it is another's): an object must be an
   instance of the class or a subclass, a value of exactly the struct or enum, or for a generic one of the same type
-  whatever its generic arguments. A generic class's and a protocol's members are not checked. A class's own members are called through their dispatch thunks (`…Tj`) when
-  the process has them (`#[swift]`): a library-evolution class (every Apple framework's) exports a non-final member
-  only that way, and the thunk dispatches to an override as Swift does. A standard library struct's or enum's
+  whatever its generic arguments. A generic class's and a protocol's members are not checked. A class's own members dispatch to an override as Swift calls
+  them (`#[swift]` and `#[swift_linked]`): through their dispatch thunks (`…Tj`) where the module has them (a
+  library-evolution class, every Apple framework's, exports a non-final member only that way), else through the
+  class's vtable, found by `swift_lookUpClassMethod` from the member's method descriptor (`…Tq`) for the receiver's
+  class (which must be the member's class or a subclass, else `InvalidArgument`). A final member has neither and is
+  called by its own symbol. `#[swift_linked]` finds the thunk or method descriptor with `dlsym`: a static archive
+  whose symbols the program does not export dispatches to the member's own symbol. A standard library struct's or enum's
   instance member (`Array`'s, `String`'s) is refused: the type is frozen and Swift passes `self` in registers.
 - **Opaque results**: `-> SwiftValue` (returned by address: large and framework structs) and `-> DirectValue`
   (returned in registers: an array or dictionary whose elements stay opaque) take their Swift type from the
@@ -336,6 +340,8 @@ Bindings name every generic parameter, a generic type's too, which specializes t
   checked, `where S.Element: P` gets that conformance's witness table), a superclass (`T: Animal`: the bound class must
   be it or a subclass), typed throws of a generic error type (`throws(E)`: its error slot). A requirement the bound
   types break is `InvalidArgument` (`NotConforming` for a conformance), before any Swift code runs.
+- The bound types' metadata, witness tables and requirement checks are found once per call site (a Swift image is
+  not unloaded); only the types the arguments hold are checked on every call.
 - A generic declaration written by name (`Res.renamed(_:suffix:)`) must bind every parameter.
 - Not bindable: a protocol member's `Self` (call it on `Opened`), `nonisolated(nonsending)` functions, typed throws of
   an associated type, a static member or initializer of an extension that fixes some of the type's parameters.

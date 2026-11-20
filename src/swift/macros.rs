@@ -585,7 +585,7 @@ macro_rules! __swift_item {
                 #[link_name = $crate::__swift_async_pointer!($how $spec)]
                 static POINTER: $crate::swift::AsyncFunctionPointer;
             }
-            let function = unsafe { $crate::swift::SwiftAsyncFn::from_pointer(&POINTER) };
+            let function = unsafe { $crate::swift::SwiftAsyncFn::__linked(&POINTER, $crate::__swift_thunk!($how $spec)) };
             let call = $crate::__swift_call!(function [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::__bind($this, call, $crate::__swift_consumes_self!($how $spec));)?
             $(let call = $crate::__swift_throws!($throws, call);)?
@@ -599,7 +599,7 @@ macro_rules! __swift_item {
                 #[link_name = $crate::__swift_async_pointer!($how $spec)]
                 static POINTER: $crate::swift::AsyncFunctionPointer;
             }
-            let function = unsafe { $crate::swift::SwiftAsyncFn::from_pointer(&POINTER) };
+            let function = unsafe { $crate::swift::SwiftAsyncFn::__linked(&POINTER, $crate::__swift_thunk!($how $spec)) };
             // The caller's isolation is the hidden first argument; closures are checked like any call's.
             let isolation = $crate::swift::Isolation::current();
             let call = $crate::__swift_call!(function [isolation $(, $arg)*] [$($generic)*] $crate::__swift_result_type!($how $spec));
@@ -626,7 +626,7 @@ macro_rules! __swift_item {
                 static ENTRY: u8;
             }
             let entry = unsafe { &ENTRY as *const u8 as *const ::core::ffi::c_void };
-            let function = unsafe { $crate::swift::SwiftFn::from_address(entry) };
+            let function = unsafe { $crate::swift::SwiftFn::__linked(entry, $crate::__swift_thunk!($how $spec)) };
             let call = $crate::__swift_call!(function [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::__bind_sync($this, call, $crate::__swift_consumes_self!($how $spec));)?
             $(let call = $crate::__swift_throws!($throws, call);)?
@@ -651,7 +651,7 @@ macro_rules! __swift_item {
                 static ENTRY: u8;
             }
             let entry = unsafe { &ENTRY as *const u8 as *const ::core::ffi::c_void };
-            let function = unsafe { $crate::swift::SwiftFn::from_address(entry) };
+            let function = unsafe { $crate::swift::SwiftFn::__linked(entry, $crate::__swift_thunk!($how $spec)) };
             let call = $crate::__swift_call!(function [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::__bind_sync($this, call, $crate::__swift_consumes_self!($how $spec));)?
             $(let call = $crate::__swift_throws!($throws, call);)?
@@ -762,7 +762,9 @@ macro_rules! __swift_call {
     (@ $function:ident [$($arg:ident),*] $o:tt [concrete [$($n:literal)*] [$($p:literal)*] [$($t:literal)*] [$(([$($ws:tt)*] $wp:literal $wl:ident))*] [$(($sa:literal $sb:literal))*] [$(([$($ss:tt)*] $se:literal))*] [$($err:literal)?] [$($result:literal)?] [$(($ca:ident $cf:ident $ct:literal))*] $($closures:tt)*] $declared:expr) => {{
         static NAMES: [$crate::swift::Named; <[&str]>::len(&[$($n),*])] = [$(($n, ::std::sync::OnceLock::new())),*];
         static PROTOCOLS: [$crate::swift::SwiftProtocol; <[&str]>::len(&[$($p),*])] = [$($crate::swift::SwiftProtocol::new($p)),*];
+        static RESOLVED: $crate::swift::ResolvedOnce = $crate::swift::ResolvedOnce::new();
         let generic = $crate::swift::__concrete_args(
+            &RESOLVED,
             &NAMES,
             &PROTOCOLS,
             &[$($t),*],
@@ -837,12 +839,12 @@ macro_rules! __swift_symbol {
     (declared $declaration:literal) => { $crate::__call_symbol!($declaration) };
 }
 
-/// A class member's dispatch thunk (`…Tj`), tried before its own symbol; empty for anything else.
+/// How a class's own member dispatches (`ClassMethod`); `ClassMethod::NONE` for anything else.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __swift_thunk {
-    (literal $symbol:literal) => { "" };
-    (declared $declaration:literal) => { $crate::__dispatch_thunk!($declaration) };
+    (literal $symbol:literal) => { $crate::swift::ClassMethod::NONE };
+    (declared $declaration:literal) => { $crate::swift::ClassMethod::__new($crate::__dispatch_thunk!($declaration)) };
 }
 
 /// The symbol of the function's async function pointer (`…Tu`).

@@ -1180,6 +1180,36 @@ pub fn dispatch_thunk(declaration: &str) -> Result<Option<String>, Error> {
     Ok((member && decl.name != "init").then(|| format!("{symbol}Tj")))
 }
 
+/// How a class's own member dispatches to an override: its dispatch thunk (`…Tj`) where the module has one (library
+/// evolution), else the class's vtable, through `swift_lookUpClassMethod` with the member's method descriptor
+/// (`…Tq`) and the declaring class's nominal type descriptor (`…Mn`, the unbound one for a generic class)
+/// (docs/ABI/Mangling.rst; include/swift/Runtime/Metadata.h). A final member has neither, and is called by its own
+/// symbol.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClassMethod {
+    pub thunk: String,
+    pub method: String,
+    pub class: String,
+    /// A static (`class`) member: `self` is the class's metadata, not an instance.
+    pub class_side: bool,
+}
+
+/// See [`ClassMethod`]; `None` for what is not a class's own member, as for [`dispatch_thunk`].
+pub fn class_method(declaration: &str) -> Result<Option<ClassMethod>, Error> {
+    let decl = parse::parse(declaration).map_err(Error)?;
+    let Some(thunk) = dispatch_thunk(declaration)? else { return Ok(None) };
+    let class = ast::Ty::Nominal {
+        module: decl.module.clone(),
+        path: decl.context.clone(),
+        args: Vec::new(),
+        split: Vec::new(),
+        extension: decl.context_extension.clone().map(Box::new),
+    };
+    let class = mangler::type_name(&class).map_err(Error)?;
+    let method = format!("{}Tq", thunk.strip_suffix("Tj").unwrap_or(&thunk));
+    Ok(Some(ClassMethod { thunk, method, class: format!("$s{class}Mn"), class_side: decl.is_static }))
+}
+
 /// The number of formal parameters of a function declaration (0 for a getter).
 pub fn formal_count(declaration: &str) -> Result<usize, Error> {
     Ok(Declaration::parse(declaration)?.formal_count())
@@ -1810,6 +1840,20 @@ mod isolation_tests {
         for direct in ["M.C(class).init(x: Int)", "(extension in N) M.C(class).f()", "M.S(struct).f()", "M.f()", "M.A(actor).f()"] {
             assert_eq!(dispatch_thunk(direct).unwrap(), None, "{direct}");
         }
+        // Without a thunk (a module without library evolution), the class's vtable: the member's method descriptor
+        // and the declaring class's descriptor (the unbound one for a generic class).
+        use super::{class_method, ClassMethod};
+        assert_eq!(
+            class_method("static M.C(class)<T>.kind() -> Int").unwrap(),
+            Some(ClassMethod {
+                thunk: "$s1M1CC4kindSiyFZTj".into(),
+                method: "$s1M1CC4kindSiyFZTq".into(),
+                class: "$s1M1CCMn".into(),
+                class_side: true,
+            })
+        );
+        assert_eq!(class_method("M.C(class).count: Int { get }").unwrap().map(|m| m.method), Some("$s1M1CC5countSivgTq".into()));
+        assert_eq!(class_method("M.f()").unwrap(), None);
     }
 
     #[test]

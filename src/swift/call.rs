@@ -263,6 +263,8 @@ enum CallState {
 
 pub(crate) struct CallShared {
     function: *const AsyncFunctionPointer,
+    /// A class member's vtable dispatch, resolved against `self` when the call starts (`function` null until then).
+    target: Option<super::func::Target>,
     regs: UnsafeCell<CallRegs>,
     ret: UnsafeCell<RetRegs>,
     indirect: UnsafeCell<IndirectSlot>,
@@ -299,6 +301,7 @@ impl CallShared {
         let next_int = lowering.ints;
         let shared = Arc::new(CallShared {
             function,
+            target: None,
             regs: UnsafeCell::new(lowering.regs),
             ret: UnsafeCell::new(RetRegs::new()),
             indirect: UnsafeCell::new(slot),
@@ -491,6 +494,12 @@ impl<R: SwiftRet> SwiftCall<R> {
 }
 
 impl<R> SwiftCall<R> {
+    /// Dispatches through the class's vtable, for the `self` bound before the call starts.
+    pub(crate) fn dispatched(mut self, target: super::func::Target) -> Self {
+        self.configure().target = Some(target);
+        self
+    }
+
     /// Turns this call into a hopping sync call (see `SwiftSyncCall::hop`).
     pub(crate) fn set_hop(&mut self, hop: apus_sys::HopCall) {
         self.configure().hop = hop;
@@ -627,8 +636,14 @@ impl<R: SwiftRet> Future for SwiftCall<R> {
         }
         let Some(t) = task::current() else { return Poll::Ready(Err(CallError::NoCurrentTask)) };
         if !self.registered {
-            // Configured now (receiver bound): an opaque result can be sized.
+            // Configured now (receiver bound): an opaque result can be sized, a vtable entry found.
             let call = self.configure();
+            if let Some(target) = call.target.take() {
+                match target.entry(call.regs.get_mut().self_) {
+                    Ok(function) => call.function = function as *const AsyncFunctionPointer,
+                    Err(error) => return Poll::Ready(Err(error)),
+                }
+            }
             let slot = call.indirect.get_mut();
             if slot.pending() {
                 if let Err(error) = slot.resolve(&call.generic_args) {

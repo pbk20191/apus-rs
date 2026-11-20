@@ -1038,8 +1038,12 @@ pub fn __dispatch_thunk(input: TokenStream) -> TokenStream {
     }) else {
         return compile_error("expected a Swift declaration as a string literal");
     };
-    match apus_mangle::dispatch_thunk(&declaration) {
-        Ok(thunk) => TokenTree::Literal(Literal::string(&thunk.unwrap_or_default())).into(),
+    // `("…Tj", "…Tq", "…Mn", class_side)`, empty for what is not a class's own member.
+    match apus_mangle::class_method(&declaration) {
+        Ok(method) => {
+            let method = method.unwrap_or(apus_mangle::ClassMethod { thunk: String::new(), method: String::new(), class: String::new(), class_side: false });
+            format!("({:?}, {:?}, {:?}, {})", method.thunk, method.method, method.class, method.class_side).parse().unwrap()
+        }
         Err(error) => compile_error(&format!("cannot mangle `{declaration}`: {error}")),
     }
 }

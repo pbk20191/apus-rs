@@ -4,7 +4,7 @@
 //! result address travels in its own register, and direct results come back as return registers.
 
 use super::call::{CallError, IndirectSlot, Owned, RetRegs, SwiftCall};
-use super::func::{ArgLowering, SwiftArgs, SwiftObject, SwiftRet};
+use super::func::{ArgLowering, ClassMethod, SwiftArgs, SwiftObject, SwiftRet, Target};
 use super::value::{lookup, SwiftType, SwiftValue, UninitValue};
 use super::SwiftError;
 use std::ffi::c_void;
@@ -18,10 +18,9 @@ const KIND_INDIRECT: i32 = 2;
 /// A synchronous Swift function, named by its mangled symbol.
 pub struct SwiftFn {
     symbol: &'static str,
-    /// A class member's dispatch thunk, tried first; empty if none.
-    thunk: &'static str,
+    method: ClassMethod,
     fixed: *const c_void,
-    looked_up: OnceLock<usize>,
+    looked_up: OnceLock<Option<Target>>,
 }
 
 unsafe impl Send for SwiftFn {}
@@ -30,30 +29,38 @@ unsafe impl Sync for SwiftFn {}
 impl SwiftFn {
     /// A function identified by its mangled symbol name (`$s…`), resolved with `dlsym` on first use.
     pub const fn new(symbol: &'static str) -> SwiftFn {
-        SwiftFn { symbol, thunk: "", fixed: std::ptr::null(), looked_up: OnceLock::new() }
+        SwiftFn { symbol, method: ClassMethod::NONE, fixed: std::ptr::null(), looked_up: OnceLock::new() }
     }
 
-    /// A class member: its dispatch thunk (`…Tj`) if the process has it, else its own symbol.
+    /// A class's own member: dispatched as [`ClassMethod`] says, else its own symbol.
     #[doc(hidden)]
-    pub const fn __dispatched(symbol: &'static str, thunk: &'static str) -> SwiftFn {
-        SwiftFn { symbol, thunk, fixed: std::ptr::null(), looked_up: OnceLock::new() }
+    pub const fn __dispatched(symbol: &'static str, method: ClassMethod) -> SwiftFn {
+        SwiftFn { symbol, method, fixed: std::ptr::null(), looked_up: OnceLock::new() }
     }
 
     /// # Safety
     /// `address` must be the entry point of a synchronous Swift function.
     pub const unsafe fn from_address(address: *const c_void) -> SwiftFn {
-        SwiftFn { symbol: "<address>", thunk: "", fixed: address, looked_up: OnceLock::new() }
+        SwiftFn { symbol: "<address>", method: ClassMethod::NONE, fixed: address, looked_up: OnceLock::new() }
     }
 
-    fn resolve(&self) -> Option<*const c_void> {
-        if !self.fixed.is_null() {
-            return Some(self.fixed);
-        }
-        let address = *self.looked_up.get_or_init(|| match self.thunk {
-            "" => lookup(self.symbol),
-            thunk => Some(lookup(thunk)).filter(|&a| a != 0).unwrap_or_else(|| lookup(self.symbol)),
-        });
-        (address != 0).then_some(address as *const c_void)
+    /// [`from_address`](Self::from_address) for a class's own member, linked by its own symbol: dispatched as
+    /// [`ClassMethod`] says when the process has the thunk or method descriptor.
+    ///
+    /// # Safety
+    /// `address` must be the member's entry point.
+    #[doc(hidden)]
+    pub const unsafe fn __linked(address: *const c_void, method: ClassMethod) -> SwiftFn {
+        SwiftFn { symbol: "<address>", method, fixed: address, looked_up: OnceLock::new() }
+    }
+
+    fn resolve(&self) -> Option<Target> {
+        *self.looked_up.get_or_init(|| {
+            self.method.resolve("", || match self.fixed.is_null() {
+                true => lookup(self.symbol),
+                false => self.fixed as usize,
+            })
+        })
     }
 
     pub fn is_available(&self) -> bool {
@@ -99,7 +106,8 @@ impl SwiftFn {
 
 /// A prepared synchronous call.
 pub struct SwiftSyncCall<R> {
-    function: Option<*const c_void>,
+    /// Its entry point, or the vtable's for the `self` bound before it runs.
+    function: Option<Target>,
     symbol: &'static str,
     pub(crate) lowering: ArgLowering,
     slot: IndirectSlot,
@@ -184,7 +192,7 @@ impl<R: SwiftRet> SwiftSyncCall<R> {
         if let Some(error) = self.invalid.take() {
             return Err(error);
         }
-        let function = self.function.ok_or(CallError::Unavailable(self.symbol))?;
+        let function = self.function.ok_or(CallError::Unavailable(self.symbol))?.entry(self.lowering.regs.self_)?;
         if let Some(failure) = self.lowering.failure.take() {
             return Err(failure);
         }
@@ -235,9 +243,14 @@ impl<R: SwiftRet> SwiftSyncCall<R> {
             HopTo::Main => Some(unsafe { super::rt::swift_task_getMainExecutor() }),
             HopTo::SelfActor => actor_executor(lowering.regs.self_),
         };
+        let (function, dispatch) = match function.map(|target| target.entry(lowering.regs.self_)) {
+            Some(Ok(function)) => (Some(function), None),
+            Some(Err(error)) => (None, Some(error)),
+            None => (None, Some(CallError::Unavailable(symbol))),
+        };
         let problem = invalid
             .or_else(|| lowering.borrows.then_some(CallError::InvalidArgument("an `inout` argument (`&mut`) cannot hop to an executor")))
-            .or_else(|| function.is_none().then_some(CallError::Unavailable(symbol)))
+            .or(dispatch)
             .or_else(|| executor.is_none().then_some(CallError::NotAnActor));
         // The sync result address is the hop's own (rs_call_sync), not the first integer argument.
         let mut call = SwiftCall::build(std::ptr::null(), lowering, problem, slot, false);

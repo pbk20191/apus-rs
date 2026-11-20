@@ -346,3 +346,19 @@ public final class Holder {
 }
 // A nonsending function taking a closure: its shape is checked like any other (tests/swift_closures.rs).
 @inline(never) nonisolated(nonsending) public func applyInherited(_ f: (Int) async -> Int) async -> Int { await f(20) + 1 }
+// A non-final member of a class in a module without library evolution has no dispatch thunk: called by its own
+// symbol, an override would be skipped (tests/swift_class_dispatch.rs).
+open class Speaker {
+    public init() {}
+    open func who() -> Int { 1 }
+    open func later() async -> Int { 1 }
+    open class func kind() -> Int { 1 }
+    public final func fixed() -> Int { 5 }
+}
+public final class Loud: Speaker {
+    public override func who() -> Int { 10 }
+    public override func later() async -> Int { 10 }
+    public override class func kind() -> Int { 10 }
+}
+public func makeLoud() -> Speaker { Loud() }
+public func loudType() -> Speaker.Type { Loud.self }

@@ -275,6 +275,11 @@ extern void swift_unknownObjectRelease(void *object) APUS_C;
 extern void *swift_projectBox(void *box) APUS_C;
 extern const void *swift_conformsToProtocol(const void *metadata, const void *protocol) APUS_C;
 extern const void *swift_getObjectType(void *object) APUS_C;
+// A class method's implementation in metadata's vtable, by its method descriptor (`…Tq`) and the descriptor of the
+// class declaring it (`…Mn`), which must be metadata's class or a superclass (include/swift/Runtime/Metadata.h).
+extern const void *swift_lookUpClassMethod(const void *metadata, const void *method, const void *description) APUS_C;
+// The nominal type descriptor of a type's metadata, or null (include/swift/Runtime/Metadata.h).
+extern const void *swift_getTypeContextDescriptor(const void *metadata) APUS_C;
 extern bool swift_dynamicCast(void *dest, void *src, const void *src_type, const void *target_type, size_t flags) APUS_C;
 // The object if it is an instance of target_type (a Swift or Objective-C class, or a subclass), else null; no retain
 // (include/swift/Runtime/Casting.h).

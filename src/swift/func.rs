@@ -11,7 +11,7 @@ use super::call::{AsyncFunctionPointer, CallError, CallRegs, IndirectSlot, Owned
 use super::rt;
 use super::value::{IntoSwift, SwiftType, SwiftValue, UninitValue, WitnessTable};
 use std::collections::HashMap;
-use std::ffi::{c_void, CString};
+use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::sync::OnceLock;
 
@@ -28,28 +28,108 @@ pub(crate) const FLOAT_REGISTERS: usize = 8;
 /// ```
 pub struct SwiftAsyncFn {
     symbol: &'static str,
-    /// A class member's dispatch thunk, tried first; empty if none.
-    thunk: &'static str,
+    method: ClassMethod,
     fixed: *const AsyncFunctionPointer,
-    looked_up: OnceLock<usize>,
+    looked_up: OnceLock<Option<Target>>,
+}
+
+/// How a class's own member dispatches to an override, as Swift calls it (`apus_mangle::ClassMethod`): its dispatch
+/// thunk (`…Tj`) where the module has one (library evolution), else the class's vtable entry for `self`, found by
+/// `swift_lookUpClassMethod` from the member's method descriptor (`…Tq`) and the class's descriptor (`…Mn`). A final
+/// member has neither and is called by its own symbol.
+#[doc(hidden)]
+#[derive(Clone, Copy)]
+pub struct ClassMethod {
+    thunk: &'static str,
+    method: &'static str,
+    class: &'static str,
+    class_side: bool,
+}
+
+impl ClassMethod {
+    pub const NONE: ClassMethod = ClassMethod { thunk: "", method: "", class: "", class_side: false };
+
+    pub const fn __new((thunk, method, class, class_side): (&'static str, &'static str, &'static str, bool)) -> ClassMethod {
+        ClassMethod { thunk, method, class, class_side }
+    }
+
+    /// Where the call goes: the thunk (`…Tj`, with `suffix`: `Tu` for an async function pointer), the vtable, or
+    /// `own` (the member's own symbol's address, 0 if missing). Looked up once: a Swift image is not unloaded.
+    pub(crate) fn resolve(&self, suffix: &str, own: impl FnOnce() -> usize) -> Option<Target> {
+        if !self.thunk.is_empty() {
+            let thunk = lookup(&format!("{}{suffix}", self.thunk));
+            if thunk != 0 {
+                return Some(Target::Entry(thunk));
+            }
+            let (method, class) = (lookup(self.method), lookup(self.class));
+            if method != 0 && class != 0 {
+                return Some(Target::VTable { method, class, class_side: self.class_side });
+            }
+        }
+        let own = own();
+        (own != 0).then_some(Target::Entry(own))
+    }
+}
+
+/// A call's entry point, or the class's vtable entry for its `self`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Target {
+    Entry(usize),
+    VTable { method: usize, class: usize, class_side: bool },
+}
+
+impl Target {
+    /// The entry point for a call whose `self` is `this` (an object, or a class's metadata for a static member).
+    pub(crate) fn entry(self, this: *mut c_void) -> Result<*const c_void, CallError> {
+        let Target::VTable { method, class, class_side } = self else {
+            let Target::Entry(entry) = self else { unreachable!() };
+            return Ok(entry as *const c_void);
+        };
+        if this.is_null() {
+            return Err(CallError::InvalidArgument("a class's member is called on an instance, or a static one on the class"));
+        }
+        unsafe {
+            let metadata = if class_side { this as *const c_void } else { super::rt::swift_getObjectType(this) };
+            // swift_lookUpClassMethod reads the vtable of `class`'s layout: metadata must be its class or a subclass.
+            if !descends(metadata, class as *const c_void) {
+                return Err(CallError::InvalidArgument("the receiver is not of the member's class, nor of a subclass"));
+            }
+            Ok(super::rt::swift_lookUpClassMethod(metadata, method as *const c_void, class as *const c_void))
+        }
+    }
+}
+
+/// Whether `metadata` is the class `descriptor` describes, or a subclass of it.
+unsafe fn descends(mut metadata: *const c_void, descriptor: *const c_void) -> bool {
+    // include/swift/ABI/MetadataKind.def: a class's metadata starts with its isa pointer, above the last enumerated
+    // kind (0x7FF); any other kind (a struct, an Objective-C class wrapper, …) is no Swift class.
+    const LAST_ENUMERATED: usize = 0x7FF;
+    while !metadata.is_null() && *(metadata as *const usize) > LAST_ENUMERATED {
+        if super::rt::swift_getTypeContextDescriptor(metadata) == descriptor {
+            return true;
+        }
+        // include/swift/ABI/Metadata.h TargetAnyClassMetadata: the superclass follows the isa pointer.
+        metadata = *(metadata as *const *const c_void).add(1);
+    }
+    false
 }
 
 unsafe impl Send for SwiftAsyncFn {}
 unsafe impl Sync for SwiftAsyncFn {}
 
-use libc::{dlsym, RTLD_DEFAULT};
+use super::value::lookup;
 
 impl SwiftAsyncFn {
     /// A function identified by its mangled symbol name (`$s…`), resolved with `dlsym` on first use.
     /// If the symbol is missing, calls yield `CallError::Unavailable` instead of failing to launch.
     pub const fn new(symbol: &'static str) -> SwiftAsyncFn {
-        SwiftAsyncFn { symbol, thunk: "", fixed: std::ptr::null(), looked_up: OnceLock::new() }
+        SwiftAsyncFn { symbol, method: ClassMethod::NONE, fixed: std::ptr::null(), looked_up: OnceLock::new() }
     }
 
-    /// A class member: its dispatch thunk's async function pointer (`…TjTu`) if the process has it, else its own.
+    /// A class's own member: dispatched as [`ClassMethod`] says, else its own async function pointer.
     #[doc(hidden)]
-    pub const fn __dispatched(symbol: &'static str, thunk: &'static str) -> SwiftAsyncFn {
-        SwiftAsyncFn { symbol, thunk, fixed: std::ptr::null(), looked_up: OnceLock::new() }
+    pub const fn __dispatched(symbol: &'static str, method: ClassMethod) -> SwiftAsyncFn {
+        SwiftAsyncFn { symbol, method, fixed: std::ptr::null(), looked_up: OnceLock::new() }
     }
 
     /// A function identified by its async function pointer (the symbol with the `Tu` suffix).
@@ -57,24 +137,26 @@ impl SwiftAsyncFn {
     /// # Safety
     /// `pointer` must be a Swift async function pointer.
     pub const unsafe fn from_pointer(pointer: &'static AsyncFunctionPointer) -> SwiftAsyncFn {
-        SwiftAsyncFn { symbol: "<pointer>", thunk: "", fixed: pointer, looked_up: OnceLock::new() }
+        SwiftAsyncFn { symbol: "<pointer>", method: ClassMethod::NONE, fixed: pointer, looked_up: OnceLock::new() }
     }
 
-    fn resolve(&self) -> Option<*const AsyncFunctionPointer> {
-        if !self.fixed.is_null() {
-            return Some(self.fixed);
-        }
-        let address = *self.looked_up.get_or_init(|| {
-            let pointer = |symbol: &str| {
-                let name = CString::new(format!("{symbol}Tu")).expect("symbol contains a NUL byte");
-                unsafe { dlsym(RTLD_DEFAULT, name.as_ptr()) as usize }
-            };
-            match self.thunk {
-                "" => pointer(self.symbol),
-                thunk => Some(pointer(thunk)).filter(|&a| a != 0).unwrap_or_else(|| pointer(self.symbol)),
-            }
-        });
-        (address != 0).then_some(address as *const AsyncFunctionPointer)
+    /// [`from_pointer`](Self::from_pointer) for a class's own member, linked by its own symbol: dispatched as
+    /// [`ClassMethod`] says when the process has the thunk or method descriptor.
+    ///
+    /// # Safety
+    /// `pointer` must be the member's async function pointer.
+    #[doc(hidden)]
+    pub const unsafe fn __linked(pointer: &'static AsyncFunctionPointer, method: ClassMethod) -> SwiftAsyncFn {
+        SwiftAsyncFn { symbol: "<pointer>", method, fixed: pointer, looked_up: OnceLock::new() }
+    }
+
+    fn resolve(&self) -> Option<Target> {
+        *self.looked_up.get_or_init(|| {
+            self.method.resolve("Tu", || match self.fixed.is_null() {
+                true => lookup(&format!("{}Tu", self.symbol)),
+                false => self.fixed as usize,
+            })
+        })
     }
 
     /// Whether the function exists in this process.
@@ -116,7 +198,9 @@ impl SwiftAsyncFn {
             lowering.fail(CallError::InvalidArgument("an `inout` argument (`&mut`) needs a synchronous call"));
         }
         match self.resolve() {
-            Some(function) => SwiftCall::build(function, lowering, None, slot, indirect),
+            Some(Target::Entry(function)) => SwiftCall::build(function as *const AsyncFunctionPointer, lowering, None, slot, indirect),
+            // The vtable entry for the `self` bound next, found when the call starts.
+            Some(target) => SwiftCall::build(std::ptr::null(), lowering, None, slot, indirect).dispatched(target),
             None => SwiftCall::build(std::ptr::null(), lowering, Some(CallError::Unavailable(self.symbol)), slot, indirect),
         }
     }

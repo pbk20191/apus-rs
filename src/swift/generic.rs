@@ -1,7 +1,7 @@
 //! Generic arguments `swift!` fills itself: type metadata, witness tables in the ABI's canonical requirement order,
 //! and a typed-throws error slot, taken from the call's own arguments (apus_mangle::generic_plan says from which).
 use super::func::{ArgLowering, ErrorSlot, SwiftArg, SwiftObject};
-use super::value::{SwiftProtocol, SwiftType, SwiftValue};
+use super::value::{SwiftProtocol, SwiftType, SwiftValue, WitnessTable};
 use super::{rt, CallError};
 
 /// A value whose Swift type is known at run time: what an automatic generic argument is taken from.
@@ -136,7 +136,23 @@ pub fn __generic_args(
 /// (`#[swift = "…", T = "Type"]`): each bound type found by its mangled name once, the declaration's requirements
 /// checked, then lowered as [`GenericArgs`].
 #[doc(hidden)]
-pub struct ConcreteArgs(Result<GenericArgs, Refused>);
+pub struct ConcreteArgs(Result<&'static Resolved, Refused>);
+
+/// A bound declaration's generic arguments, found once per call site: its metadata, witness tables (each
+/// conformance looked up, its layout checked) and error type, after its superclass and associated type requirements
+/// held. The bound types are fixed when the program is built, and a Swift image's types and conformances stay for
+/// the life of the process (the runtime does not support unloading one); a failure is not kept, so a type an image
+/// loaded later brings is found then.
+#[doc(hidden)]
+pub struct Resolved {
+    metadata: Vec<SwiftType>,
+    witnesses: Vec<WitnessTable>,
+    error_slot: Option<SwiftType>,
+}
+
+/// Where `swift!` keeps a call site's [`Resolved`] arguments.
+#[doc(hidden)]
+pub type ResolvedOnce = std::sync::OnceLock<Resolved>;
 
 enum Refused {
     /// A type or symbol named by the binding is not in the process.
@@ -170,6 +186,7 @@ pub enum BoundSubject {
 #[doc(hidden)]
 #[allow(clippy::too_many_arguments)]
 pub fn __concrete_args(
+    resolved: &'static ResolvedOnce,
     names: &'static [Named],
     protocols: &'static [SwiftProtocol],
     types: &[usize],
@@ -186,12 +203,7 @@ pub fn __concrete_args(
             BoundSubject::Associated(i, p, base, descriptor) => {
                 let ty = name(i)?;
                 let protocol = &protocols[p];
-                let Some(conformance) = ty.conformance(protocol) else {
-                    return Err(match protocol.is_available() {
-                        true => Refused::NotConforming { ty: ty.name(), protocol: protocol.descriptor_symbol() },
-                        false => Refused::Missing(protocol.descriptor_symbol()),
-                    });
-                };
+                let Some(conformance) = ty.conformance(protocol) else { return Err(not_conforming(ty, protocol)) };
                 ty.associated_type(conformance, base, descriptor).ok_or(Refused::Missing(descriptor))
             }
         }
@@ -208,6 +220,20 @@ pub fn __concrete_args(
                 return Err(Refused::Invalid("a bound type's associated type is not the one the declaration requires"));
             }
         }
+        let witness = |(on, p, layout): &(BoundSubject, usize, ProtocolLayout)| {
+            let (ty, protocol) = (subject(on)?, &protocols[*p]);
+            if let Some(why) = layout.mismatch(protocol) {
+                return Err(Refused::Invalid(why));
+            }
+            ty.conformance(protocol).ok_or_else(|| not_conforming(ty, protocol))
+        };
+        Ok(Resolved {
+            metadata: types.iter().map(|&i| name(i)).collect::<Result<_, _>>()?,
+            witnesses: witnesses.iter().map(witness).collect::<Result<_, _>>()?,
+            error_slot: error.map(name).transpose()?,
+        })
+    };
+    let check = || {
         for &(expected, actual) in checked {
             if name(expected)? != actual {
                 return Err(Refused::Invalid(
@@ -215,19 +241,34 @@ pub fn __concrete_args(
                 ));
             }
         }
-        Ok(GenericArgs {
-            metadata: types.iter().map(|&i| name(i)).collect::<Result<_, _>>()?,
-            witnesses: witnesses.iter().map(|(on, p, layout)| Ok((subject(on)?, &protocols[*p], *layout))).collect::<Result<_, _>>()?,
-            error_slot: error.map(name).transpose()?,
-        })
+        match resolved.get() {
+            Some(found) => Ok(found),
+            None => {
+                let found = build()?;
+                Ok(resolved.get_or_init(|| found))
+            }
+        }
     };
-    ConcreteArgs(build())
+    ConcreteArgs(check())
+}
+
+fn not_conforming(ty: SwiftType, protocol: &SwiftProtocol) -> Refused {
+    match protocol.is_available() {
+        true => Refused::NotConforming { ty: ty.name(), protocol: protocol.descriptor_symbol() },
+        false => Refused::Missing(protocol.descriptor_symbol()),
+    }
 }
 
 impl SwiftArg for ConcreteArgs {
     fn lower(&self, into: &mut ArgLowering) {
         match &self.0 {
-            Ok(generic) => generic.lower(into),
+            Ok(resolved) => {
+                resolved.metadata.iter().for_each(|ty| ty.lower(into));
+                resolved.witnesses.iter().for_each(|witness| witness.lower(into));
+                if let Some(ty) = resolved.error_slot {
+                    ErrorSlot::of(ty).lower(into);
+                }
+            }
             Err(Refused::Missing(name)) => into.fail(CallError::Unavailable(name)),
             Err(Refused::NotConforming { ty, protocol }) => into.fail(CallError::NotConforming { ty: ty.clone(), protocol }),
             Err(Refused::Invalid(why)) => into.fail(CallError::InvalidArgument(why)),

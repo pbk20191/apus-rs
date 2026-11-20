@@ -42,10 +42,10 @@ pub use value::{IntoSwift, OpaqueResult, Opened, OpenedType, SwiftProtocol, Swif
 pub use isolation::Isolation;
 #[doc(hidden)]
 pub use generic::{
-    __concrete_args, __generic_args, BoundSubject, Named, __metatype_of, ConcreteArgs, __object_type_of, __type_of, AsMetatype, ClassBound, ClassReference, GenericArgs, HasSwiftType, ProtocolLayout, ValueReceiver, __self_type,
+    __concrete_args, __generic_args, BoundSubject, Named, Resolved, ResolvedOnce, __metatype_of, ConcreteArgs, __object_type_of, __type_of, AsMetatype, ClassBound, ClassReference, GenericArgs, HasSwiftType, ProtocolLayout, ValueReceiver, __self_type,
     Metatype,
 };
-pub use func::{__bind, __bind_sync, __check_receiver, __declared_class, CheckedCall, ErasedReceiver, ReceiverKind, BindAsyncReceiver, ClassSelf, BindReceiver, Consumed, DeclaredResult, ErrorSlot, ArgLowering, DirectValue, ErrorArg, ErrorRef, Existential, SwiftArg, SwiftArgs, SwiftAsyncFn, SwiftObject, SwiftReceiver, SwiftRet};
+pub use func::{__bind, __bind_sync, __check_receiver, __declared_class, CheckedCall, ClassMethod, ErasedReceiver, ReceiverKind, BindAsyncReceiver, ClassSelf, BindReceiver, Consumed, DeclaredResult, ErrorSlot, ArgLowering, DirectValue, ErrorArg, ErrorRef, Existential, SwiftArg, SwiftArgs, SwiftAsyncFn, SwiftObject, SwiftReceiver, SwiftRet};
 pub use current::{cancelled, current_task, is_cancelled, priority, Cancelled, TaskRef};
 pub use join::{JoinHandle, MainOnlyHandle};
 pub use timer::{sleep, within, Sleep};
