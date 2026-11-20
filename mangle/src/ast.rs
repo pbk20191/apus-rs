@@ -271,6 +271,8 @@ pub struct Decl {
     pub generic_params: usize,
     /// Their names, in order (`some P` parameters are unnamed: `_`).
     pub generic_names: Vec<String>,
+    /// The enclosing generic type's parameter names, in order (none for a protocol's `Self`).
+    pub context_names: Vec<String>,
     /// The enclosing generic type's constraints (`Outer<T: P>`).
     pub context_requirements: Vec<Requirement>,
     /// `T.Value(of P)`: which protocol declares an associated type.

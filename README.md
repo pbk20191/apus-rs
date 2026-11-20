@@ -324,8 +324,24 @@ missing, `NotConforming` if it does not conform), and a `SwiftValue` or class re
 must hold exactly that type (`InvalidArgument` otherwise; for an object of a subclass, bind the subclass). The
 function is still generic, so a value of type `T` goes by address whatever is bound (`&SwiftValue`, `-> SwiftValue`;
 `swift!` refuses another Rust type), and `T` may appear only as a parameter or result itself or among a type's
-generic arguments (not in `T?`, a tuple or a closure). Not bindable: superclass constraints, typed throws of a
-generic error type, `nonisolated(nonsending)` functions, members of generic types; a class-bound `T` takes a class.
+generic arguments (not in `T?`, a tuple or a closure). A class-bound `T` takes a class.
+
+Bindings name every generic parameter, a generic type's too, which specializes the call:
+
+- A member of a generic type: `#[swift = "Res.Tray(struct)<T>.describe<U>(_: U, _: Int) -> String", T = "Swift.String",
+  U = "Swift.Double"]`. The receiver must be the bound type (`InvalidArgument` otherwise: exactly, for a struct or enum;
+  the class or a subclass, for a class). A struct's or enum's static member or initializer gets the type's generic
+  arguments, a class's gets the bound class as `self`: neither is declared in Rust.
+- Several protocols on one parameter (`T: Hashable & Comparable`), associated types (`where S.Element == String` is
+  checked, `where S.Element: P` gets that conformance's witness table), a superclass (`T: Animal`: the bound class must
+  be it or a subclass), typed throws of a generic error type (`throws(E)`: its error slot). A requirement the bound
+  types break is `InvalidArgument` (`NotConforming` for a conformance), before any Swift code runs.
+- A generic declaration written by name (`Res.renamed(_:suffix:)`) must bind every parameter.
+- Not bindable: a protocol member's `Self` (call it on `Opened`), `nonisolated(nonsending)` functions, typed throws of
+  an associated type, a static member or initializer of an extension that fixes some of the type's parameters.
+- A member of a generic type or protocol in an extension that adds a conformance (`extension Box where T: P`), other
+  than a struct's or enum's static member or initializer, is refused, bound or not: it takes that conformance's witness
+  table besides what `self` gives, which swiftc does but no document states.
 
 ### Enums
 

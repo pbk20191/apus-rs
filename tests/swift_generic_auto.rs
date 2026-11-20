@@ -37,6 +37,33 @@ apus::swift! {
     #[swift_linked = "static Res.Tray(struct)<T>.size(plus: Int) -> Int"]
     fn size(n: i64, t: SwiftType) -> i64;
 
+    #[swift_linked = "Res.Tray(struct)<T>.describe<U>(_: U, _: Int) -> String", T = "Swift.String", U = "Swift.Double"]
+    fn describe_bound(self: &SwiftValue, u: &SwiftValue, n: i64) -> String;
+    #[swift_linked = "Res.Tray(struct)<T>.describe<U>(_: U, _: Int) -> String", T = "Swift.Int", U = "Swift.Double"]
+    fn describe_int_tray(self: &SwiftValue, u: &SwiftValue, n: i64) -> String;
+    #[swift_linked = "static Res.Tray(struct)<T>.size(plus: Int) -> Int", T = "Swift.Int"]
+    fn size_of_int_tray(n: i64) -> i64;
+    #[swift_linked = "Res.holdInt(_: Int) -> Holder(class)<Int>"]
+    fn hold_int(n: i64) -> SwiftObject;
+    #[swift_linked = "Res.Holder(class)<T>.show<U>(_: U) -> String", T = "Swift.Int", U = "Swift.Bool"]
+    fn show(self: &SwiftObject, u: &SwiftValue) -> String;
+    #[swift_linked = "Res.Holder(class)<T>.show<U>(_: U) -> String", T = "Swift.String", U = "Swift.Bool"]
+    fn show_string_holder(self: &SwiftObject, u: &SwiftValue) -> String;
+    #[swift_linked = "static Res.Holder(class)<T>.kind() -> String", T = "Swift.Int"]
+    fn holder_kind() -> String;
+    #[swift_linked = "Res.rank<T: Hashable & Comparable>(_: T, _: T) -> Int", T = "Swift.Int"]
+    fn rank(a: &SwiftValue, b: &SwiftValue) -> i64;
+    #[swift_linked = "Res.joined<S: Sequence>(_: S) -> String where S.Element == String", S = "[Swift.String]"]
+    fn joined(s: &SwiftValue) -> String;
+    #[swift_linked = "Res.joined<S: Sequence>(_: S) -> String where S.Element == String", S = "[Swift.Int]"]
+    fn joined_ints(s: &SwiftValue) -> String; // refused before the call: [Int]'s Element is not String
+    #[swift_linked = "Res.described<S: Sequence>(_: S) -> String where S.Element: CustomStringConvertible", S = "[Swift.Int]"]
+    fn described(s: &SwiftValue) -> String;
+    #[swift_linked = "Res.renamed<T: Animal(class)>(_: T, suffix: String) -> T", T = "Probe.Minted(class)"]
+    fn renamed_minted(x: &SwiftObject, suffix: &str) -> SwiftObject; // refused before the call: Minted is no Animal
+    #[swift_linked = "Probe.genericTypedSync<E: Error>(_: Bool, _: E) throws(E) -> Int", E = "Probe.Boom(struct)"]
+    fn typed_bound(fail: bool, error: &SwiftValue) -> i64;
+
     #[swift_linked = "Res.sumText<T: AdditiveArithmetic>(_: [T]) -> String", T = "Swift.Double"]
     fn sum_text(values: Vec<f64>) -> String;
     #[swift = "Res.sumOf<T: AdditiveArithmetic>(_: [T]) -> T", T = "Swift.Int"]
@@ -123,15 +150,15 @@ apus::swift! {
     fn meter_named(value: f64) -> SwiftValue;
     #[swift_linked = "Res.Meter.value { get }"]
     fn meter_value_named(self: &SwiftValue) -> f64;
-    #[swift_linked = "Res.Tray.add(_:)"]
+    #[swift_linked = "Res.Tray.add(_:)", T = "Swift.String"]
     fn add_named(self: &mut SwiftValue, n: i64);
-    #[swift_linked = "Res.Tray.size(plus:)"]
-    fn size_named(n: i64, t: SwiftType) -> i64;
+    #[swift_linked = "Res.Tray.size(plus:)", T = "Swift.String"]
+    fn size_named(n: i64) -> i64;
     #[swift_linked = "Res.sumOf(_:)", T = "Swift.Int"]
     fn sum_of_named(values: Vec<i64>) -> SwiftValue;
     #[swift_linked = "Res.labelOf(_:)", T = "Res.Dog"]
     fn label_of_named(dog: &Dog) -> String;
-    #[swift_linked = "Res.renamed(_:suffix:)"]
+    #[swift_linked = "Res.renamed(_:suffix:)", T = "Res.Dog"]
     fn renamed_named(dog: &SwiftObject, suffix: &str) -> SwiftObject;
 }
 
@@ -141,7 +168,7 @@ fn declarations_by_name() -> Result<(), Failed> {
     let mut tray = pear_tray(1).unwrap();
     add_named(&mut tray, 2).unwrap();
     check(count(&tray).unwrap() == 3, "Res.Tray.add(_:), mutating")?;
-    check(size_named(4, SwiftType::of::<String>()).unwrap() == size(4, SwiftType::of::<String>()).unwrap(), "static Res.Tray.size(plus:)")?;
+    check(size_named(4).unwrap() == size(4, SwiftType::of::<String>()).unwrap(), "static Res.Tray.size(plus:)")?;
     check(sum_of_named(vec![2, 3]).unwrap().get::<i64>() == Some(5), "Res.sumOf(_:) bound to Int")?;
     let dogs = dog_list(vec!["rex".into()]).unwrap();
     check(label_of_named(&dogs[0]).unwrap() == "named rex", "Res.labelOf(_:)")?;
@@ -191,6 +218,30 @@ fn concrete_bindings() -> Result<(), Failed> {
     check(matches!(sum_of_nope(Vec::new()), Err(CallError::NotConforming { .. })), "Nope is not AdditiveArithmetic")
 }
 
+/// Every generic parameter bound, a generic type's too: its members, several protocols, associated types, a
+/// superclass and a typed error, each requirement checked before the call.
+fn specialized_generics() -> Result<(), Failed> {
+    let tray = pear_tray(3).unwrap();
+    let described_tray = describe_bound(&tray, &SwiftValue::new(1.5f64), 1).unwrap();
+    check(described_tray == "String Double 4", described_tray)?;
+    check(matches!(describe_int_tray(&tray, &SwiftValue::new(1.5f64), 1), Err(CallError::InvalidArgument(_))), "a Tray<String> for Tray<Int>")?;
+    check(size_of_int_tray(1).unwrap() == 9, "static member of Tray<Int>")?;
+    let holder = hold_int(7).unwrap();
+    check(show(&holder, &SwiftValue::new(true)).unwrap() == "7 Bool", "Holder<Int>.show<Bool>")?;
+    check(matches!(show_string_holder(&holder, &SwiftValue::new(true)), Err(CallError::InvalidArgument(_))), "a Holder<Int> for Holder<String>")?;
+    check(holder_kind().unwrap() == "Holder<Int>", "static member of Holder<Int>, its class as self")?;
+    check(rank(&SwiftValue::new(1i64), &SwiftValue::new(2i64)).unwrap() == -1, "Hashable & Comparable")?;
+    let words = SwiftValue::new(vec!["a".to_string(), "b".to_string()]);
+    check(joined(&words).unwrap() == "a,b", "S.Element == String")?;
+    let numbers = SwiftValue::new(vec![1i64, 2]);
+    check(matches!(joined_ints(&numbers), Err(CallError::InvalidArgument(_))), "[Int]'s Element is not String")?;
+    check(described(&numbers).unwrap() == "1+2", "S.Element: CustomStringConvertible")?;
+    check(matches!(renamed_minted(&minted(1).unwrap(), "!"), Err(CallError::InvalidArgument(_))), "Minted is no Animal")?;
+    let boom = make_boom(5).unwrap();
+    check(typed_bound(false, &boom).unwrap() == 42, "throws(Boom), not thrown")?;
+    check(matches!(typed_bound(true, &boom), Err(CallError::Typed(_))), "throws(Boom), thrown")
+}
+
 /// A member of a generic struct gets `Self`'s metadata from its receiver, after its arguments and before its own
 /// generic arguments; a static member takes the type's generic arguments explicitly.
 fn members_of_generic_structs() -> Result<(), Failed> {
@@ -237,6 +288,7 @@ fn main() {
         Trial::test("a_value_that_does_not_conform", a_value_that_does_not_conform),
         Trial::test("members_of_generic_structs", members_of_generic_structs),
         Trial::test("concrete_bindings", concrete_bindings),
+        Trial::test("specialized_generics", specialized_generics),
         Trial::test("sequences_iterate", sequences_iterate),
         Trial::test("receivers_are_checked", receivers_are_checked),
         Trial::test("typed_wrappers", typed_wrappers),

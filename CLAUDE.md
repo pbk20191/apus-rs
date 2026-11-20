@@ -76,6 +76,9 @@ README.md documents every user-facing rule; keep it in step with behavior change
 
 - Implementing Swift protocols in Rust (conformances, witness tables): deferred; not ABI-guaranteed as a whole, no
   public runtime registration. Blocks SwiftUI `View`, delegates, `Codable`, `@Observable`/`@Model` types.
+- A member of a generic type or protocol in an extension that adds a conformance (`extension Box where T: P`) takes
+  that witness table besides what `self` gives (observed, `(Self metadata, T.P, self)`): refused until the owner
+  accepts that rule.
 - Parameter packs, a declaration inside several generic enclosing types, non-ASCII names: not mangled yet. `some P` results with primary associated types (`some Collection<Int>`), and more than one per result,
   are refused.
 - Compile-time features (macros, property wrappers, result builders) and `@inlinable`/`@_alwaysEmitIntoClient` APIs

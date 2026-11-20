@@ -104,7 +104,11 @@
 ///   found by name when the call is made (`CallError::Unavailable` if a type is missing, `NotConforming` if it does not
 ///   conform), and the result's type is the one with `T` substituted. An argument whose type names `T` must hold that
 ///   type exactly (`CallError::InvalidArgument`). The function is still generic: a value of type `T` goes by address
-///   whatever type is bound (`&SwiftValue`, `-> SwiftValue`); a class-bound one is a reference.
+///   whatever type is bound (`&SwiftValue`, `-> SwiftValue`); a class-bound one is a reference. Bindings name every
+///   generic parameter, a generic type's too (`Res.Tray(struct)<T>.describe<U>(…)`, `T = "…", U = "…"`): the receiver
+///   must then be the bound type, and a static member or initializer gets the type's arguments (or its class as
+///   `self`) without declaring them. Superclass, associated-type and typed-throws requirements are checked or filled
+///   from the bound types before the call.
 ///
 /// ```compile_fail
 /// apus::swift! {
@@ -326,6 +330,15 @@
 /// apus::swift! {
 ///     #[swift = "SwiftData.ModelContext.fetchAll(_:)"]
 ///     fn fetch_all(self: &apus::swift::SwiftObject, descriptor: &apus::swift::SwiftValue) throws; // no such method
+/// }
+/// ```
+///
+/// A generic declaration written by name binds every generic parameter, its type's too (`T = "Res.Dog"`):
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift_linked = "Res.doubled(_:)"]
+///     fn doubled(x: &apus::swift::SwiftValue) -> apus::swift::SwiftValue; // `T` is not bound
 /// }
 /// ```
 ///
@@ -741,21 +754,28 @@ macro_rules! __swift_call {
     ($function:ident [$($arg:ident),*] [$($generic:tt)*] $declared:expr) => {
         $crate::__swift_call!(@ $function [$($arg),*] [] [$($generic)*] $declared)
     };
-    // `concrete [type…] [(parameter protocol layout)…] [result?]`: generic parameters bound to the types named.
-    // `[(argument function "type")…]`: arguments whose type names a bound parameter, checked against that type.
-    (@ $function:ident [$($arg:ident),*] $o:tt [concrete [$($t:literal)*] [$(($wp:literal $p:literal $pl:ident))*] [$($result:literal)?] [$(($ca:ident $cf:ident $ct:literal))*] $($closures:tt)*] $declared:expr) => {{
-        static TYPES: [(&str, ::std::sync::OnceLock<::core::option::Option<$crate::swift::SwiftType>>); [$($t),*].len()] =
-            [$(($t, ::std::sync::OnceLock::new())),*];
-        static CHECKED: [(&str, ::std::sync::OnceLock<::core::option::Option<$crate::swift::SwiftType>>); <[&str]>::len(&[$($ct),*])] =
-            [$(($ct, ::std::sync::OnceLock::new())),*];
+    // `concrete [name…] [protocol…] [type…] [([subject] protocol layout)…] [(type class)…] [([subject] type)…]
+    // [error?] [result?] [(argument function type)…]`: generic parameters bound to concrete types. The call looks
+    // up each name and protocol once; the rest refer to them by index: the metadata passed, the witness tables
+    // (of a bound type `[i]`, or of its associated type `[i protocol "…TL" "…Tl"]`), the superclass and associated
+    // type requirements it checks, a typed-throws error type, and the arguments whose type names a bound parameter.
+    (@ $function:ident [$($arg:ident),*] $o:tt [concrete [$($n:literal)*] [$($p:literal)*] [$($t:literal)*] [$(([$($ws:tt)*] $wp:literal $wl:ident))*] [$(($sa:literal $sb:literal))*] [$(([$($ss:tt)*] $se:literal))*] [$($err:literal)?] [$($result:literal)?] [$(($ca:ident $cf:ident $ct:literal))*] $($closures:tt)*] $declared:expr) => {{
+        static NAMES: [$crate::swift::Named; <[&str]>::len(&[$($n),*])] = [$(($n, ::std::sync::OnceLock::new())),*];
+        static PROTOCOLS: [$crate::swift::SwiftProtocol; <[&str]>::len(&[$($p),*])] = [$($crate::swift::SwiftProtocol::new($p)),*];
         let generic = $crate::swift::__concrete_args(
-            &TYPES,
-            &[$(($wp, {
-                static PROTOCOL: $crate::swift::SwiftProtocol = $crate::swift::SwiftProtocol::new($p);
-                &PROTOCOL
-            }, $crate::swift::ProtocolLayout::$pl)),*],
-            &CHECKED,
-            &[$($crate::swift::$cf(&$ca)),*],
+            &NAMES,
+            &PROTOCOLS,
+            &[$($t),*],
+            &[$(($crate::__swift_bound_subject!($($ws)*), $wp, $crate::swift::ProtocolLayout::$wl)),*],
+            &[$(($sa, $sb)),*],
+            &[$(($crate::__swift_bound_subject!($($ss)*), $se)),*],
+            {
+                #[allow(unused_mut)]
+                let mut error = ::core::option::Option::None;
+                $(error = ::core::option::Option::Some($err);)?
+                error
+            },
+            &[$(($ct, $crate::swift::$cf(&$ca))),*],
         );
         #[allow(unused_mut)]
         let mut declared = $declared;
@@ -770,6 +790,18 @@ macro_rules! __swift_call {
     };
     (@ $function:ident [$($arg:ident),*] $o:tt [$($generic:tt)*] $declared:expr) => {
         $function.call_declared($crate::__swift_args!([$($arg),*] $o [$($generic)*]), $declared)
+    };
+}
+
+/// What a bound declaration's witness table or check is about: `i` a bound type, `i p "…TL" "…Tl"` its associated type.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __swift_bound_subject {
+    ($i:literal) => {
+        $crate::swift::BoundSubject::Named($i)
+    };
+    ($i:literal $p:literal $base:literal $descriptor:literal) => {
+        $crate::swift::BoundSubject::Associated($i, $p, $base, $descriptor)
     };
 }
 

@@ -923,14 +923,10 @@ fn is_concrete(ty: &Ty) -> bool {
     }
 }
 
-/// The mangled name of `ty`, a type in `decl`'s signature, with the declaration's own generic parameters bound to
-/// `bound` (in order); `None` if it is still not concrete (an associated type).
-pub(crate) fn bound_type_name(decl: &Decl, ty: &Ty, bound: &[Ty]) -> Result<Option<String>, String> {
-    let mut same_types = all_same_types(decl);
-    for (index, concrete) in bound.iter().enumerate() {
-        same_types.params.insert(GenericParam { depth: 0, index }, concrete.clone());
-    }
-    let ty = canonical(ty, &same_types);
+/// The mangled name of `ty`, a type in `decl`'s signature, with generic parameters bound to `bound`; `None` if it is
+/// still not concrete (an associated type).
+pub(crate) fn bound_type_name(decl: &Decl, ty: &Ty, bound: &[(GenericParam, Ty)]) -> Result<Option<String>, String> {
+    let ty = bound_type(decl, ty, bound);
     if !is_concrete(&ty) {
         return Ok(None);
     }
@@ -938,12 +934,33 @@ pub(crate) fn bound_type_name(decl: &Decl, ty: &Ty, bound: &[Ty]) -> Result<Opti
 }
 
 /// `ty` with the bound generic parameters (and the declaration's same-type requirements) substituted.
-pub(crate) fn bound_type(decl: &Decl, ty: &Ty, bound: &[Ty]) -> Ty {
+pub(crate) fn bound_type(decl: &Decl, ty: &Ty, bound: &[(GenericParam, Ty)]) -> Ty {
     let mut same_types = all_same_types(decl);
-    for (index, concrete) in bound.iter().enumerate() {
-        same_types.params.insert(GenericParam { depth: 0, index }, concrete.clone());
+    for (param, concrete) in bound {
+        same_types.params.insert(*param, concrete.clone());
+    }
+    // A same-type requirement may name a parameter (`S.Element == T`): bound too.
+    for member in same_types.members.values_mut() {
+        if let Ty::Param(param) = member {
+            if let Some((_, concrete)) = bound.iter().find(|(p, _)| p == param) {
+                *member = concrete.clone();
+            }
+        }
     }
     canonical(ty, &same_types)
+}
+
+/// The symbols that find an associated type of a conformance to `protocol` (`swift_getAssociatedTypeWitness`): the
+/// protocol's requirement base descriptor (`$sSTTL`) and the associated type's descriptor (`$s7ElementSTTl`).
+pub(crate) fn associated_type_symbols(protocol: &Protocol, name: &str) -> Result<(String, String), String> {
+    let mut base = Mangler { buffer: "$s".into(), ..Default::default() };
+    base.protocol(protocol)?;
+    base.push("TL");
+    let mut descriptor = Mangler { buffer: "$s".into(), ..Default::default() };
+    descriptor.identifier(name)?;
+    descriptor.protocol(protocol)?;
+    descriptor.push("Tl");
+    Ok((base.buffer, descriptor.buffer))
 }
 
 pub(crate) fn is_concrete_type(ty: &Ty) -> bool {

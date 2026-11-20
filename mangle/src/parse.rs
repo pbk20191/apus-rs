@@ -1074,8 +1074,14 @@ impl<'a> Parser<'a> {
         generic_names.sort();
         let mut generic_names: Vec<String> = generic_names.into_iter().map(|(_, name)| name).collect();
         generic_names.resize(generic_params, "_".into());
+        let mut context_names: Vec<(usize, String)> = match own_depth {
+            0 => Vec::new(),
+            _ => self.generics.iter().filter(|(name, param)| param.depth == 0 && name != "Self").map(|(name, param)| (param.index, name.clone())).collect(),
+        };
+        context_names.sort();
         Ok(Decl {
             generic_names,
+            context_names: context_names.into_iter().map(|(_, name)| name).collect(),
             module: self.module.clone(),
             context,
             context_extension,

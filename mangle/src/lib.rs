@@ -467,40 +467,82 @@ impl Declaration {
         mangler::type_name(&ty).ok()
     }
 
-    /// Binds the declaration's own generic parameters, by name, to concrete types written as in a declaration
-    /// (`[("T", "Todos.Todo(class)")]`). The function stays generic: its values of type `T` go by address and its
-    /// generic arguments are the bound types' metadata and witness tables, after the formal arguments.
-    pub fn bind(&self, bindings: &[(&str, &str)]) -> Result<ConcretePlan, Error> {
-        use ast::Ty;
+    /// The names of the generic parameters [`bind`](Self::bind) binds: the enclosing type's (but those an extension
+    /// fixes) and the declaration's own. None for a protocol's member, whose `Self` is not bound.
+    pub fn generic_parameter_names(&self) -> Vec<String> {
+        self.bindable().into_iter().map(|(_, name)| name.to_string()).collect()
+    }
+
+    fn bindable(&self) -> Vec<(ast::GenericParam, &str)> {
+        use ast::{GenericParam, Requirement, Subject, Ty};
         let decl = &self.0;
-        let ast::Signature::Function { params, result, typed_error, .. } = &decl.signature else {
-            return Err(Error("only a function's generic parameters can be bound".into()));
+        if decl.context.last().is_some_and(|(_, kind)| *kind == ast::Kind::Protocol) {
+            return Vec::new();
+        }
+        // An extension that fixes a parameter (`where T == Int`) leaves nothing to bind for it.
+        let fixed: Vec<GenericParam> = extension_requirements(decl)
+            .filter_map(|r| match r {
+                Requirement::SameType(Subject::Param(param), ty) if !matches!(ty, Ty::Param(_) | Ty::Member(..)) => Some(*param),
+                _ => None,
+            })
+            .collect();
+        let own_depth = usize::from(decl.context_params > 0);
+        (decl.context_names.iter().enumerate())
+            .map(|(index, name)| (GenericParam { depth: 0, index }, name.as_str()))
+            .filter(|(param, _)| !fixed.contains(param))
+            .chain(decl.generic_names.iter().enumerate().map(|(index, name)| (GenericParam { depth: own_depth, index }, name.as_str())))
+            .collect()
+    }
+
+    /// Binds every generic parameter of the declaration (its enclosing type's and its own), by name, to concrete
+    /// types written as in a declaration (`[("T", "Todos.Todo(class)")]`). The function stays generic: its values of
+    /// type `T` go by address, and its generic arguments are the bound types' metadata and witness tables, found
+    /// when the call is made, as are the requirements the call checks (a superclass, an associated type).
+    pub fn bind(&self, bindings: &[(&str, &str)]) -> Result<ConcretePlan, Error> {
+        use ast::{GenericParam, Requirement, Subject, Ty};
+        let decl = &self.0;
+        let (params, result, typed_error): (&[ast::Param], &Ty, &Option<Ty>) = match &decl.signature {
+            ast::Signature::Function { params, result, typed_error, .. } => (params, result, typed_error),
+            ast::Signature::Getter(ty) | ast::Signature::Subscript { result: ty, setter: false, .. } => {
+                let params = match &decl.signature {
+                    ast::Signature::Subscript { params, .. } => params.as_slice(),
+                    _ => &[],
+                };
+                (params, ty, &None)
+            }
+            _ => return Err(Error("only a function's, getter's or subscript getter's generic parameters can be bound".into())),
         };
-        if decl.generic_params == 0 {
+        let protocol_member = decl.context.last().is_some_and(|(_, kind)| *kind == ast::Kind::Protocol);
+        if protocol_member {
+            return Err(Error("a protocol member's generic parameters cannot be bound: call it on an `Opened` value".into()));
+        }
+        // An extension that fixes a parameter (`where T == Int`) leaves nothing to bind for it.
+        let fixed: Vec<GenericParam> = extension_requirements(decl)
+            .filter_map(|r| match r {
+                Requirement::SameType(Subject::Param(param), ty) if !matches!(ty, Ty::Param(_) | Ty::Member(..)) => Some(*param),
+                _ => None,
+            })
+            .collect();
+        let own_depth = usize::from(decl.context_params > 0);
+        let named = self.bindable();
+        if named.is_empty() {
             return Err(Error("the declaration is not generic: it takes no bound types".into()));
         }
-        if decl.context_params > 0 {
-            return Err(Error("generic members of generic types cannot be bound: pass the generic arguments explicitly".into()));
+        for (i, (_, name)) in named.iter().enumerate() {
+            if named[..i].iter().any(|(_, other)| other == name) && *name != "_" {
+                return Err(Error(format!("`{name}` names two generic parameters (the type's and the member's): rename one to bind it")));
+            }
         }
-        // A generic error type (`throws(E)`, `throws(S.Failure)`) takes an error slot after the generic arguments.
-        if typed_error.as_ref().is_some_and(|ty| !mangler::is_concrete_type(ty)) {
-            return Err(Error("typed throws of a generic error type cannot be bound: pass the generic arguments explicitly".into()));
-        }
-        // A superclass constraint would need the bound class checked against it at run time.
-        if decl.requirements.iter().any(|r| matches!(r, ast::Requirement::Superclass(..))) {
-            return Err(Error("a generic parameter with a superclass constraint cannot be bound: pass the generic arguments explicitly".into()));
-        }
-        let names = &decl.generic_names;
         for (name, _) in bindings {
-            if !names.iter().any(|n| n == name) {
+            if !named.iter().any(|(_, n)| n == name) {
                 return Err(Error(format!("the declaration has no generic parameter `{name}`")));
             }
         }
-        let mut bound = Vec::new();
-        let mut types = Vec::new();
-        for name in names {
+        let class_bound = class_bound_params(decl);
+        let mut bound: Vec<(GenericParam, Ty)> = Vec::new();
+        for (param, name) in &named {
             // An opaque parameter (`_: some P`) is an unnamed generic parameter, which no binding can name.
-            if name == "_" {
+            if *name == "_" {
                 return Err(Error("an opaque `some` parameter cannot be bound: declare it as a named generic parameter".into()));
             }
             let Some((_, ty)) = bindings.iter().find(|(n, _)| n == name) else {
@@ -510,15 +552,119 @@ impl Declaration {
             if !mangler::is_concrete_type(&parsed) {
                 return Err(Error(format!("`{ty}`: a bound type must be concrete")));
             }
-            let param = ast::GenericParam { depth: 0, index: bound.len() };
             let class = matches!(&parsed, Ty::Nominal { path, .. }
                 if matches!(path.last(), Some((_, ast::Kind::Class | ast::Kind::Actor | ast::Kind::TypedefClass))));
-            if class_bound_params(decl).contains(&param) && !class {
+            if class_bound.contains(param) && !class {
                 return Err(Error(format!("`{name}` is class-bound, and `{ty}` is not a class")));
             }
-            types.push(mangler::type_name(&parsed).map_err(Error)?);
-            bound.push(parsed);
+            bound.push((*param, parsed));
         }
+        let name_of = |ty: &Ty| -> Result<String, Error> {
+            match mangler::bound_type_name(decl, ty, &bound).map_err(Error)? {
+                Some(name) => Ok(name),
+                None => Err(Error(format!("`{ty:?}` is not concrete with the bindings"))),
+            }
+        };
+        let bound_name = |param: GenericParam| name_of(&Ty::Param(param));
+        // What the call passes: a value type's instance member gets its type's arguments from `Self`'s metadata, a
+        // class's members from `self`; a value type's static member or initializer takes them all.
+        let value_static = self.value_context() == ValueContext::GenericArguments;
+        if value_static && !fixed.is_empty() {
+            return Err(Error("a static member or initializer of an extension that fixes some of the type's parameters cannot be bound".into()));
+        }
+        let passed = |param: &GenericParam| value_static || param.depth == own_depth;
+        let types = bound.iter().filter(|(param, _)| passed(param)).map(|(param, _)| bound_name(*param)).collect::<Result<Vec<_>, _>>()?;
+        let requirements: Vec<&Requirement> = decl
+            .context_requirements
+            .iter()
+            .chain(decl.context_extension.iter().flat_map(|e| e.requirements.iter()))
+            .chain(extension_requirements(decl))
+            .chain(&decl.requirements)
+            .collect();
+        let subject_param = |subject: &Subject| match subject {
+            Subject::Param(param) | Subject::Member(param, _) => *param,
+        };
+        // A requirement the member adds to its type's parameters (`func f() where T: P`) is one more witness table
+        // after what `self` gives (observed): refused, as an extension's is.
+        if !value_static && decl.context_params > 0 {
+            if decl.requirements.iter().any(|r| matches!(r, Requirement::Conforms(subject, protocol) if subject_param(subject).depth == 0 && !protocol.is_marker())) {
+                return Err(Error("a member that adds a conformance to its type's parameters takes that conformance's witness table too: not supported".into()));
+            }
+        }
+        // The protocol declaring an associated type: the one written (`T.Value(of P)`), or the parameter's one.
+        let associated = |param: GenericParam, member: &str| -> Result<BoundType, Error> {
+            let protocol = match decl.associated_protocols.iter().find(|((p, n), _)| *p == param && n == member) {
+                Some((_, protocol)) => protocol.clone(),
+                None => {
+                    let mut protocols = requirements.iter().filter_map(|r| match r {
+                        Requirement::Conforms(Subject::Param(p), protocol) if *p == param && !protocol.is_marker() => Some(protocol),
+                        _ => None,
+                    });
+                    match (protocols.next(), protocols.next()) {
+                        (Some(protocol), None) => protocol.clone(),
+                        _ => return Err(Error(format!("`{member}`: name the protocol that declares it, `.{member}(of P)`"))),
+                    }
+                }
+            };
+            let (base, descriptor) = mangler::associated_type_symbols(&protocol, member).map_err(Error)?;
+            Ok(BoundType::Associated { ty: bound_name(param)?, protocol: mangler::protocol_descriptor(&protocol).map_err(Error)?, base, descriptor })
+        };
+        let mut witnesses = Vec::new();
+        let mut superclasses = Vec::new();
+        let mut same_types = Vec::new();
+        let owned: Vec<Requirement> = requirements.iter().map(|r| (*r).clone()).collect();
+        for requirement in mangler::sorted_requirements(&owned) {
+            let takes_witness = passed(&subject_param(match &requirement {
+                Requirement::Conforms(subject, _) | Requirement::SameType(subject, _) | Requirement::Superclass(subject, _) => subject,
+                Requirement::AnyObject(subject) => subject,
+            }));
+            match requirement {
+                Requirement::Conforms(_, ref protocol) if protocol.is_marker() => {}
+                Requirement::Conforms(subject, protocol) => {
+                    if protocol.module == "__C" {
+                        return Err(Error("an Objective-C protocol requirement takes no witness table: not supported".into()));
+                    }
+                    if !takes_witness {
+                        continue;
+                    }
+                    let (on, layout) = match subject {
+                        Subject::Param(param) => (
+                            BoundType::Named(bound_name(param)?),
+                            match (protocol.class_bound, class_bound.contains(&param)) {
+                                (true, _) => ProtocolLayout::Class,
+                                (false, false) => ProtocolLayout::Any,
+                                (false, true) => ProtocolLayout::Either,
+                            },
+                        ),
+                        Subject::Member(param, member) => (associated(param, &member)?, ProtocolLayout::Either),
+                    };
+                    witnesses.push((on, mangler::protocol_descriptor(&protocol).map_err(Error)?, layout));
+                }
+                Requirement::SameType(Subject::Param(param), _) if fixed.contains(&param) => {}
+                Requirement::SameType(Subject::Param(_), _) => {
+                    return Err(Error("a generic parameter fixed to another type cannot be bound: bind the type it is fixed to".into()))
+                }
+                Requirement::SameType(Subject::Member(param, member), ty) => {
+                    let expected = match &ty {
+                        Ty::Member(..) => return Err(Error("an associated type the same as another associated type cannot be bound".into())),
+                        ty => name_of(ty)?,
+                    };
+                    same_types.push((associated(param, &member)?, expected));
+                }
+                Requirement::Superclass(Subject::Param(param), class) => superclasses.push((bound_name(param)?, name_of(&class)?)),
+                Requirement::Superclass(Subject::Member(..), _) | Requirement::AnyObject(Subject::Member(..)) => {
+                    return Err(Error("a class requirement on an associated type cannot be bound".into()))
+                }
+                // Checked against the binding above: a class.
+                Requirement::AnyObject(Subject::Param(_)) => {}
+            }
+        }
+        let error_type = match typed_error {
+            None => None,
+            Some(Ty::Param(param)) => Some(bound_name(*param)?),
+            Some(Ty::Member(..)) => return Err(Error("typed throws of an associated type cannot be bound".into())),
+            Some(_) => return Err(Error(CONCRETE_TYPED_THROWS.into())),
+        };
         // Where Swift abstracts a generic parameter, the bound type's own lowering is not the generic one: only a
         // parameter or result that is `T` itself (by address, or a reference if class-bound) or names `T` among a
         // nominal type's arguments (whose layout does not depend on it) keeps to what apus lowers.
@@ -548,11 +694,24 @@ impl Declaration {
         }
         params.iter().try_for_each(|p| placed(&p.ty, true))?;
         placed(result, true)?;
-        let class_bound = class_bound_params(decl);
         let abstract_value = |ty: &Ty| matches!(ty, Ty::Param(param) if !class_bound.contains(param));
+        let self_type = match decl.context_params {
+            0 => None,
+            _ => Some(name_of(&decl.context_type())?),
+        };
+        let receiver = match (&self_type, decl.is_static || decl.name == "init", decl.context.last()) {
+            (Some(ty), false, Some((_, ast::Kind::Class | ast::Kind::Actor | ast::Kind::TypedefClass))) => Some(ReceiverCheck::Instance(ty.clone())),
+            (Some(ty), false, Some(_)) => Some(ReceiverCheck::Exactly(ty.clone())),
+            _ => self.receiver_check(),
+        };
         Ok(ConcretePlan {
+            receiver,
             types,
-            witnesses: witness_requirements(decl)?,
+            witnesses,
+            superclasses,
+            same_types,
+            error_type,
+            self_type,
             result: mangler::bound_type_name(decl, result, &bound).map_err(Error)?,
             // A variadic `T...` is passed as one `[T]`, an `inout T` by address as `&mut SwiftValue`.
             by_address: params.iter().map(|p| abstract_value(&p.ty) && !p.variadic && !p.inout).collect(),
@@ -1079,14 +1238,25 @@ pub struct GenericPlan {
     pub witness_layouts: Vec<ProtocolLayout>,
 }
 
-/// A generic function's generic arguments fixed to concrete types (`swift!`'s `#[swift = "…", T = "Type"]`): what
+/// A generic declaration's parameters fixed to concrete types (`swift!`'s `#[swift = "…", T = "Type"]`): what
 /// [`Declaration::bind`] computes, all known at compile time but the lookups themselves.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConcretePlan {
-    /// Per generic parameter, in order: the mangled name (no `$s`) of the type it is bound to.
+    /// The type metadata the call passes, in order: the mangled name (no `$s`) of each bound type.
     pub types: Vec<String>,
-    /// Witness tables in canonical order: (generic parameter index, protocol descriptor, layout).
-    pub witnesses: Vec<(usize, String, ProtocolLayout)>,
+    /// Witness tables in canonical order: (the conforming type, protocol descriptor, layout).
+    pub witnesses: Vec<(BoundType, String, ProtocolLayout)>,
+    /// Superclass requirements, checked when the call is made: (bound type, the class it must be or inherit from).
+    pub superclasses: Vec<(String, String)>,
+    /// Same-type requirements on associated types, checked when the call is made: (associated type, the type it must be).
+    pub same_types: Vec<(BoundType, String)>,
+    /// Typed throws of a generic error type: the type bound to it, whose error slot the call passes.
+    pub error_type: Option<String>,
+    /// A member of a generic type: that type with its parameters bound, which a class's static member or
+    /// initializer passes as `self`.
+    pub self_type: Option<String>,
+    /// How an instance member's receiver is checked: against the bound type where the declaration's is generic.
+    pub receiver: Option<ReceiverCheck>,
     /// The result type with the bindings substituted, when it is concrete then.
     pub result: Option<String>,
     /// Per formal parameter: its type is exactly a generic parameter that is not class-bound, which a generic function
@@ -1101,6 +1271,16 @@ pub struct ConcretePlan {
     pub nominal_params: Vec<Option<NominalRef>>,
     /// [`Declaration::nominal_result`] with the bindings substituted.
     pub nominal_result: Option<NominalRef>,
+}
+
+/// A type a bound declaration's generic argument or check is about.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BoundType {
+    /// A bound type, by its mangled name.
+    Named(String),
+    /// An associated type of the bound type `ty`, found through its conformance to `protocol` (a descriptor symbol)
+    /// by the protocol's requirement base (`…TL`) and the associated type's descriptor (`…Tl`).
+    Associated { ty: String, protocol: String, base: String, descriptor: String },
 }
 
 /// The requirements of the extension a declaration is in.
@@ -1325,7 +1505,12 @@ mod isolation_tests {
             bind(fetch, &[("T", "Todos.Todo(class)")]).unwrap(),
             ConcretePlan {
                 types: vec!["5Todos4TodoC".into()],
-                witnesses: vec![(0, "$s9SwiftData15PersistentModelMp".into(), ProtocolLayout::Class)],
+                witnesses: vec![(super::BoundType::Named("5Todos4TodoC".into()), "$s9SwiftData15PersistentModelMp".into(), ProtocolLayout::Class)],
+                superclasses: vec![],
+                same_types: vec![],
+                error_type: None,
+                self_type: None,
+                receiver: Some(super::ReceiverCheck::Instance("9SwiftData12ModelContextC".into())),
                 result: Some("9SwiftData22FetchResultsCollectionVy5Todos4TodoCG".into()),
                 by_address: vec![false, false],
                 result_by_address: false,
@@ -1360,17 +1545,59 @@ mod isolation_tests {
         assert!(error("M.f<T>(_: T) -> Int", &[("T", "some Hashable")]).contains("concrete"));
         assert!(error("M.f<T>(_: T?) -> Int", &[("T", "Swift.Int")]).contains("only as a parameter or result itself"));
         assert!(error("M.f<T>(_: Int) -> (T, Int)", &[("T", "Swift.Int")]).contains("only as a parameter or result itself"));
-        assert!(error("M.f<T: Hashable & Comparable>(_: T)", &[("T", "Swift.Int")]).contains("more than one protocol"));
         assert!(error("M.f(_: Int)", &[("T", "Swift.Int")]).contains("not generic"));
         assert!(error("M.f<T>(_: T, _: some Hashable)", &[("T", "Swift.Int")]).contains("opaque `some` parameter"));
         // A variadic `T...` is one `[T]`, an `inout T` a `&mut SwiftValue`: neither is the by-address `&SwiftValue`.
         assert_eq!(bind("M.f<T>(_: T..., _: inout T) -> Int", &[("T", "Swift.Int")]).unwrap().by_address, [false, false]);
         assert!(error("M.g<S: AsyncSequence>(_: [S]) throws(S.Failure) -> Int", &[("S", "Swift.Int")]).contains("typed throws"));
-        assert!(error("M.k<T: Animal(class)>(_: T)", &[("T", "M.Rock(class)")]).contains("superclass"));
         assert!(error("M.h<T: AnyObject>(_: T)", &[("T", "Swift.Int")]).contains("not a class"));
         // Each argument whose type names a bound parameter: its type then, which the call checks the value against.
         let fetch = bind(fetch, &[("T", "Todos.Todo(class)")]).unwrap();
         assert_eq!(fetch.argument_types, [Some("9SwiftData15FetchDescriptorVy5Todos4TodoCG".to_string()), None]);
+    }
+
+    #[test]
+    fn bind_specializes_generic_types_and_requirements() {
+        use super::{BoundType, Declaration, ProtocolLayout};
+        let bind = |d: &str, b: &[(&str, &str)]| Declaration::parse(d).unwrap().bind(b);
+        let error = |d: &str, b: &[(&str, &str)]| bind(d, b).unwrap_err().to_string();
+        let named = |n: &str| BoundType::Named(n.into());
+        // A generic struct's static member takes the type's and its own parameters' metadata, then every witness
+        // table in canonical order; an instance member only its own, after `Self`'s metadata (from the receiver).
+        let make = bind("static M.Box(struct)<T: Hashable>.make<U: P>(_: U) -> Int", &[("T", "Swift.Int"), ("U", "M.S(struct)")]).unwrap();
+        assert_eq!(make.types, ["Si", "1M1SV"]);
+        assert_eq!(make.witnesses, [(named("Si"), "$sSHMp".into(), ProtocolLayout::Any), (named("1M1SV"), "$s1M1PMp".into(), ProtocolLayout::Any)]);
+        assert_eq!(make.self_type.as_deref(), Some("1M3BoxVySiG"));
+        let map = bind("M.Box(struct)<T: Hashable>.map<U: P>(_: U) -> T", &[("T", "Swift.Int"), ("U", "M.S(struct)")]).unwrap();
+        assert_eq!(map.types, ["1M1SV"]);
+        assert_eq!(map.witnesses, [(named("1M1SV"), "$s1M1PMp".into(), ProtocolLayout::Any)]);
+        assert_eq!((map.result.as_deref(), map.result_by_address, map.by_address.as_slice()), (Some("Si"), true, &[true][..]));
+        // A generic class's members take their own parameters only; the bound class is `self` or the receiver's.
+        let class = bind("M.GBox(class)<T>.map<U: P>(_: U) -> Int", &[("T", "Swift.Int"), ("U", "M.S(struct)")]).unwrap();
+        assert_eq!((class.types.as_slice(), class.self_type.as_deref()), (&["1M1SV".to_string()][..], Some("1M4GBoxCySiG")));
+        // The receiver is checked against the bound type: a class's object by cast, a value exactly.
+        use super::ReceiverCheck;
+        assert_eq!(class.receiver, Some(ReceiverCheck::Instance("1M4GBoxCySiG".into())));
+        assert_eq!(map.receiver, Some(ReceiverCheck::Exactly("1M3BoxVySiG".into())));
+        assert_eq!(make.receiver, None);
+        // Several protocols: the symbol's order.
+        let two = bind("M.two<T: Hashable & Comparable>(_: T) -> Int", &[("T", "Swift.Int")]).unwrap();
+        assert_eq!(two.witnesses, [(named("Si"), "$sSLMp".into(), ProtocolLayout::Any), (named("Si"), "$sSHMp".into(), ProtocolLayout::Any)]);
+        // Associated types: a conformance's witness table, or the type checked.
+        let element = BoundType::Associated { ty: "Say1M1SVG".into(), protocol: "$sSTMp".into(), base: "$sSTTL".into(), descriptor: "$s7ElementSTTl".into() };
+        let conforming = bind("M.f<S: Sequence>(_: S) -> Int where S.Element: P", &[("S", "[M.S(struct)]")]).unwrap();
+        assert_eq!(conforming.witnesses, [(named("Say1M1SVG"), "$sSTMp".into(), ProtocolLayout::Any), (element.clone(), "$s1M1PMp".into(), ProtocolLayout::Either)]);
+        let same = bind("M.f<S: Sequence>(_: S) -> Int where S.Element == String", &[("S", "[M.S(struct)]")]).unwrap();
+        assert_eq!(same.same_types, [(element, "SS".to_string())]);
+        // A superclass, checked when the call is made; a typed error's type.
+        let sup = bind("M.k<T: Animal(class)>(_: T) -> Int", &[("T", "M.Dog(class)")]).unwrap();
+        assert_eq!(sup.superclasses, [("1M3DogC".to_string(), "1M6AnimalC".to_string())]);
+        let thrown = bind("M.g<E: Error>(_: Int) throws(E) -> Int", &[("E", "M.Boom(struct)")]).unwrap();
+        assert_eq!(thrown.error_type.as_deref(), Some("1M4BoomV"));
+        // Every parameter is bound, the type's too; a protocol's `Self` is not.
+        assert!(error("M.Box(struct)<T>.map<U>(_: U) -> Int", &[("U", "Swift.Int")]).contains("`T` is not bound"));
+        assert!(error("M.Box(struct)<T>.map<T>(_: T) -> Int", &[("T", "Swift.Int")]).contains("names two generic parameters"));
+        assert!(error("M.P(protocol).f<U>(_: U) -> Int", &[("U", "Swift.Int")]).contains("protocol"));
     }
 
     #[test]

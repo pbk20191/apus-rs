@@ -276,6 +276,17 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             ));
         }
     }
+    // A generic declaration written by name is specialized: every generic parameter bound.
+    if let (Some((declaration, parsed)), Some(written)) = (&declared, &expanded.as_ref().and(written.as_ref())) {
+        let names = parsed.generic_parameter_names();
+        if bound.is_empty() && !names.is_empty() {
+            let wanted: Vec<String> = names.iter().map(|n| format!("{n} = \"Module.Type\"")).collect();
+            return item_compile_error(&format!(
+                "`{written}` (`{declaration}`) is generic: a declaration by name binds every generic parameter, `{}`",
+                wanted.join(", ")
+            ));
+        }
+    }
     let concrete = match (&declared, bound.is_empty()) {
         (_, true) => None,
         (None, false) => return item_compile_error("binding generic parameters (`T = \"…\"`) needs a Swift declaration: #[swift = \"…\"] or #[swift_linked = \"…\"]"),
@@ -336,11 +347,13 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             }
         }
     }
-    // A static member or initializer gets its type as `self`: a class's metadata, nothing for a struct or enum.
+    // A static member or initializer gets its type as `self`: a class's metadata, nothing for a struct or enum. A
+    // generic class's, with its parameters bound, is the class specialized.
+    let bound_self = concrete.as_ref().and_then(|plan| plan.self_type.clone());
     if let Some((declaration, parsed)) = &declared {
         match parsed.type_self() {
             // Without `self`, the declared class's own metadata (`classself`, added last below).
-            apus_mangle::TypeSelf::Thick if receiver.is_none() && parsed.context_type_name().is_none() => {
+            apus_mangle::TypeSelf::Thick if receiver.is_none() && parsed.context_type_name().is_none() && bound_self.is_none() => {
                 return item_compile_error(&format!(
                     "`{declaration}` belongs to a generic class: declare `self: &SwiftType` first, the specialized class's metadata"
                 ));
@@ -466,20 +479,48 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
                 "`{declaration}` returns a generic parameter's value, by address whatever type is bound: declare `-> SwiftValue`"
             ));
         }
+        // Everything the call looks up, once each, by index: the bound types' and checked types' names, and the
+        // protocols.
+        let mut names: Vec<String> = Vec::new();
+        let mut protocols: Vec<String> = Vec::new();
+        fn index(table: &mut Vec<String>, item: &str) -> TokenTree {
+            let i = table.iter().position(|t| t == item).unwrap_or_else(|| {
+                table.push(item.to_string());
+                table.len() - 1
+            });
+            TokenTree::Literal(Literal::usize_unsuffixed(i))
+        }
         let literal = |text: &str| TokenTree::Literal(Literal::string(text));
         let bracket = |tokens: Vec<TokenTree>| TokenTree::Group(Group::new(Delimiter::Bracket, tokens.into_iter().collect()));
+        let paren = |tokens: Vec<TokenTree>| TokenTree::Group(Group::new(Delimiter::Parenthesis, tokens.into_iter().collect()));
+        let ident = |text: &str| TokenTree::Ident(proc_macro::Ident::new(text, proc_macro::Span::call_site()));
+        // `[type]`, or `[type protocol "…TL" "…Tl"]` for an associated type.
+        let subject = |on: &apus_mangle::BoundType, names: &mut Vec<String>, protocols: &mut Vec<String>| match on {
+            apus_mangle::BoundType::Named(name) => bracket(vec![index(names, name)]),
+            apus_mangle::BoundType::Associated { ty, protocol, base, descriptor } => {
+                bracket(vec![index(names, ty), index(protocols, protocol), literal(base), literal(descriptor)])
+            }
+        };
+        let types = plan.types.iter().map(|t| index(&mut names, t)).collect();
         let witnesses = plan
             .witnesses
             .iter()
-            .map(|(param, protocol, layout)| {
-                let entry = vec![
-                    TokenTree::Literal(Literal::usize_unsuffixed(*param)),
-                    literal(protocol),
-                    TokenTree::Ident(proc_macro::Ident::new(&format!("{layout:?}"), proc_macro::Span::call_site())),
-                ];
-                TokenTree::Group(Group::new(Delimiter::Parenthesis, entry.into_iter().collect()))
+            .map(|(on, protocol, layout)| {
+                let on = subject(on, &mut names, &mut protocols);
+                paren(vec![on, index(&mut protocols, protocol), ident(&format!("{layout:?}"))])
             })
             .collect();
+        let superclasses =
+            plan.superclasses.iter().map(|(ty, class)| paren(vec![index(&mut names, ty), index(&mut names, class)])).collect();
+        let same_types = plan
+            .same_types
+            .iter()
+            .map(|(on, expected)| {
+                let on = subject(on, &mut names, &mut protocols);
+                paren(vec![on, index(&mut names, expected)])
+            })
+            .collect();
+        let error = plan.error_type.iter().map(|e| index(&mut names, e)).collect();
         // Arguments whose type names a bound parameter, checked against that type when the call is made: a value by
         // its type, a class reference by its dynamic class (as automatic generic arguments would read them).
         let kinds = parsed.argument_kinds().unwrap_or_default();
@@ -494,18 +535,18 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
                     (Some(None), Some(rust)) if by_address(rust) => "__type_of",
                     _ => return None,
                 };
-                let entry = vec![
-                    TokenTree::Ident(rust_args[i].clone()),
-                    TokenTree::Ident(proc_macro::Ident::new(function, proc_macro::Span::call_site())),
-                    literal(ty),
-                ];
-                Some(TokenTree::Group(Group::new(Delimiter::Parenthesis, entry.into_iter().collect())))
+                Some(paren(vec![TokenTree::Ident(rust_args[i].clone()), ident(function), index(&mut names, ty)]))
             })
             .collect();
         generic = [
-            TokenTree::Ident(proc_macro::Ident::new("concrete", proc_macro::Span::call_site())),
-            bracket(plan.types.iter().map(|t| literal(t)).collect()),
+            ident("concrete"),
+            bracket(names.iter().map(|n| literal(n)).collect()),
+            bracket(protocols.iter().map(|p| literal(p)).collect()),
+            bracket(types),
             bracket(witnesses),
+            bracket(superclasses),
+            bracket(same_types),
+            bracket(error),
             bracket(plan.result.iter().map(|r| literal(r)).collect()),
             bracket(checks),
         ]
@@ -666,7 +707,7 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
                 front.extend(generic);
                 generic = front;
             }
-            apus_mangle::ValueContext::GenericArguments if rust_args.len() == formal => {
+            apus_mangle::ValueContext::GenericArguments if rust_args.len() == formal && concrete.is_none() => {
                 return item_compile_error(&format!(
                     "`{declaration}` belongs to a generic struct or enum: after its arguments, pass the type's generic arguments (each parameter's `SwiftType`, then witness tables)"
                 ))
@@ -685,7 +726,7 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     // Outermost marker: `__swift_call!` reads it before the others.
     if let Some((_, parsed)) = &declared {
         if parsed.type_self() == apus_mangle::TypeSelf::Thick && receiver.is_none() {
-            let name = parsed.context_type_name().expect("checked above");
+            let name = bound_self.clone().or_else(|| parsed.context_type_name()).expect("checked above");
             let mut front: TokenStream = [
                 TokenTree::Ident(proc_macro::Ident::new("classself", proc_macro::Span::call_site())),
                 TokenTree::Literal(Literal::string(&name)),
@@ -700,7 +741,8 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     // made: `receiver this instance|exactly|named "name"`, outermost.
     if let (Some((_, parsed)), Some(ty), Some(this)) = (&declared, &receiver, rust_receiver_name(tail)) {
         let erased = matches!(ty.rsplit([':', ' ', '&']).next(), Some("SwiftObject" | "SwiftValue"));
-        if let (true, Some(check)) = (erased, parsed.receiver_check()) {
+        let check = concrete.as_ref().map_or_else(|| parsed.receiver_check(), |plan| plan.receiver.clone());
+        if let (true, Some(check)) = (erased, check) {
             let (how, name) = match check {
                 apus_mangle::ReceiverCheck::Instance(name) => ("Instance", name),
                 apus_mangle::ReceiverCheck::Exactly(name) => ("Exactly", name),
@@ -732,7 +774,8 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             entries.push(TokenTree::Group(Group::new(Delimiter::Parenthesis, tokens.into_iter().collect())));
         };
         let of = |n: &apus_mangle::NominalRef| (n.mangled.clone().unwrap_or_default(), n.name.clone(), n.class);
-        if let (Some(ty), Some(who), Some(check)) = (rust_type_tokens(tail, 2).into_iter().next(), rust_receiver_name(tail), parsed.receiver_check()) {
+        let check = concrete.as_ref().map_or_else(|| parsed.receiver_check(), |plan| plan.receiver.clone());
+        if let (Some(ty), Some(who), Some(check)) = (rust_type_tokens(tail, 2).into_iter().next(), rust_receiver_name(tail), check) {
             if let Some(ty) = wrapper_type(ty.1, false, false) {
                 let nominal = match check {
                     apus_mangle::ReceiverCheck::Instance(m) => (m, String::new(), true),

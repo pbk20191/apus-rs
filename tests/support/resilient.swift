@@ -201,6 +201,17 @@ public struct Tray<T> {
     public static func size(plus n: Int) -> Int { MemoryLayout<T>.size + n }
 }
 public func pearTray(count: Int) -> Tray<String> { Tray(item: "pear", count: count) }
+// Specialized generics (tests/swift_generic_auto.rs): every generic parameter bound (`T = "…"`), the type's too.
+public final class Holder<T> {
+    public let item: T
+    public init(item: T) { self.item = item }
+    public func show<U>(_ u: U) -> String { "\(item) \(U.self)" }
+    public static func kind() -> String { "Holder<\(T.self)>" }
+}
+public func holdInt(_ n: Int) -> Holder<Int> { Holder(item: n) }
+public func rank<T: Hashable & Comparable>(_ a: T, _ b: T) -> Int { a < b ? -1 : (a == b ? 0 : 1) }
+public func joined<S: Sequence>(_ s: S) -> String where S.Element == String { s.joined(separator: ",") }
+public func described<S: Sequence>(_ s: S) -> String where S.Element: CustomStringConvertible { s.map(\.description).joined(separator: "+") }
 // A class-bound existential (tests/swift_class_bound.rs): Swift passes and returns it as its reference and witness
 // table, in registers.
 public func anyNamed(_ name: String) -> any Named { Dog(name: name) }

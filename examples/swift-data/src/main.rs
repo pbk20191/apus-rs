@@ -33,9 +33,9 @@ apus::swift! {
     impl ModelContext {
         #[swift = "SwiftData.ModelContext.init(_:)"]
         fn new(container: &ModelContainer) -> ModelContext;
-        #[swift = "SwiftData.ModelContext.insert(_:)"]
+        #[swift = "SwiftData.ModelContext.insert(_:)", T = "Todos.Todo"]
         fn insert(&self, model: &Todo);
-        #[swift = "SwiftData.ModelContext.delete(_:)"]
+        #[swift = "SwiftData.ModelContext.delete(_:)", T = "Todos.Todo"]
         fn delete(&self, model: &Todo);
         #[swift = "SwiftData.ModelContext.save()"]
         fn save(&self) throws;

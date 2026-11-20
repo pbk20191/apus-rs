@@ -132,45 +132,93 @@ pub fn __generic_args(
     GenericArgs { metadata: metadata.to_vec(), witnesses: witnesses.to_vec(), error_slot }
 }
 
-/// The generic arguments of a function whose generic parameters `swift!` binds to concrete types
-/// (`#[swift = "…", T = "Type"]`): each bound type found by its mangled name once, then lowered as [`GenericArgs`].
+/// The generic arguments of a declaration whose generic parameters `swift!` binds to concrete types
+/// (`#[swift = "…", T = "Type"]`): each bound type found by its mangled name once, the declaration's requirements
+/// checked, then lowered as [`GenericArgs`].
 #[doc(hidden)]
 pub struct ConcreteArgs(Result<GenericArgs, Refused>);
 
 enum Refused {
-    /// A type named by the binding is not in the process.
+    /// A type or symbol named by the binding is not in the process.
     Missing(&'static str),
-    /// An argument does not hold the type its declared type is with the bindings substituted.
-    Mismatch,
+    /// A bound type does not conform to a protocol the declaration requires.
+    NotConforming { ty: String, protocol: &'static str },
+    /// The bindings break a requirement the declaration states, or an argument does not hold its bound type.
+    Invalid(&'static str),
 }
 
 /// A type found by its mangled name once, kept where `swift!` put it.
-type Named = (&'static str, std::sync::OnceLock<Option<SwiftType>>);
+#[doc(hidden)]
+pub type Named = (&'static str, std::sync::OnceLock<Option<SwiftType>>);
 
 fn find((name, found): &'static Named) -> Result<SwiftType, Refused> {
     found.get_or_init(|| SwiftType::from_mangled_name(name)).ok_or(Refused::Missing(name))
 }
 
-/// `types`: each generic parameter's bound type; `witnesses`: (generic parameter index, protocol, layout) in canonical
-/// order; `checked` and `actual`: the type each checked argument must hold, and the one it holds.
+/// What a witness table or check is about: a bound type (an index into the call's names), or one's associated type
+/// (the type, the protocol whose conformance gives it, the protocol's `…TL` and the associated type's `…Tl` symbols).
 #[doc(hidden)]
+pub enum BoundSubject {
+    Named(usize),
+    Associated(usize, usize, &'static str, &'static str),
+}
+
+/// `names` and `protocols`: everything the call looks up, which the rest refer to by index. `types`: the metadata
+/// passed; `witnesses`: (subject, protocol, layout) in canonical order; `superclasses`: (bound type, class it must be
+/// or inherit from); `same_types`: (associated type, the type it must be); `error`: a typed-throws error type;
+/// `checked`: (bound type, the type an argument holds), which must be the same.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
 pub fn __concrete_args(
-    types: &'static [Named],
-    witnesses: &[(usize, &'static SwiftProtocol, ProtocolLayout)],
-    checked: &'static [Named],
-    actual: &[SwiftType],
+    names: &'static [Named],
+    protocols: &'static [SwiftProtocol],
+    types: &[usize],
+    witnesses: &[(BoundSubject, usize, ProtocolLayout)],
+    superclasses: &[(usize, usize)],
+    same_types: &[(BoundSubject, usize)],
+    error: Option<usize>,
+    checked: &[(usize, SwiftType)],
 ) -> ConcreteArgs {
+    let name = |i: usize| find(&names[i]);
+    let subject = |subject: &BoundSubject| -> Result<SwiftType, Refused> {
+        match *subject {
+            BoundSubject::Named(i) => name(i),
+            BoundSubject::Associated(i, p, base, descriptor) => {
+                let ty = name(i)?;
+                let protocol = &protocols[p];
+                let Some(conformance) = ty.conformance(protocol) else {
+                    return Err(match protocol.is_available() {
+                        true => Refused::NotConforming { ty: ty.name(), protocol: protocol.descriptor_symbol() },
+                        false => Refused::Missing(protocol.descriptor_symbol()),
+                    });
+                };
+                ty.associated_type(conformance, base, descriptor).ok_or(Refused::Missing(descriptor))
+            }
+        }
+    };
     let build = || {
-        let metadata = types.iter().map(find).collect::<Result<Vec<_>, _>>()?;
-        for (expected, actual) in checked.iter().zip(actual) {
-            if find(expected)? != *actual {
-                return Err(Refused::Mismatch);
+        for &(sub, class) in superclasses {
+            // swift_dynamicCastMetatype (include/swift/Runtime/Casting.h): the type if it is the class or a subclass.
+            if unsafe { rt::swift_dynamicCastMetatype(name(sub)?.as_ptr(), name(class)?.as_ptr()) }.is_null() {
+                return Err(Refused::Invalid("a bound type is not the class its generic parameter requires, nor a subclass of it"));
+            }
+        }
+        for (associated, expected) in same_types {
+            if subject(associated)? != name(*expected)? {
+                return Err(Refused::Invalid("a bound type's associated type is not the one the declaration requires"));
+            }
+        }
+        for &(expected, actual) in checked {
+            if name(expected)? != actual {
+                return Err(Refused::Invalid(
+                    "an argument does not hold the type its generic parameter is bound to (a subclass's object: bind the subclass)",
+                ));
             }
         }
         Ok(GenericArgs {
-            witnesses: witnesses.iter().map(|&(param, protocol, layout)| (metadata[param], protocol, layout)).collect(),
-            metadata,
-            error_slot: None,
+            metadata: types.iter().map(|&i| name(i)).collect::<Result<_, _>>()?,
+            witnesses: witnesses.iter().map(|(on, p, layout)| Ok((subject(on)?, &protocols[*p], *layout))).collect::<Result<_, _>>()?,
+            error_slot: error.map(name).transpose()?,
         })
     };
     ConcreteArgs(build())
@@ -181,9 +229,8 @@ impl SwiftArg for ConcreteArgs {
         match &self.0 {
             Ok(generic) => generic.lower(into),
             Err(Refused::Missing(name)) => into.fail(CallError::Unavailable(name)),
-            Err(Refused::Mismatch) => into.fail(CallError::InvalidArgument(
-                "an argument does not hold the type its generic parameter is bound to (a subclass's object: bind the subclass)",
-            )),
+            Err(Refused::NotConforming { ty, protocol }) => into.fail(CallError::NotConforming { ty: ty.clone(), protocol }),
+            Err(Refused::Invalid(why)) => into.fail(CallError::InvalidArgument(why)),
         }
     }
 }
