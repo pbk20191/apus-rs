@@ -626,6 +626,28 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             generic = front;
         }
     }
+    // A type-erased receiver (`SwiftObject`, `SwiftValue`) is checked against the declaration's type when the call is
+    // made: `receiver this instance|exactly|named "name"`, outermost.
+    if let (Some((_, parsed)), Some(ty), Some(this)) = (&declared, &receiver, rust_receiver_name(tail)) {
+        let erased = matches!(ty.rsplit([':', ' ', '&']).next(), Some("SwiftObject" | "SwiftValue"));
+        if let (true, Some(check)) = (erased, parsed.receiver_check()) {
+            let (how, name) = match check {
+                apus_mangle::ReceiverCheck::Instance(name) => ("Instance", name),
+                apus_mangle::ReceiverCheck::Exactly(name) => ("Exactly", name),
+                apus_mangle::ReceiverCheck::Named(name) => ("Named", name),
+            };
+            let mut front: TokenStream = [
+                TokenTree::Ident(proc_macro::Ident::new("receiver", proc_macro::Span::call_site())),
+                TokenTree::Ident(this),
+                TokenTree::Ident(proc_macro::Ident::new(how, proc_macro::Span::call_site())),
+                TokenTree::Literal(Literal::string(&name)),
+            ]
+            .into_iter()
+            .collect();
+            front.extend(generic);
+            generic = front;
+        }
+    }
     let hop = match declared.as_ref().map(|(d, parsed)| (parsed.isolation(), d)) {
         Some((apus_mangle::Isolation::Actor, d)) => Some(("SelfActor", d)),
         Some((apus_mangle::Isolation::MainActor, d)) => Some(("Main", d)),

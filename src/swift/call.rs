@@ -726,6 +726,15 @@ mod tests {
     }
 }
 
+impl<R> super::func::CheckedCall for SwiftCall<R> {
+    fn checked(mut self, check: Result<(), CallError>) -> Self {
+        if let Err(error) = check {
+            self.invalid = Some(error);
+        }
+        self
+    }
+}
+
 impl<R> super::func::ClassSelf for SwiftCall<R> {
     fn class_self(mut self, class: Result<super::SwiftType, CallError>) -> Self {
         match class {

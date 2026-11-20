@@ -55,6 +55,24 @@ apus::swift! {
     fn nope_type() -> SwiftType;
     #[swift_linked = "Res.dogs(_: [String]) -> [Dog(class)]"]
     fn dogs(names: Vec<String>) -> DirectValue; // an Array: returned in registers
+    #[swift_linked = "Res.Animal(class).name: String { get }"]
+    fn animal_name(self: &SwiftObject) -> String;
+    #[swift_linked = "Res.Meter(struct).init(_: Double)"]
+    fn meter(value: f64) -> SwiftValue;
+    #[swift_linked = "Res.Meter(struct).value: Double { get }"]
+    fn meter_value(self: &SwiftValue) -> f64;
+}
+
+/// A receiver of another type than the declaration's is refused before Swift runs: a class's object (a subclass's
+/// passes), a struct's value, a generic struct's value of another struct.
+fn receivers_are_checked() -> Result<(), Failed> {
+    let invalid = |r: Result<_, CallError>| matches!(r, Err(CallError::InvalidArgument(_)));
+    check(animal_name(&dog("rex").unwrap()).unwrap() == "rex", "a Dog is an Animal")?;
+    check(invalid(animal_name(&minted(1).unwrap()).map(|_| ())), "a Minted is not an Animal")?;
+    check(meter_value(&meter(2.5).unwrap()).unwrap() == 2.5, "a Meter")?;
+    check(invalid(meter_value(&make_boom(1).unwrap()).map(|_| ())), "a Boom is not a Meter")?;
+    check(count(&pear_tray(3).unwrap()).unwrap() == 3, "a Tray<String>")?;
+    check(invalid(count(&meter(1.0).unwrap()).map(|_| ())), "a Meter is not a Tray")
 }
 
 /// Any Sequence, through its conformance: an Array of objects, element by element, then the end.
@@ -128,5 +146,6 @@ fn main() {
         Trial::test("members_of_generic_structs", members_of_generic_structs),
         Trial::test("concrete_bindings", concrete_bindings),
         Trial::test("sequences_iterate", sequences_iterate),
+        Trial::test("receivers_are_checked", receivers_are_checked),
     ]);
 }

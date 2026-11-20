@@ -113,7 +113,10 @@ let text = greet("Kim", 2).await?;          // a SwiftCall<String>: `.child()` a
 - `#[swift = "…"]` resolves the function at run time (missing → `CallError::Unavailable`), `#[swift_linked = "…"]`
   at link time. `#[symbol = "$s…"]` / `#[linked = "$s…"]` take a mangled symbol as is.
 - **Methods and properties**: a leading `self: &SwiftObject` (a class instance) or `self: &SwiftValue` (a struct
-  passed by address) is the receiver. A class's own members are called through their dispatch thunks (`…Tj`) when
+  passed by address) is the receiver. With a declaration (`#[swift]`, `#[swift_linked]`) its type is checked when
+  the call is made, before Swift runs (`CallError::InvalidArgument` if it is another's): an object must be an
+  instance of the class or a subclass, a value of exactly the struct or enum, or for a generic one of the same type
+  whatever its generic arguments. A generic class's and a protocol's members are not checked. A class's own members are called through their dispatch thunks (`…Tj`) when
   the process has them (`#[swift]`): a library-evolution class (every Apple framework's) exports a non-final member
   only that way, and the thunk dispatches to an override as Swift does. A standard library struct's or enum's
   instance member (`Array`'s, `String`'s) is refused: the type is frozen and Swift passes `self` in registers.

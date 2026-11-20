@@ -404,6 +404,100 @@ pub fn __declared_class(class: &'static OnceLock<Option<SwiftType>>, name: &'sta
     class.get_or_init(|| SwiftType::from_mangled_name(name)).ok_or(CallError::Unavailable(name))
 }
 
+/// How [`__check_receiver`] compares a receiver's runtime type with the declaration's.
+#[doc(hidden)]
+#[derive(Clone, Copy)]
+pub enum ReceiverKind {
+    /// A class's object: an instance of the class, or of a subclass (`swift_dynamicCastUnknownClass`).
+    Instance,
+    /// A struct's or enum's value: of exactly the type (concrete metadata is unique).
+    Exactly,
+    /// A generic struct's or enum's value: its qualified type name, without generic arguments (`swift_getTypeName`).
+    Named,
+}
+
+/// A receiver whose Swift type Rust does not know (`SwiftObject`, `SwiftValue`): checked when the call is made.
+#[doc(hidden)]
+pub trait ErasedReceiver {
+    /// The object, if the receiver is one.
+    fn erased_object(&self) -> Option<*mut c_void>;
+    /// The value's type, if the receiver is a value.
+    fn erased_type(&self) -> Option<SwiftType>;
+}
+
+impl ErasedReceiver for SwiftObject {
+    fn erased_object(&self) -> Option<*mut c_void> {
+        Some(self.as_ptr())
+    }
+    fn erased_type(&self) -> Option<SwiftType> {
+        None
+    }
+}
+
+impl ErasedReceiver for SwiftValue {
+    fn erased_object(&self) -> Option<*mut c_void> {
+        None
+    }
+    fn erased_type(&self) -> Option<SwiftType> {
+        Some(self.ty())
+    }
+}
+
+/// Whether `receiver` has the declaration's type `name` (mangled, or for `Named` the qualified name); the type's
+/// metadata is looked up once.
+#[doc(hidden)]
+pub fn __check_receiver<R: ErasedReceiver + ?Sized>(
+    receiver: &R,
+    kind: ReceiverKind,
+    expected: &'static OnceLock<Option<SwiftType>>,
+    name: &'static str,
+) -> Result<(), CallError> {
+    let mismatch = Err(CallError::InvalidArgument("the receiver is not of the declaration's type"));
+    let declared = || expected.get_or_init(|| SwiftType::from_mangled_name(name)).ok_or(CallError::Unavailable(name));
+    match kind {
+        ReceiverKind::Instance => {
+            let Some(object) = receiver.erased_object() else { return mismatch };
+            let class = declared()?;
+            if unsafe { super::rt::swift_dynamicCastUnknownClass(object, class.as_ptr()) }.is_null() {
+                return mismatch;
+            }
+        }
+        ReceiverKind::Exactly => {
+            if receiver.erased_type() != Some(declared()?) {
+                return mismatch;
+            }
+        }
+        ReceiverKind::Named => {
+            let Some(ty) = receiver.erased_type() else { return mismatch };
+            if without_generic_arguments(&ty.name()) != name {
+                return mismatch;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `Res.Tray<Swift.Array<Swift.Int>>.Inner` → `Res.Tray.Inner`.
+fn without_generic_arguments(name: &str) -> String {
+    let mut depth = 0usize;
+    name.chars()
+        .filter(|&c| {
+            match c {
+                '<' => depth += 1,
+                '>' => depth = depth.saturating_sub(1),
+                _ => return depth == 0,
+            }
+            false
+        })
+        .collect()
+}
+
+/// Records a failed check on a prepared call, which then fails with it instead of running.
+#[doc(hidden)]
+pub trait CheckedCall: Sized {
+    fn checked(self, check: Result<(), CallError>) -> Self;
+}
+
 /// Binds [`__declared_class`]'s result as `self`; a class not found is reported when the call is made.
 #[doc(hidden)]
 pub trait ClassSelf: Sized {

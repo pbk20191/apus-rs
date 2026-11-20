@@ -124,6 +124,18 @@ pub enum Isolation {
     MainActor,
 }
 
+/// How a call checks an instance member's receiver against the declaration's type, by its runtime type.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReceiverCheck {
+    /// A class's object: an instance of the class named (mangled), or of a subclass.
+    Instance(String),
+    /// A struct's or enum's value: of exactly the type named (mangled).
+    Exactly(String),
+    /// A generic struct's or enum's value: its type's qualified name, generic arguments left out, is this one
+    /// (`SwiftData.FetchResultsCollection`).
+    Named(String),
+}
+
 /// What a call passes as `self` for the type itself: a static member or an initializer gets its type's metatype.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TypeSelf {
@@ -472,6 +484,31 @@ impl Declaration {
             _ if decl.main_actor => Isolation::MainActor,
             _ if actor_member => Isolation::Actor,
             _ => Isolation::None,
+        }
+    }
+
+    /// How a call checks that an instance member's receiver has the declaration's type (see [`ReceiverCheck`]);
+    /// `None` for a free function, a static member or initializer, a protocol's member, or a generic class's.
+    pub fn receiver_check(&self) -> Option<ReceiverCheck> {
+        let decl = &self.0;
+        if decl.is_static || decl.name == "init" {
+            return None;
+        }
+        let kind = match fixed_self(decl) {
+            Some(ast::Ty::Nominal { path, .. }) => path.last().map(|(_, kind)| *kind)?,
+            Some(_) => return None,
+            None => decl.context.last().map(|(_, kind)| *kind)?,
+        };
+        let concrete = self.context_type_name();
+        match kind {
+            ast::Kind::Class | ast::Kind::Actor | ast::Kind::TypedefClass => concrete.map(ReceiverCheck::Instance),
+            ast::Kind::Struct | ast::Kind::Enum | ast::Kind::TypedefStruct => Some(match concrete {
+                Some(name) => ReceiverCheck::Exactly(name),
+                None => ReceiverCheck::Named(
+                    std::iter::once(decl.module.as_str()).chain(decl.context.iter().map(|(name, _)| name.as_str())).collect::<Vec<_>>().join("."),
+                ),
+            }),
+            ast::Kind::Protocol => None,
         }
     }
 
@@ -1250,6 +1287,15 @@ mod isolation_tests {
             assert!(error.contains("standard library"), "{frozen}: {error}");
         }
         assert!(super::check_callable("static Swift.Array<Element>.f() -> Int").is_ok());
+        // A receiver is checked by its type: a class's object by cast, a value's type exactly or by name.
+        use super::ReceiverCheck::*;
+        let receiver = |d: &str| super::Declaration::parse(d).unwrap().receiver_check();
+        assert_eq!(receiver("Todos.Todo(class).title: String { get }"), Some(Instance("5Todos4TodoC".into())));
+        assert_eq!(receiver("Res.Meter(struct).value: Double { get }"), Some(Exactly("3Res5MeterV".into())));
+        assert_eq!(receiver("SwiftData.FetchResultsCollection(struct)<Element>.endIndex: Int { get }"), Some(Named("SwiftData.FetchResultsCollection".into())));
+        for unchecked in ["M.f()", "static M.S(struct).f()", "M.C(class).init()", "M.C(class)<T>.f()", "M.P(protocol).f()"] {
+            assert_eq!(receiver(unchecked), None, "{unchecked}");
+        }
         // Results Swift returns in registers, which a by-address `SwiftValue` would read as garbage.
         let in_registers = |d: &str| super::Declaration::parse(d).unwrap().result_in_registers();
         for direct in ["M.f() -> [M.S(struct)]", "M.f() -> [String: Int]?", "M.f() -> Set<Int>", "M.f() -> M.C(class)?", "M.v: String { get }"] {

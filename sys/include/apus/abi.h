@@ -276,6 +276,9 @@ extern void *swift_projectBox(void *box) APUS_C;
 extern const void *swift_conformsToProtocol(const void *metadata, const void *protocol) APUS_C;
 extern const void *swift_getObjectType(void *object) APUS_C;
 extern bool swift_dynamicCast(void *dest, void *src, const void *src_type, const void *target_type, size_t flags) APUS_C;
+// The object if it is an instance of target_type (a Swift or Objective-C class, or a subclass), else null; no retain
+// (include/swift/Runtime/Casting.h).
+extern const void *swift_dynamicCastUnknownClass(const void *object, const void *target_type) APUS_C;
 extern void swift_getErrorValue(const void *error, void **scratch, ErrorValueResult *out) APUS_C;
 extern const void *swift_getExistentialTypeMetadata(bool class_constraint_any, const void *superclass, size_t count,
                                                     const void *protocols) APUS_C;

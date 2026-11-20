@@ -264,6 +264,15 @@ fn actor_executor(actor: *mut c_void) -> Option<super::rt::SerialExecutorRef> {
     }
 }
 
+impl<R> super::func::CheckedCall for SwiftSyncCall<R> {
+    fn checked(mut self, check: Result<(), CallError>) -> Self {
+        if let Err(error) = check {
+            self.invalid = Some(error);
+        }
+        self
+    }
+}
+
 impl<R> super::func::ClassSelf for SwiftSyncCall<R> {
     fn class_self(mut self, class: Result<SwiftType, CallError>) -> Self {
         match class {

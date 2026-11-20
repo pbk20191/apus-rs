@@ -27,7 +27,9 @@
 ///   - `#[swift_linked = "…"]`: the same, bound at link time; a missing function fails the build.
 ///   - `#[symbol = "$s…"]` / `#[linked = "$s…"]`: the mangled symbol itself, at run time / at link time.
 /// - A leading `self: &SwiftObject` or `self: &SwiftValue` declares a method or property of that receiver:
-///   `fn total(self: &SwiftValue) -> i64;` is called as `total(&cart)`.
+///   `fn total(self: &SwiftValue) -> i64;` is called as `total(&cart)`. The receiver's type is checked against the
+///   declaration's when the call is made (`CallError::InvalidArgument`): a class's object by cast (a subclass's
+///   passes), a struct's or enum's value exactly, a generic one's by its type whatever the generic arguments.
 /// - An initializer (`Module.Type(kind).init(…)`, returning the type unless written: `-> T?` when failable) or a
 ///   static member takes the type's metatype as `self`: a class's is its metadata, a struct's or enum's is nothing.
 ///   For a class, declare no `self` and apus passes the declared class (looked up by name; `CallError::Unavailable`
@@ -491,6 +493,14 @@ macro_rules! __swift_call {
         let declared = $declared;
         $(let declared = declared.of_type(__apus_self_type.generic_argument($n));)?
         $crate::__swift_call!($function [$($f,)* __apus_self_type $(, $g)*] [$($generic)*] declared)
+    }};
+    // `receiver this Instance|Exactly|Named "name"`: a type-erased receiver, checked against the declaration's type
+    // (see `ReceiverKind`) before the call is made.
+    ($function:ident [$($arg:ident),*] [receiver $this:ident $how:ident $name:literal $($generic:tt)*] $declared:expr) => {{
+        static EXPECTED: ::std::sync::OnceLock<::core::option::Option<$crate::swift::SwiftType>> = ::std::sync::OnceLock::new();
+        let checked = $crate::swift::__check_receiver(&*$this, $crate::swift::ReceiverKind::$how, &EXPECTED, $name);
+        let call = $crate::__swift_call!($function [$($arg),*] [$($generic)*] $declared);
+        $crate::swift::CheckedCall::checked(call, checked)
     }};
     // `classself "name"`: a class's initializer or static member declared without `self`: the class's metadata,
     // found by its mangled name, is `self`.
