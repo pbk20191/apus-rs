@@ -114,3 +114,17 @@
 - mangle 단위 테스트: `bind`가 만드는 `ConcretePlan`(순서와 검사 목록).
 - 버그 수정: generic class의 제약 extension 멤버 거부(mangle 단위 테스트, RED 먼저).
 - compile_fail: 이름만 쓴 제네릭 선언에 bindings가 없는 경우.
+
+## 추가 (2026-11-21): 제약 있는 extension의 멤버
+
+- 소유자가 위의 승인 항목을 받아들였다(2026-11-21).
+- 다시 실험해서 확인한 순서:
+  - `extension Box where T: P { func b<U: Q>(_: U) }`: `u, Box<T> metadata, U, T.P, U.Q, self`.
+  - 클래스는 같은 순서에서 `Self` metadata만 빠진다. static 멤버와 init은 `T.P, self`.
+  - 멤버 자신의 `where T: Q`(`func d() where T: Q`)도 같다.
+  - 즉 `self`가 주지 않는 witness table(타입 선언에 없는 준수)이 정규 요구사항 순서로 멤버 자신의 것들 사이에 들어간다.
+- bindings가 있을 때만 부를 수 있다. 묶은 타입에서 witness table을 찾는다.
+  - 묶지 않으면 컴파일 오류이다.
+  - 프로토콜 extension(`where Self: Q`)은 여전히 거부한다.
+- **버그 수정:** 묶지 않은 `func d() where T: Q`(멤버 자신이 타입의 파라미터에 준수를 더하는 경우)는 `check_callable`을
+  통과했다. 그래서 witness table 없이 호출되었다(UB). 이제 거부한다.

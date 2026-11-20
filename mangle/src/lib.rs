@@ -584,13 +584,6 @@ impl Declaration {
         let subject_param = |subject: &Subject| match subject {
             Subject::Param(param) | Subject::Member(param, _) => *param,
         };
-        // A requirement the member adds to its type's parameters (`func f() where T: P`) is one more witness table
-        // after what `self` gives (observed): refused, as an extension's is.
-        if !value_static && decl.context_params > 0 {
-            if decl.requirements.iter().any(|r| matches!(r, Requirement::Conforms(subject, protocol) if subject_param(subject).depth == 0 && !protocol.is_marker())) {
-                return Err(Error("a member that adds a conformance to its type's parameters takes that conformance's witness table too: not supported".into()));
-            }
-        }
         // The protocol declaring an associated type: the one written (`T.Value(of P)`), or the parameter's one.
         let associated = |param: GenericParam, member: &str| -> Result<BoundType, Error> {
             let protocol = match decl.associated_protocols.iter().find(|((p, n), _)| *p == param && n == member) {
@@ -614,10 +607,12 @@ impl Declaration {
         let mut same_types = Vec::new();
         let owned: Vec<Requirement> = requirements.iter().map(|r| (*r).clone()).collect();
         for requirement in mangler::sorted_requirements(&owned) {
-            let takes_witness = passed(&subject_param(match &requirement {
-                Requirement::Conforms(subject, _) | Requirement::SameType(subject, _) | Requirement::Superclass(subject, _) => subject,
-                Requirement::AnyObject(subject) => subject,
-            }));
+            // What `self` does not give: the member's own, and a conformance added to its type's parameters.
+            let takes_witness = self.added(&requirement)
+                || passed(&subject_param(match &requirement {
+                    Requirement::Conforms(subject, _) | Requirement::SameType(subject, _) | Requirement::Superclass(subject, _) => subject,
+                    Requirement::AnyObject(subject) => subject,
+                }));
             match requirement {
                 Requirement::Conforms(_, ref protocol) if protocol.is_marker() => {}
                 Requirement::Conforms(subject, protocol) => {
@@ -938,23 +933,55 @@ impl Declaration {
 
     /// See [`check_callable`].
     pub fn check_callable(&self) -> Result<(), Error> {
+        self.check(false)
+    }
+
+    /// [`check_callable`](Self::check_callable) for a declaration whose generic parameters are all bound
+    /// ([`bind`](Self::bind)): a conformance added to its type's parameters is then passed too.
+    pub fn check_bound_callable(&self) -> Result<(), Error> {
+        self.check(true)
+    }
+
+    /// A conformance an extension or the member itself adds to its type's parameters (`where T: P`), which `self`
+    /// does not give: one more witness table, in canonical order among the member's own generic arguments (observed,
+    /// accepted 2026-11-21: `(Box<T> metadata, U, T.P, U.Q, self)`, a class's `(U, T.P, U.Q, self)`).
+    fn added(&self, requirement: &ast::Requirement) -> bool {
+        use ast::{Requirement, Subject};
+        let decl = &self.0;
+        match requirement {
+            Requirement::Conforms(Subject::Param(param) | Subject::Member(param, _), protocol) => {
+                param.depth == 0
+                    && !protocol.is_marker()
+                    && !decl.context_requirements.contains(requirement)
+                    && !decl.context_extension.iter().any(|e| e.requirements.contains(requirement))
+            }
+            _ => false,
+        }
+    }
+
+    fn adds_conformance(&self) -> bool {
+        let decl = &self.0;
+        let member = decl.requirements.iter().filter(|_| decl.context_params > 0);
+        extension_requirements(decl).chain(member).any(|r| self.added(r))
+    }
+
+    fn check(&self, bound: bool) -> Result<(), Error> {
         if let ast::Signature::Case(_) = &self.0.signature {
             return Err(Error("an enum case is not callable: `mangle!` gives its tag symbol, for `SwiftEnumCase`".into()));
         }
-        // A conformance an extension adds (`where T: P`) is one more witness table, which an instance member of a
-        // generic struct or enum takes after `Self`'s metadata, and a generic class's member or a protocol
-        // extension's member besides what `self` gives (observed, not documented). A struct's or enum's static member
-        // or initializer takes its whole signature's generic arguments, the added conformance's among them.
-        let added = extension_requirements(&self.0).any(|r| match r {
-            ast::Requirement::Conforms(_, protocol) => !protocol.is_marker() && !self.0.context_requirements.contains(r),
-            _ => false,
-        });
+        // An added conformance's witness table is found from the bound type; a struct's or enum's static member or
+        // initializer takes its whole signature's generic arguments, the added conformance's among them. A protocol's
+        // `Self` is not bound.
         let value_static = self.value_context() == ValueContext::GenericArguments;
-        if added && !value_static {
+        let protocol = self.0.context.last().is_some_and(|(_, kind)| *kind == ast::Kind::Protocol);
+        if self.adds_conformance() && !value_static && (!bound || protocol) {
             return Err(Error(
-                "a member of a generic type or protocol in an extension that adds a conformance (`where T: P`) is not \
-                 supported: it takes that conformance's witness table too"
-                    .into(),
+                if protocol {
+                    "a protocol extension's member that adds a conformance (`where Self: P`) is not supported: it takes that conformance's witness table too"
+                } else {
+                    "a member of a generic type that adds a conformance (`where T: P`) takes that conformance's witness table too: bind its generic parameters (`T = \"…\"`) to call it"
+                }
+                .into(),
             ));
         }
         let value = matches!(self.0.context.last(), Some((_, ast::Kind::Struct | ast::Kind::Enum)));
@@ -1598,6 +1625,37 @@ mod isolation_tests {
         assert!(error("M.Box(struct)<T>.map<U>(_: U) -> Int", &[("U", "Swift.Int")]).contains("`T` is not bound"));
         assert!(error("M.Box(struct)<T>.map<T>(_: T) -> Int", &[("T", "Swift.Int")]).contains("names two generic parameters"));
         assert!(error("M.P(protocol).f<U>(_: U) -> Int", &[("U", "Swift.Int")]).contains("protocol"));
+    }
+
+    #[test]
+    fn bind_passes_added_conformances() {
+        use super::{BoundType, Declaration, ProtocolLayout};
+        let parse = |d: &str| Declaration::parse(d).unwrap();
+        let named = |n: &str| BoundType::Named(n.into());
+        // A conformance an extension or the member adds to the type's parameters is one more witness table, in
+        // canonical order among the member's own (observed, accepted 2026-11-21): `(Box<T>, U, T.P, U.Q, self)`.
+        let b = parse("(extension in M where T: P) M.Box(struct)<T>.b<U: Q>(_: U) -> Int");
+        let plan = b.bind(&[("T", "Swift.Int"), ("U", "M.S(struct)")]).unwrap();
+        assert_eq!(plan.types, ["1M1SV"]);
+        assert_eq!(
+            plan.witnesses,
+            [(named("Si"), "$s1M1PMp".into(), ProtocolLayout::Any), (named("1M1SV"), "$s1M1QMp".into(), ProtocolLayout::Any)]
+        );
+        // The type's own requirement comes with `self`; only the added one is passed. A member's own `where`, too.
+        let c = parse("(extension in M where T: Q) M.GBox(class)<T: P>.c() -> Int").bind(&[("T", "Swift.Int")]).unwrap();
+        assert_eq!(c.witnesses, [(named("Si"), "$s1M1QMp".into(), ProtocolLayout::Any)]);
+        let d = parse("M.Box(struct)<T>.d() -> Int where T: Q").bind(&[("T", "Swift.Int")]).unwrap();
+        assert_eq!(d.witnesses, [(named("Si"), "$s1M1QMp".into(), ProtocolLayout::Any)]);
+        // Bound, they are callable; unbound, nothing would pass the witness table.
+        for added in [
+            "(extension in M where T: P) M.Box(struct)<T>.b<U: Q>(_: U) -> Int",
+            "M.Box(struct)<T>.d() -> Int where T: Q",
+            "static (extension in M where T: P) M.GBox(class)<T>.s() -> Int",
+        ] {
+            assert!(parse(added).check_bound_callable().is_ok(), "{added}");
+            let error = parse(added).check_callable().unwrap_err().to_string();
+            assert!(error.contains("bind"), "{added}: {error}");
+        }
     }
 
     #[test]

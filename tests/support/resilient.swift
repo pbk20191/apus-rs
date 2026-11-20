@@ -209,6 +209,16 @@ public final class Holder<T> {
     public static func kind() -> String { "Holder<\(T.self)>" }
 }
 public func holdInt(_ n: Int) -> Holder<Int> { Holder(item: n) }
+// A conformance an extension or a member adds to the type's parameter: its witness table is passed too.
+public protocol Weighed { var weight: Int { get } }
+extension Int: Weighed { public var weight: Int { self * 10 } }
+extension Holder where T: Weighed {
+    public func weighed<U: CustomStringConvertible>(_ u: U) -> String { "\(item.weight) \(u)" }
+    public static func unit() -> Int { T.self == Int.self ? 1 : 0 }
+}
+extension Tray where T: Weighed { public func weight() -> Int { item.weight * count } }
+extension Tray { public func heaviest() -> Int where T: Comparable { count } }
+public func intTray(count: Int) -> Tray<Int> { Tray(item: 4, count: count) }
 public func rank<T: Hashable & Comparable>(_ a: T, _ b: T) -> Int { a < b ? -1 : (a == b ? 0 : 1) }
 public func joined<S: Sequence>(_ s: S) -> String where S.Element == String { s.joined(separator: ",") }
 public func described<S: Sequence>(_ s: S) -> String where S.Element: CustomStringConvertible { s.map(\.description).joined(separator: "+") }

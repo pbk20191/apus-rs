@@ -339,9 +339,11 @@ Bindings name every generic parameter, a generic type's too, which specializes t
 - A generic declaration written by name (`Res.renamed(_:suffix:)`) must bind every parameter.
 - Not bindable: a protocol member's `Self` (call it on `Opened`), `nonisolated(nonsending)` functions, typed throws of
   an associated type, a static member or initializer of an extension that fixes some of the type's parameters.
-- A member of a generic type or protocol in an extension that adds a conformance (`extension Box where T: P`), other
-  than a struct's or enum's static member or initializer, is refused, bound or not: it takes that conformance's witness
-  table besides what `self` gives, which swiftc does but no document states.
+- A member of a generic type that adds a conformance to the type's parameters (`extension Box where T: P`, or
+  `func f() where T: P`) takes that conformance's witness table besides what `self` gives (observed, accepted
+  2026-11-21): bound, apus finds it from the bound type and passes it; unbound, it is refused (a struct's or enum's
+  static member or initializer takes all its generic arguments explicitly, as before). A protocol extension's member
+  that adds one (`where Self: P`) is refused.
 
 ### Enums
 

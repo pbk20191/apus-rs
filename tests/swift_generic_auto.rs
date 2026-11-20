@@ -51,6 +51,18 @@ apus::swift! {
     fn show_string_holder(self: &SwiftObject, u: &SwiftValue) -> String;
     #[swift_linked = "static Res.Holder(class)<T>.kind() -> String", T = "Swift.Int"]
     fn holder_kind() -> String;
+    #[swift_linked = "(extension in Res where T: Weighed) Res.Holder(class)<T>.weighed<U: CustomStringConvertible>(_: U) -> String", T = "Swift.Int", U = "Swift.Int"]
+    fn weighed(self: &SwiftObject, u: &SwiftValue) -> String;
+    #[swift_linked = "static (extension in Res where T: Weighed) Res.Holder(class)<T>.unit() -> Int", T = "Swift.Int"]
+    fn holder_unit() -> i64;
+    #[swift_linked = "Res.intTray(count: Int) -> Tray(struct)<Int>"]
+    fn int_tray(count: i64) -> SwiftValue;
+    #[swift_linked = "(extension in Res where T: Weighed) Res.Tray(struct)<T>.weight() -> Int", T = "Swift.Int"]
+    fn tray_weight(self: &SwiftValue) -> i64;
+    #[swift_linked = "(extension in Res where T: Weighed) Res.Tray(struct)<T>.weight() -> Int", T = "Swift.String"]
+    fn string_tray_weight(self: &SwiftValue) -> i64; // refused before the call: String is not Weighed
+    #[swift_linked = "Res.Tray(struct)<T>.heaviest() -> Int where T: Comparable", T = "Swift.Int"]
+    fn heaviest(self: &SwiftValue) -> i64;
     #[swift_linked = "Res.rank<T: Hashable & Comparable>(_: T, _: T) -> Int", T = "Swift.Int"]
     fn rank(a: &SwiftValue, b: &SwiftValue) -> i64;
     #[swift_linked = "Res.joined<S: Sequence>(_: S) -> String where S.Element == String", S = "[Swift.String]"]
@@ -230,6 +242,13 @@ fn specialized_generics() -> Result<(), Failed> {
     check(show(&holder, &SwiftValue::new(true)).unwrap() == "7 Bool", "Holder<Int>.show<Bool>")?;
     check(matches!(show_string_holder(&holder, &SwiftValue::new(true)), Err(CallError::InvalidArgument(_))), "a Holder<Int> for Holder<String>")?;
     check(holder_kind().unwrap() == "Holder<Int>", "static member of Holder<Int>, its class as self")?;
+    // A conformance an extension or the member adds to the type's parameter: its witness table is passed too.
+    check(weighed(&holder, &SwiftValue::new(2i64)).unwrap() == "70 2", "Holder<Int> where T: Weighed")?;
+    check(holder_unit().unwrap() == 1, "static member where T: Weighed")?;
+    let ints = int_tray(3).unwrap();
+    check(tray_weight(&ints).unwrap() == 120, "Tray<Int> where T: Weighed")?;
+    check(heaviest(&ints).unwrap() == 3, "func heaviest() where T: Comparable")?;
+    check(string_tray_weight(&ints).is_err(), "String is not Weighed")?;
     check(rank(&SwiftValue::new(1i64), &SwiftValue::new(2i64)).unwrap() == -1, "Hashable & Comparable")?;
     let words = SwiftValue::new(vec!["a".to_string(), "b".to_string()]);
     check(joined(&words).unwrap() == "a,b", "S.Element == String")?;

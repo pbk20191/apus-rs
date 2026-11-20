@@ -382,7 +382,8 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     }
     let rust_error_slot = tail.iter().any(|t| matches!(t, TokenTree::Group(g) if mentions(g.stream(), "ErrorSlot")));
     if let Some((declaration, parsed)) = &declared {
-        if let Err(error) = parsed.check_callable() {
+        let callable = if concrete.is_some() { parsed.check_bound_callable() } else { parsed.check_callable() };
+        if let Err(error) = callable {
             return item_compile_error(&format!("`{declaration}`: {error}"));
         }
         // The symbol a member of an SDK module is called through must be one the module exports.
