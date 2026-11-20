@@ -318,6 +318,13 @@ impl SwiftValue {
         Ok(unsafe { super::SwiftObject::from_raw(object) })
     }
 
+    /// A copy of the initialized value of type `ty` at `value` (its value witness `initializeWithCopy`).
+    pub(crate) unsafe fn copy_of(value: *const c_void, ty: SwiftType) -> SwiftValue {
+        let storage = UninitValue::new(ty);
+        (rt::value_witnesses(ty.0).initialize_with_copy.unwrap())(storage.ptr.as_ptr().cast(), value as *mut c_void, ty.0);
+        storage.assume_init()
+    }
+
     /// Gives up the value: the storage, no longer initialized (after something consumed the value in place).
     pub(crate) fn into_uninit(self) -> UninitValue {
         let this = std::mem::ManuallyDrop::new(self);

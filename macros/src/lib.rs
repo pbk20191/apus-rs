@@ -116,6 +116,33 @@ pub fn swift_type(input: TokenStream) -> TokenStream {
     }
 }
 
+/// `swift!`'s typed wrappers: `(class|struct|enum "Module.Type(kind)")` expands to the tuple (mangled name, qualified
+/// name without generic arguments, whether a class), or a compile error if the type is not a concrete one of that kind.
+#[doc(hidden)]
+#[proc_macro]
+pub fn __swift_wrapper_names(input: TokenStream) -> TokenStream {
+    let tokens = flatten(input);
+    let [TokenTree::Ident(kind), literal] = tokens.as_slice() else {
+        return compile_error("__swift_wrapper_names: expected `class|struct|enum \"Module.Type(kind)\"`");
+    };
+    let Some(ty) = string_literal(literal) else { return compile_error("expected the Swift type as a string literal") };
+    match apus_mangle::wrapper_type(&kind.to_string(), &ty) {
+        Ok((mangled, name)) => {
+            let items: TokenStream = [
+                TokenTree::Literal(Literal::string(&mangled)),
+                TokenTree::Punct(proc_macro::Punct::new(',', proc_macro::Spacing::Alone)),
+                TokenTree::Literal(Literal::string(&name)),
+                TokenTree::Punct(proc_macro::Punct::new(',', proc_macro::Spacing::Alone)),
+                TokenTree::Ident(proc_macro::Ident::new(if kind.to_string() == "class" { "true" } else { "false" }, proc_macro::Span::call_site())),
+            ]
+            .into_iter()
+            .collect();
+            TokenTree::Group(Group::new(Delimiter::Parenthesis, items)).into()
+        }
+        Err(error) => compile_error(&format!("swift! {kind} wrapper: {error}")),
+    }
+}
+
 /// Expands to a protocol's descriptor symbol (a string literal), for `SwiftProtocol::new`:
 ///
 /// ```ignore
@@ -648,6 +675,55 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             generic = front;
         }
     }
+    // Typed wrappers as the receiver, arguments or result: checked against the declaration's types at compile time
+    // (`typed [(value who (Type) "mangled" "name" class) (result (Type) …)]`, outermost).
+    if let Some((_, parsed)) = &declared {
+        let mut entries: Vec<TokenTree> = Vec::new();
+        let mut entry = |role: &str, who: Option<proc_macro::Ident>, ty: Vec<TokenTree>, nominal: (String, String, bool)| {
+            let mut tokens = vec![TokenTree::Ident(proc_macro::Ident::new(role, proc_macro::Span::call_site()))];
+            tokens.extend(who.map(TokenTree::Ident));
+            tokens.push(TokenTree::Group(Group::new(Delimiter::Parenthesis, ty.into_iter().collect())));
+            tokens.push(TokenTree::Literal(Literal::string(&nominal.0)));
+            tokens.push(TokenTree::Literal(Literal::string(&nominal.1)));
+            tokens.push(TokenTree::Ident(proc_macro::Ident::new(if nominal.2 { "true" } else { "false" }, proc_macro::Span::call_site())));
+            entries.push(TokenTree::Group(Group::new(Delimiter::Parenthesis, tokens.into_iter().collect())));
+        };
+        let of = |n: &apus_mangle::NominalRef| (n.mangled.clone().unwrap_or_default(), n.name.clone(), n.class);
+        if let (Some(ty), Some(who), Some(check)) = (rust_type_tokens(tail, 2).into_iter().next(), rust_receiver_name(tail), parsed.receiver_check()) {
+            if let Some(ty) = wrapper_type(ty.1, false, false) {
+                let nominal = match check {
+                    apus_mangle::ReceiverCheck::Instance(m) => (m, String::new(), true),
+                    apus_mangle::ReceiverCheck::Exactly(m) => (m, String::new(), false),
+                    apus_mangle::ReceiverCheck::Named(n) => (String::new(), n, false),
+                };
+                entry("value", Some(who), ty, nominal);
+            }
+        }
+        let params = concrete.as_ref().map_or_else(|| parsed.nominal_params(), |plan| plan.nominal_params.clone());
+        for ((who, ty), nominal) in rust_type_tokens(tail, 3).into_iter().zip(params) {
+            if let (Some(n), Some(who)) = (nominal.filter(|n| !n.optional && !n.array), who) {
+                if let Some(ty) = wrapper_type(ty, false, false) {
+                    entry("value", Some(who), ty, of(&n));
+                }
+            }
+        }
+        let result = concrete.as_ref().map_or_else(|| parsed.nominal_result(), |plan| plan.nominal_result.clone());
+        if let (Some(n), Some((_, ty))) = (result, rust_type_tokens(tail, 5).into_iter().next()) {
+            if let Some(ty) = wrapper_type(ty, n.optional, n.array) {
+                entry("result", None, ty, of(&n));
+            }
+        }
+        if !entries.is_empty() {
+            let mut front: TokenStream = [
+                TokenTree::Ident(proc_macro::Ident::new("typed", proc_macro::Span::call_site())),
+                TokenTree::Group(Group::new(Delimiter::Bracket, entries.into_iter().collect())),
+            ]
+            .into_iter()
+            .collect();
+            front.extend(generic);
+            generic = front;
+        }
+    }
     let hop = match declared.as_ref().map(|(d, parsed)| (parsed.isolation(), d)) {
         Some((apus_mangle::Isolation::Actor, d)) => Some(("SelfActor", d)),
         Some((apus_mangle::Isolation::MainActor, d)) => Some(("Main", d)),
@@ -722,6 +798,80 @@ fn rust_receiver(tail: &[TokenTree]) -> Option<String> {
     let text: String = flatten(receiver.stream()).iter().map(|t| t.to_string()).collect::<Vec<_>>().join(" ");
     let ty = text.split_once(':').map_or(text.as_str(), |(_, ty)| ty).trim();
     (!ty.is_empty()).then(|| ty.to_string())
+}
+
+/// The Rust types in the signature's `n`th bracket group (2: the receiver, 3: the arguments, 5: the result), each
+/// with the name it is bound to, flattened.
+fn rust_type_tokens(tail: &[TokenTree], n: usize) -> Vec<(Option<proc_macro::Ident>, Vec<TokenTree>)> {
+    let Some(group) = tail.iter().filter_map(|t| match t {
+        TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket => Some(g),
+        _ => None,
+    }).nth(n) else { return Vec::new() };
+    let tokens = flatten(group.stream());
+    if n == 5 {
+        return if tokens.is_empty() { Vec::new() } else { vec![(None, tokens)] };
+    }
+    let mut out = Vec::new();
+    let (mut name, mut ty, mut angle) = (None, Vec::new(), 0i32);
+    let mut i = 0;
+    while i < tokens.len() {
+        match &tokens[i] {
+            TokenTree::Ident(ident) if name.is_none() && matches!(tokens.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == ':') => {
+                name = Some(ident.clone());
+                i += 1; // the `:`
+            }
+            TokenTree::Punct(p) if p.as_char() == ',' && angle == 0 => {
+                out.push((name.take(), std::mem::take(&mut ty)));
+            }
+            token => {
+                if let TokenTree::Punct(p) = token {
+                    angle += match p.as_char() { '<' => 1, '>' => -1, _ => 0 };
+                }
+                ty.push(token.clone());
+            }
+        }
+        i += 1;
+    }
+    if !ty.is_empty() {
+        out.push((name, ty));
+    }
+    out
+}
+
+/// The wrapper type a Rust type names, if it may be one: `&`/`&mut` left out, and `Option<…>` (`optional`) or
+/// `Vec<…>` (`array`) where the Swift type is written so; `None` for a type-erased or plain Rust type.
+fn wrapper_type(ty: Vec<TokenTree>, optional: bool, array: bool) -> Option<Vec<TokenTree>> {
+    let mut ty: &[TokenTree] = &ty;
+    while let [TokenTree::Punct(p), rest @ ..] = ty {
+        if p.as_char() != '&' {
+            break;
+        }
+        ty = rest;
+    }
+    if let [TokenTree::Ident(m), rest @ ..] = ty {
+        if m.to_string() == "mut" {
+            ty = rest;
+        }
+    }
+    if optional || array {
+        let outer = if optional { "Option" } else { "Vec" };
+        match ty {
+            [TokenTree::Ident(o), TokenTree::Punct(lt), inner @ .., TokenTree::Punct(gt)]
+                if o.to_string() == outer && lt.as_char() == '<' && gt.as_char() == '>' => ty = inner,
+            _ => return None,
+        }
+    }
+    let last = ty.iter().rev().find_map(|t| match t {
+        TokenTree::Ident(i) => Some(i.to_string()),
+        _ => None,
+    })?;
+    const NOT_WRAPPERS: &[&str] = &[
+        "SwiftObject", "SwiftValue", "DirectValue", "Retained", "Existential", "SwiftType", "OpenedType", "Opened",
+        "SwiftError", "SwiftClosure", "WitnessTable", "ErrorSlot", "Isolation", "String", "str", "bool", "i8", "i16",
+        "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize", "f32", "f64",
+    ];
+    let generic = ty.iter().any(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == '<'));
+    (!generic && !NOT_WRAPPERS.contains(&last.as_str())).then(|| ty.to_vec())
 }
 
 /// The Rust signature's receiver name (`self`), if it has one.

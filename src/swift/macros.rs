@@ -250,6 +250,52 @@
 /// }
 /// ```
 ///
+/// **Typed wrappers.** `class Name = "Module.Type(class)";` (or `struct`, `enum`) declares a Rust type standing for one
+/// concrete Swift type, holding a `SwiftObject` (or `SwiftValue`), which it derefs to; `Name::try_from(erased)` checks
+/// the value's type. In `impl Name { … }`, `&self` (`&mut self`) is the receiver. A wrapper as a receiver, an
+/// argument (`&Name`) or a result (`Name`, `Option<Name>` for a class's optional, `Vec<Name>` for an array) must be the
+/// declaration's type: another struct's or enum's, or another type's result, is a compile error. A class's wrapper
+/// where another class is declared is checked when the call is made (a subclass's object passes).
+///
+/// ```
+/// apus::swift! {
+///     class Dog = "Res.Dog(class)";
+///     impl Dog {
+///         #[swift_linked = "Res.Animal(class).name: String { get }"]
+///         fn name(&self) -> String; // a superclass's member: checked by cast
+///     }
+///     #[swift_linked = "Res.dogs(_: [String]) -> [Dog(class)]"]
+///     fn dogs(names: Vec<String>) -> Vec<Dog>;
+/// }
+/// ```
+///
+/// ```compile_fail
+/// apus::swift! {
+///     struct Meter = "Res.Meter(struct)";
+///     impl Meter {
+///         #[swift_linked = "Res.Animal(class).name: String { get }"]
+///         fn name(&self) -> String; // a Meter is no Animal
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// apus::swift! {
+///     class Dog = "Res.Dog(class)";
+///     struct Meter = "Res.Meter(struct)";
+///     #[swift_linked = "Res.Meter(struct).init(_: Double)"]
+///     fn meter(value: f64) -> Dog; // the result is a Meter
+/// }
+/// ```
+///
+/// ```compile_fail
+/// apus::swift! {
+///     struct Meter = "Res.Meter(struct)";
+///     #[swift_linked = "Res.labelOf<T: Named(AnyObject)>(_: T) -> String", T = "Res.Dog(class)"]
+///     fn label_of(dog: &Meter) -> String; // a Meter is no Dog
+/// }
+/// ```
+///
 /// A declaration that cannot be mangled is a compile error:
 ///
 /// ```compile_fail
@@ -277,6 +323,27 @@
 macro_rules! swift {
     () => {};
 
+    // A typed wrapper: a Rust type standing for one Swift class, struct or enum.
+    ($(#[doc = $doc:literal])* $vis:vis class $name:ident = $spec:literal; $($rest:tt)*) => {
+        $crate::__swift_wrapper! { [$(#[doc = $doc])*] $vis $name class SwiftObject $spec }
+        $crate::swift! { $($rest)* }
+    };
+    ($(#[doc = $doc:literal])* $vis:vis struct $name:ident = $spec:literal; $($rest:tt)*) => {
+        $crate::__swift_wrapper! { [$(#[doc = $doc])*] $vis $name struct SwiftValue $spec }
+        $crate::swift! { $($rest)* }
+    };
+    ($(#[doc = $doc:literal])* $vis:vis enum $name:ident = $spec:literal; $($rest:tt)*) => {
+        $crate::__swift_wrapper! { [$(#[doc = $doc])*] $vis $name enum SwiftValue $spec }
+        $crate::swift! { $($rest)* }
+    };
+    // Methods of a wrapper: `&self` (`&mut self` for a struct's setter or mutating method) is its receiver.
+    (impl $name:ident { $($items:tt)* } $($rest:tt)*) => {
+        impl $name {
+            $crate::swift! { $($items)* }
+        }
+        $crate::swift! { $($rest)* }
+    };
+
     // The attribute says how the function is named and bound; `__swift_fn!` reads the signature after it.
     ($(#[doc = $doc:literal])* #[swift = $spec:literal $(, $param:ident = $bound:literal)* $(,)?] $($rest:tt)*) => {
         $crate::__swift_fn! { [runtime declared $spec [$($param = $bound),*]] [$(#[doc = $doc])*] $($rest)* }
@@ -292,10 +359,120 @@ macro_rules! swift {
     };
 }
 
-/// One signature, then the rest of the `swift!` block. A leading `self: &Type` is the method's receiver.
+/// A typed wrapper's type and impls (see `swift!`).
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __swift_wrapper {
+    ([$(#[$doc:meta])*] $vis:vis $name:ident $kind:ident $erased:ident $spec:literal) => {
+        $(#[$doc])*
+        #[doc = ::core::concat!("\n\nThe Swift type `", $spec, "`.")]
+        #[repr(transparent)]
+        #[derive(Clone)]
+        $vis struct $name($crate::swift::$erased);
+
+        unsafe impl $crate::swift::SwiftWrapper for $name {
+            type Erased = $crate::swift::$erased;
+            const MANGLED: &'static str = $crate::__swift_wrapper_names!($kind $spec).0;
+            const NAME: &'static str = $crate::__swift_wrapper_names!($kind $spec).1;
+            const CLASS: bool = $crate::__swift_wrapper_names!($kind $spec).2;
+            fn swift_type() -> ::core::option::Option<$crate::swift::SwiftType> {
+                static TYPE: ::std::sync::OnceLock<::core::option::Option<$crate::swift::SwiftType>> = ::std::sync::OnceLock::new();
+                *TYPE.get_or_init(|| $crate::swift::SwiftType::from_mangled_name(<Self as $crate::swift::SwiftWrapper>::MANGLED))
+            }
+            fn erased(&self) -> &$crate::swift::$erased {
+                &self.0
+            }
+            fn into_erased(self) -> $crate::swift::$erased {
+                self.0
+            }
+            unsafe fn from_erased_unchecked(erased: $crate::swift::$erased) -> Self {
+                $name(erased)
+            }
+        }
+
+        $crate::__swift_wrapper_value! { $name $erased }
+
+        impl ::core::ops::Deref for $name {
+            type Target = $crate::swift::$erased;
+            fn deref(&self) -> &$crate::swift::$erased {
+                &self.0
+            }
+        }
+
+        /// Checks the value's type (a class's object: the class or a subclass).
+        impl ::core::convert::TryFrom<$crate::swift::$erased> for $name {
+            type Error = $crate::swift::CallError;
+            fn try_from(erased: $crate::swift::$erased) -> ::core::result::Result<Self, $crate::swift::CallError> {
+                <Self as $crate::swift::SwiftWrapper>::try_wrap(erased)
+            }
+        }
+
+        impl $name {
+            /// The type-erased value.
+            #[allow(dead_code)]
+            $vis fn into_inner(self) -> $crate::swift::$erased {
+                self.0
+            }
+        }
+    };
+}
+
+/// One typed wrapper of a call (see `__swift_call!`'s `typed`).
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __swift_typed {
+    ($checked:ident (value $who:ident ($($t:tt)*) $mangled:literal $name:literal $class:literal)) => {
+        if const { $crate::swift::__expect_wrapper::<$($t)*>($mangled, $name, $class, true) } {
+            static EXPECTED: ::std::sync::OnceLock<::core::option::Option<$crate::swift::SwiftType>> = ::std::sync::OnceLock::new();
+            if $checked.is_ok() {
+                $checked = $crate::swift::__check_wrapper::<$($t)*>(&*$who, &EXPECTED, $mangled);
+            }
+        }
+    };
+    ($checked:ident (result ($($t:tt)*) $mangled:literal $name:literal $class:literal)) => {
+        const { $crate::swift::__expect_wrapper::<$($t)*>($mangled, $name, $class, false) };
+    };
+}
+
+/// A struct's or enum's wrapper gives a generic parameter its type, as a `SwiftValue` does.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __swift_wrapper_value {
+    ($name:ident SwiftValue) => {
+        impl $crate::swift::HasSwiftType for $name {
+            fn swift_type(&self) -> $crate::swift::SwiftType {
+                self.0.ty()
+            }
+        }
+    };
+    ($name:ident SwiftObject) => {};
+}
+
+/// One signature, then the rest of the `swift!` block. A leading `self: &Type` is the method's receiver; in a
+/// wrapper's `impl` block, `&self` or `&mut self`.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __swift_fn {
+    ([$binding:ident $how:ident $spec:literal $bind:tt] [$(#[$doc:meta])*]
+     $vis:vis async fn $name:ident (&mut self $(, $arg:ident : $ty:ty)* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
+        $crate::__swift_route! { $crate::__swift_item ; $binding $how async $bind [$(#[$doc])*] [$vis] $name [self : &mut Self] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
+        $crate::swift! { $($rest)* }
+    };
+    ([$binding:ident $how:ident $spec:literal $bind:tt] [$(#[$doc:meta])*]
+     $vis:vis async fn $name:ident (&self $(, $arg:ident : $ty:ty)* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
+        $crate::__swift_route! { $crate::__swift_item ; $binding $how async $bind [$(#[$doc])*] [$vis] $name [self : & Self] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
+        $crate::swift! { $($rest)* }
+    };
+    ([$binding:ident $how:ident $spec:literal $bind:tt] [$(#[$doc:meta])*]
+     $vis:vis fn $name:ident (&mut self $(, $arg:ident : $ty:ty)* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
+        $crate::__swift_route! { $crate::__swift_item ; $binding $how sync $bind [$(#[$doc])*] [$vis] $name [self : &mut Self] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
+        $crate::swift! { $($rest)* }
+    };
+    ([$binding:ident $how:ident $spec:literal $bind:tt] [$(#[$doc:meta])*]
+     $vis:vis fn $name:ident (&self $(, $arg:ident : $ty:ty)* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
+        $crate::__swift_route! { $crate::__swift_item ; $binding $how sync $bind [$(#[$doc])*] [$vis] $name [self : & Self] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
+        $crate::swift! { $($rest)* }
+    };
     // `self: &mut SwiftValue`: a struct's setter or mutating method, on the Rust value itself (sync only).
     ([$binding:ident $how:ident $spec:literal $bind:tt] [$(#[$doc:meta])*]
      $vis:vis async fn $name:ident (self : &mut $receiver:ty $(, $arg:ident : $ty:ty)* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
@@ -493,6 +670,15 @@ macro_rules! __swift_call {
         let declared = $declared;
         $(let declared = declared.of_type(__apus_self_type.generic_argument($n));)?
         $crate::__swift_call!($function [$($f,)* __apus_self_type $(, $g)*] [$($generic)*] declared)
+    }};
+    // `typed [(value who (Type) "mangled" "name" class) (result (Type) …)]`: typed wrappers, checked against the
+    // declaration's types at compile time; a class's wrapper where another class is declared, when the call is made.
+    ($function:ident [$($arg:ident),*] [typed [$($entry:tt)*] $($generic:tt)*] $declared:expr) => {{
+        #[allow(unused_mut)]
+        let mut checked: ::core::result::Result<(), $crate::swift::CallError> = ::core::result::Result::Ok(());
+        $($crate::__swift_typed!(checked $entry);)*
+        let call = $crate::__swift_call!($function [$($arg),*] [$($generic)*] $declared);
+        $crate::swift::CheckedCall::checked(call, checked)
     }};
     // `receiver this Instance|Exactly|Named "name"`: a type-erased receiver, checked against the declaration's type
     // (see `ReceiverKind`) before the call is made.

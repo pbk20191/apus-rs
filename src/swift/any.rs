@@ -62,6 +62,11 @@ pub trait FromSwiftAny: Sized {
     #[doc(hidden)]
     fn swift_metadata() -> *const c_void;
 
+    /// Read as an element of an array through its `Sequence` conformance rather than its storage (a class's
+    /// instances: the array may be a bridged `NSArray`).
+    #[doc(hidden)]
+    const ITERATE: bool = false;
+
     /// Copies a Rust value out of an initialized Swift value of that type, without consuming it.
     #[doc(hidden)]
     unsafe fn from_value(value: *const c_void) -> Self;
@@ -148,6 +153,11 @@ impl<T: FromSwiftAny> FromSwiftAny for Vec<T> {
         unsafe { rt::array_metadata(0, T::swift_metadata()) }.metadata
     }
     unsafe fn from_value(value: *const c_void) -> Self {
+        if T::ITERATE {
+            let array = SwiftValue::copy_of(value, SwiftType::from_metadata(Self::swift_metadata()));
+            let elements = super::SwiftIter::new(array).expect("an Array is a Sequence");
+            return elements.map(|element| T::from_value(element.as_ptr())).collect();
+        }
         let storage = *(value as *const *const u8);
         let count = *(storage.add(16) as *const isize) as usize;
         let witnesses = rt::value_witnesses(T::swift_metadata());

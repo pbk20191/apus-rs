@@ -377,17 +377,24 @@ public func noteContainer() throws -> ModelContainer {
 
 ```rust
 apus::swift! {
-    #[swift = "SwiftData.ModelContext(class).init(_: ModelContainer(class))"]
-    fn new_context(container: &SwiftObject) -> SwiftObject;
-    #[swift = "SwiftData.ModelContext(class).insert<T: PersistentModel(AnyObject)>(_: T)"]
-    fn insert(self: &SwiftObject, model: &SwiftObject);
-    #[swift = "SwiftData.ModelContext(class).save() throws"]
-    fn save(self: &SwiftObject) throws;
+    class Todo = "Todos.Todo(class)";
+    class ModelContext = "SwiftData.ModelContext(class)";
+    struct Query = "SwiftData.FetchDescriptor(struct)<Todos.Todo(class)>";
+
+    impl ModelContext {
+        #[swift = "SwiftData.ModelContext(class).insert<T: PersistentModel(AnyObject)>(_: T)"]
+        fn insert(&self, model: &Todo);
+        #[swift = "SwiftData.ModelContext(class).save() throws"]
+        fn save(&self) throws;
+        #[swift = "SwiftData.ModelContext(class).fetch<T: PersistentModel(AnyObject)>(_: FetchDescriptor(struct)<T>) \
+                   throws -> [T]", T = "Todos.Todo(class)"]
+        fn fetch(&self, query: &Query) throws -> Vec<Todo>;
+    }
 }
 ```
 
 `fetch<T>(_:) -> [T]` is generic over the model, which no argument's type gives: bind `T = "Todos.Todo(class)"` (see
-Generic functions above), and walk the array with `SwiftIter` (see Sequences below). Sort descriptors and predicates take key paths and
+Generic functions above); the array comes back as `Vec<Todo>` (see Typed wrappers below). Sort descriptors and predicates take key paths and
 `#Predicate`, which only the compiler makes: they come from Swift too.
 
 ### Using a Swift module of your own
@@ -417,6 +424,35 @@ It is optimized (`-O`) in release builds only (`-Onone` otherwise, to build fast
 `#[swift_linked = "Todos.…"]` (bound at link time). `examples/swift-data` is the whole
 setup. In this repository, `.vscode/settings.json` gives rust-analyzer its own target directory: sharing the one
 terminal builds rewrite makes its proc-macro server fail now and then while it reads a macro being rebuilt.
+
+### Typed wrappers
+
+`SwiftObject` and `SwiftValue` hold any Swift type. A program can instead name the types it uses, so that `swift!`
+checks every call against its declaration when it compiles:
+
+```rust
+apus::swift! {
+    class Todo = "Todos.Todo(class)";                                     // pub struct Todo(SwiftObject)
+    struct Query = "SwiftData.FetchDescriptor(struct)<Todos.Todo(class)>";  // pub struct Query(SwiftValue); `enum` too
+
+    impl Todo {
+        #[swift_linked = "Todos.Todo(class).init(title: String, priority: Int)"]
+        fn new(title: &str, priority: i64) -> Todo;
+        #[swift_linked = "Todos.Todo(class).title: String { get }"]
+        fn title(&self) -> String;                                        // todo.title()?
+    }
+}
+```
+
+- A wrapper stands for one concrete class, struct or enum, and derefs to the `SwiftObject` or `SwiftValue` it holds
+  (`into_inner()` gives it up). `Todo::try_from(object)` checks the type when the call is made (a subclass's object
+  passes; `CallError::InvalidArgument` if not).
+- As a receiver (`&self`, `&mut self` in `impl`), an argument (`&Todo`) or a result (`Todo`, `Option<Todo>` for a
+  class's optional, `Vec<Todo>` for an array, read through its `Sequence` conformance), a wrapper must be the
+  declaration's type: another struct's or enum's, or another type's result, is a compile error. A class's wrapper
+  where another class is declared (a superclass's member) is checked by cast when the call is made.
+- No check costs anything at run time but that cast; type-erased receivers are checked on every call instead (see
+  Methods and properties).
 
 ### Sequences
 

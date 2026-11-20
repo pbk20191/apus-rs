@@ -937,6 +937,15 @@ pub(crate) fn bound_type_name(decl: &Decl, ty: &Ty, bound: &[Ty]) -> Result<Opti
     type_name(&ty).map(Some)
 }
 
+/// `ty` with the bound generic parameters (and the declaration's same-type requirements) substituted.
+pub(crate) fn bound_type(decl: &Decl, ty: &Ty, bound: &[Ty]) -> Ty {
+    let mut same_types = all_same_types(decl);
+    for (index, concrete) in bound.iter().enumerate() {
+        same_types.params.insert(GenericParam { depth: 0, index }, concrete.clone());
+    }
+    canonical(ty, &same_types)
+}
+
 pub(crate) fn is_concrete_type(ty: &Ty) -> bool {
     is_concrete(ty)
 }

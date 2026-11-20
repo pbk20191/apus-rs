@@ -102,6 +102,63 @@ pub fn type_name(ty: &str) -> Result<String, Error> {
         .ok_or_else(|| Error(format!("`{ty}`: the type must be concrete")))
 }
 
+/// A typed wrapper's Swift type (`swift! { class Todo = "Todos.Todo(class)"; }`): its mangled name and its qualified
+/// name without generic arguments (`Todos.Todo`). `kind` is `class`, `struct` or `enum`, which the type must be; it
+/// must be concrete.
+pub fn wrapper_type(kind: &str, ty: &str) -> Result<(String, String), Error> {
+    let parsed = parse_type(ty)?;
+    let Some(nominal) = nominal_ref(&parsed).filter(|n| !n.optional && !n.array) else {
+        return Err(Error(format!("`{ty}` is not a class, struct or enum")));
+    };
+    let ast::Ty::Nominal { path, .. } = &parsed else { unreachable!("a nominal type") };
+    let matches = match path.last().map(|(_, k)| *k) {
+        Some(ast::Kind::Class | ast::Kind::Actor | ast::Kind::TypedefClass) => kind == "class",
+        Some(ast::Kind::Struct | ast::Kind::TypedefStruct) => kind == "struct",
+        Some(ast::Kind::Enum) => kind == "enum",
+        _ => false,
+    };
+    if !matches {
+        return Err(Error(format!("`{ty}` is not a {kind}")));
+    }
+    let mangled = nominal.mangled.ok_or_else(|| Error(format!("`{ty}`: a wrapper's type must be concrete")))?;
+    Ok((mangled, nominal.name))
+}
+
+/// A class, struct or enum a declaration names outside the standard library, as a typed wrapper may stand for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NominalRef {
+    /// Its mangled name when it is concrete.
+    pub mangled: Option<String>,
+    /// Its qualified name without generic arguments (`SwiftData.FetchDescriptor`).
+    pub name: String,
+    /// Written `T?`.
+    pub optional: bool,
+    /// Written `[T]`.
+    pub array: bool,
+    /// A class (or actor).
+    pub class: bool,
+}
+
+fn nominal_ref(ty: &ast::Ty) -> Option<NominalRef> {
+    match ty {
+        ast::Ty::Optional(wrapped) => nominal_ref(wrapped).filter(|n| !n.optional && !n.array).map(|n| NominalRef { optional: true, ..n }),
+        ast::Ty::Nominal { module, path, args, .. } if module == "Swift" => match (path.as_slice(), args.as_slice()) {
+            ([(name, _)], [element]) if name == "Array" => {
+                nominal_ref(element).filter(|n| !n.optional && !n.array).map(|n| NominalRef { array: true, ..n })
+            }
+            _ => None,
+        },
+        ast::Ty::Nominal { module, path, .. } => Some(NominalRef {
+            mangled: mangler::is_concrete_type(ty).then(|| mangler::type_name(ty).ok()).flatten(),
+            name: std::iter::once(module.as_str()).chain(path.iter().map(|(name, _)| name.as_str())).collect::<Vec<_>>().join("."),
+            optional: false,
+            array: false,
+            class: matches!(path.last(), Some((_, ast::Kind::Class | ast::Kind::Actor | ast::Kind::TypedefClass))),
+        }),
+        _ => None,
+    }
+}
+
 /// A protocol's descriptor symbol (`…Mp`, documented mangling) from its name: `"$s9SwiftData15PersistentModelMp"` for
 /// `SwiftData.PersistentModel`.
 pub fn protocol_descriptor_of(protocol: &str) -> Result<String, Error> {
@@ -467,6 +524,8 @@ impl Declaration {
                     false => mangler::bound_type_name(decl, &p.ty, &bound).map_err(Error),
                 })
                 .collect::<Result<_, _>>()?,
+            nominal_params: params.iter().map(|p| nominal_ref(&mangler::bound_type(decl, &p.ty, &bound))).collect(),
+            nominal_result: nominal_ref(&mangler::bound_type(decl, result, &bound)),
         })
     }
 
@@ -509,6 +568,25 @@ impl Declaration {
                 ),
             }),
             ast::Kind::Protocol => None,
+        }
+    }
+
+    /// The class, struct or enum each formal parameter is, where it is one outside the standard library (see
+    /// [`NominalRef`]).
+    pub fn nominal_params(&self) -> Vec<Option<NominalRef>> {
+        match &self.0.signature {
+            ast::Signature::Function { params, .. } | ast::Signature::Subscript { params, .. } => params.iter().map(|p| nominal_ref(&p.ty)).collect(),
+            ast::Signature::Setter(ty) => vec![nominal_ref(ty)],
+            _ => Vec::new(),
+        }
+    }
+
+    /// The class, struct or enum the result is, where it is one outside the standard library (see [`NominalRef`]).
+    pub fn nominal_result(&self) -> Option<NominalRef> {
+        match &self.0.signature {
+            ast::Signature::Function { result, .. } | ast::Signature::Getter(result) => nominal_ref(result),
+            ast::Signature::Subscript { result, setter: false, .. } => nominal_ref(result),
+            _ => None,
         }
     }
 
@@ -961,6 +1039,10 @@ pub struct ConcretePlan {
     /// Per formal parameter whose type names a bound parameter: that type with the bindings substituted, which the
     /// argument's own type must be (with automatic generic arguments the argument gives the type; here it does not).
     pub argument_types: Vec<Option<String>>,
+    /// [`Declaration::nominal_params`] with the bindings substituted.
+    pub nominal_params: Vec<Option<NominalRef>>,
+    /// [`Declaration::nominal_result`] with the bindings substituted.
+    pub nominal_result: Option<NominalRef>,
 }
 
 /// The requirements of the extension a declaration is in.
@@ -1163,6 +1245,23 @@ mod isolation_tests {
                 by_address: vec![false, false],
                 result_by_address: false,
                 argument_types: vec![Some("9SwiftData15FetchDescriptorVy5Todos4TodoCG".into()), None],
+                nominal_params: vec![
+                    Some(super::NominalRef {
+                        mangled: Some("9SwiftData15FetchDescriptorVy5Todos4TodoCG".into()),
+                        name: "SwiftData.FetchDescriptor".into(),
+                        optional: false,
+                        array: false,
+                        class: false,
+                    }),
+                    None,
+                ],
+                nominal_result: Some(super::NominalRef {
+                    mangled: Some("9SwiftData22FetchResultsCollectionVy5Todos4TodoCG".into()),
+                    name: "SwiftData.FetchResultsCollection".into(),
+                    optional: false,
+                    array: false,
+                    class: false,
+                }),
             }
         );
         let zero = bind("Res.zeroOf<T: AdditiveArithmetic>() -> T", &[("T", "Swift.Int")]).unwrap();
@@ -1296,6 +1395,16 @@ mod isolation_tests {
         for unchecked in ["M.f()", "static M.S(struct).f()", "M.C(class).init()", "M.C(class)<T>.f()", "M.P(protocol).f()"] {
             assert_eq!(receiver(unchecked), None, "{unchecked}");
         }
+        // What a typed wrapper may stand for: a class, struct or enum outside the standard library.
+        let decl = super::Declaration::parse("M.f(_: M.C(class), _: Int, _: M.S(struct)<M.C(class)>) -> [M.C(class)]?").unwrap();
+        let c = super::NominalRef { mangled: Some("1M1CC".into()), name: "M.C".into(), optional: false, array: false, class: true };
+        let s_ = super::NominalRef { mangled: Some("1M1SVyAA1CCG".into()), name: "M.S".into(), optional: false, array: false, class: false };
+        assert_eq!(decl.nominal_params(), [Some(c.clone()), None, Some(s_)]);
+        assert_eq!(super::Declaration::parse("M.f() -> [M.C(class)]").unwrap().nominal_result(), Some(super::NominalRef { array: true, ..c.clone() }));
+        assert_eq!(decl.nominal_result(), None, "an optional array is no wrapper's");
+        assert_eq!(super::wrapper_type("class", "Todos.Todo(class)").unwrap(), ("5Todos4TodoC".into(), "Todos.Todo".into()));
+        assert!(super::wrapper_type("struct", "Todos.Todo(class)").is_err());
+        assert!(super::wrapper_type("struct", "M.S(struct)<T>").is_err());
         // Results Swift returns in registers, which a by-address `SwiftValue` would read as garbage.
         let in_registers = |d: &str| super::Declaration::parse(d).unwrap().result_in_registers();
         for direct in ["M.f() -> [M.S(struct)]", "M.f() -> [String: Int]?", "M.f() -> Set<Int>", "M.f() -> M.C(class)?", "M.v: String { get }"] {

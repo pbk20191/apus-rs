@@ -21,6 +21,7 @@ mod objc;
 mod task;
 mod timer;
 mod value;
+mod wrapper;
 
 pub use any::{FromSwiftAny, SwiftAny, SwiftError, SwiftHashable};
 pub use call::{timeout, AsyncFunctionPointer, CallError, IndirectSlot, RetRegs, SwiftAsync, SwiftCall};
@@ -32,6 +33,9 @@ pub use foreign::{AsBlock, AsCFunction, CFunctionPointer, CReturn, CType};
 #[doc(hidden)]
 pub use foreign::{BlockArg, CFunctionArg};
 pub use sequence::SwiftIter;
+pub use wrapper::SwiftWrapper;
+#[doc(hidden)]
+pub use wrapper::{Erased, __check_wrapper, __expect_wrapper};
 pub use stream::SwiftStream;
 pub use sync::{HopTo, SwiftFn, SwiftSyncCall};
 pub use value::{IntoSwift, OpaqueResult, Opened, OpenedType, SwiftProtocol, SwiftType, SwiftValue, WitnessTable};

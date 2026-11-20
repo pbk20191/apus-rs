@@ -1,73 +1,62 @@
 //! SwiftData from Rust. The model is Swift (swift/Todos.swift, built by build.rs); the context, inserts, edits,
 //! deletes, saves and fetches are SwiftData's own API, called from Rust.
 //! Run: cargo run -p apus-example-swift-data
-use apus::swift::{DirectValue, SwiftIter, SwiftObject, SwiftValue};
-
 apus::swift! {
+    // The Swift types this program uses, each a Rust type: calls are checked against their declarations.
+    class Todo = "Todos.Todo(class)";
+    class ModelContainer = "SwiftData.ModelContainer(class)";
+    class ModelContext = "SwiftData.ModelContext(class)";
+    struct Query = "SwiftData.FetchDescriptor(struct)<Todos.Todo(class)>";
+
     // The model module's own declarations, linked from the static library.
     #[swift_linked = "Todos.todoContainer(path: String) throws -> SwiftData.ModelContainer(class)"]
-    fn todo_container(path: &str) throws -> SwiftObject;
+    fn todo_container(path: &str) throws -> ModelContainer;
     #[swift_linked = "Todos.allTodos() -> SwiftData.FetchDescriptor(struct)<Todo(class)>"]
-    fn all_todos() -> SwiftValue;
+    fn all_todos() -> Query;
     #[swift_linked = "Todos.openTodos() -> SwiftData.FetchDescriptor(struct)<Todo(class)>"]
-    fn open_todos() -> SwiftValue;
-    #[swift_linked = "Todos.Todo(class).init(title: String, priority: Int)"]
-    fn new_todo(title: &str, priority: i64) -> SwiftObject;
-    #[swift_linked = "Todos.Todo(class).title: String { get }"]
-    fn title(self: &SwiftObject) -> String;
-    #[swift_linked = "Todos.Todo(class).priority: Int { get }"]
-    fn priority(self: &SwiftObject) -> i64;
-    #[swift_linked = "Todos.Todo(class).done: Bool { get }"]
-    fn done(self: &SwiftObject) -> bool;
-    #[swift_linked = "Todos.Todo(class).done: Bool { set }"]
-    fn set_done(self: &SwiftObject, done: bool);
+    fn open_todos() -> Query;
+
+    impl Todo {
+        #[swift_linked = "Todos.Todo(class).init(title: String, priority: Int)"]
+        fn new(title: &str, priority: i64) -> Todo;
+        #[swift_linked = "Todos.Todo(class).title: String { get }"]
+        fn title(&self) -> String;
+        #[swift_linked = "Todos.Todo(class).priority: Int { get }"]
+        fn priority(&self) -> i64;
+        #[swift_linked = "Todos.Todo(class).done: Bool { get }"]
+        fn done(&self) -> bool;
+        #[swift_linked = "Todos.Todo(class).done: Bool { set }"]
+        fn set_done(&self, done: bool);
+    }
 
     // SwiftData's, looked up in the framework when first called.
-    #[swift = "SwiftData.ModelContext(class).init(_: ModelContainer(class))"]
-    fn new_context(container: &SwiftObject) -> SwiftObject;
-    #[swift = "SwiftData.ModelContext(class).insert<T: PersistentModel(AnyObject)>(_: T)"]
-    fn insert(self: &SwiftObject, model: &SwiftObject);
-    #[swift = "SwiftData.ModelContext(class).delete<T: PersistentModel(AnyObject)>(_: T)"]
-    fn delete(self: &SwiftObject, model: &SwiftObject);
-    #[swift = "SwiftData.ModelContext(class).save() throws"]
-    fn save(self: &SwiftObject) throws;
-    // Generic over the model, which no argument's type gives: bound to `Todo`. The array comes back in registers
-    // (`DirectValue`), and `SwiftIter` walks it through its `Sequence` conformance.
-    #[swift = "SwiftData.ModelContext(class).fetch<T: PersistentModel(AnyObject)>(_: FetchDescriptor(struct)<T>) \
-               throws -> [T]", T = "Todos.Todo(class)"]
-    fn fetch_todos(self: &SwiftObject, descriptor: &SwiftValue) throws -> DirectValue;
-}
-
-struct Store {
-    context: SwiftObject,
-}
-
-impl Store {
-    fn open(path: &str) -> Store {
-        let container = todo_container(path).expect("a container");
-        Store { context: new_context(&container).unwrap() }
-    }
-
-    fn add(&self, title: &str, priority: i64) {
-        insert(&self.context, &new_todo(title, priority).unwrap()).unwrap();
-    }
-
-    /// The todos `descriptor` selects.
-    fn fetch(&self, descriptor: SwiftValue) -> Vec<SwiftObject> {
-        let found = fetch_todos(&self.context, &descriptor).expect("fetch");
-        SwiftIter::new(found.0).expect("an array").map(|todo| todo.into_object().expect("a Todo is an object")).collect()
-    }
-
-    fn save(&self) {
-        save(&self.context).expect("save");
+    impl ModelContext {
+        #[swift = "SwiftData.ModelContext(class).init(_: ModelContainer(class))"]
+        fn new(container: &ModelContainer) -> ModelContext;
+        #[swift = "SwiftData.ModelContext(class).insert<T: PersistentModel(AnyObject)>(_: T)"]
+        fn insert(&self, model: &Todo);
+        #[swift = "SwiftData.ModelContext(class).delete<T: PersistentModel(AnyObject)>(_: T)"]
+        fn delete(&self, model: &Todo);
+        #[swift = "SwiftData.ModelContext(class).save() throws"]
+        fn save(&self) throws;
+        // Generic over the model, which no argument's type gives: bound to `Todo`. The array is read through its
+        // `Sequence` conformance.
+        #[swift = "SwiftData.ModelContext(class).fetch<T: PersistentModel(AnyObject)>(_: FetchDescriptor(struct)<T>) \
+                   throws -> [T]", T = "Todos.Todo(class)"]
+        fn fetch(&self, query: &Query) throws -> Vec<Todo>;
     }
 }
 
-fn show(heading: &str, todos: &[SwiftObject]) {
+fn open(path: &str) -> ModelContext {
+    let container = todo_container(path).expect("a container");
+    ModelContext::new(&container).unwrap()
+}
+
+fn show(heading: &str, todos: &[Todo]) {
     println!("{heading}:");
     for todo in todos {
-        let mark = if done(todo).unwrap() { "x" } else { " " };
-        println!("  [{mark}] {} (priority {})", title(todo).unwrap(), priority(todo).unwrap());
+        let mark = if todo.done().unwrap() { "x" } else { " " };
+        println!("  [{mark}] {} (priority {})", todo.title().unwrap(), todo.priority().unwrap());
     }
 }
 
@@ -75,29 +64,29 @@ fn main() {
     let path = std::env::temp_dir().join(format!("apus-todos-{}.store", std::process::id()));
     let path = path.to_str().unwrap().to_string();
 
-    let store = Store::open(&path);
+    let context = open(&path);
     for (title, priority) in [("write the report", 3), ("water the plants", 1), ("book flights", 2), ("call the bank", 2)] {
-        store.add(title, priority);
+        context.insert(&Todo::new(title, priority).unwrap()).unwrap();
     }
-    store.save();
-    let all = store.fetch(all_todos().unwrap());
+    context.save().expect("save");
+    let all = context.fetch(&all_todos().unwrap()).expect("fetch");
     show("all todos, most important first", &all);
 
     // Edit and delete through the objects fetched, then save.
     for todo in &all {
-        match title(todo).unwrap().as_str() {
-            "book flights" => set_done(todo, true).unwrap(),
-            "water the plants" => delete(&store.context, todo).unwrap(),
+        match todo.title().unwrap().as_str() {
+            "book flights" => todo.set_done(true).unwrap(),
+            "water the plants" => context.delete(todo).unwrap(),
             _ => {}
         }
     }
-    store.save();
-    show("not done yet (a #Predicate)", &store.fetch(open_todos().unwrap()));
-    drop((all, store));
+    context.save().expect("save");
+    show("not done yet (a #Predicate)", &context.fetch(&open_todos().unwrap()).expect("fetch"));
+    drop((all, context));
 
     // A new container on the same file: what was saved is there.
-    let reopened = Store::open(&path);
-    show("after reopening the store", &reopened.fetch(all_todos().unwrap()));
+    let reopened = open(&path);
+    show("after reopening the store", &reopened.fetch(&all_todos().unwrap()).expect("fetch"));
     drop(reopened);
 
     for suffix in ["", "-shm", "-wal"] {

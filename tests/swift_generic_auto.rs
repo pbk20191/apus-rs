@@ -63,6 +63,52 @@ apus::swift! {
     fn meter_value(self: &SwiftValue) -> f64;
 }
 
+// Typed wrappers: receivers, arguments and results checked against the declarations at compile time.
+apus::swift! {
+    class Animal = "Res.Animal(class)";
+    class Dog = "Res.Dog(class)";
+    struct Meter = "Res.Meter(struct)";
+
+    impl Animal {
+        #[swift_linked = "Res.Animal(class).name: String { get }"]
+        fn name(&self) -> String;
+    }
+    impl Meter {
+        #[swift_linked = "Res.Meter(struct).init(_: Double)"]
+        fn new(value: f64) -> Meter;
+        #[swift_linked = "Res.Meter(struct).value: Double { get }"]
+        fn value(&self) -> f64;
+    }
+    class Minted = "Probe.Minted(class)";
+    impl Dog {
+        #[swift_linked = "Res.Animal(class).name: String { get }"]
+        fn name(&self) -> String; // a superclass's member: checked by cast when called
+    }
+    impl Minted {
+        #[swift_linked = "Res.Animal(class).name: String { get }"]
+        fn name(&self) -> String; // compiles (both classes), refused when called
+    }
+    #[swift_linked = "Res.dogs(_: [String]) -> [Dog(class)]"]
+    fn dog_list(names: Vec<String>) -> Vec<Dog>;
+    #[swift_linked = "Res.labelOf<T: Named(AnyObject)>(_: T) -> String", T = "Res.Dog(class)"]
+    fn label_of(dog: &Dog) -> String;
+}
+
+fn typed_wrappers() -> Result<(), Failed> {
+    check(Meter::new(2.5).unwrap().value().unwrap() == 2.5, "Meter(2.5).value")?;
+    let dogs = dog_list(vec!["rex".into(), "fido".into()]).unwrap();
+    check(dogs.len() == 2 && label_of(&dogs[1]).unwrap() == "named fido", "[Dog] as Vec<Dog>")?;
+    // From a type-erased value: checked when wrapped. A Dog is an Animal; a Minted is not, nor a Boom a Meter.
+    let animal = Animal::try_from(dogs[0].clone().into_inner()).unwrap();
+    check(animal.name().unwrap() == "rex", "a Dog as an Animal")?;
+    check(matches!(Animal::try_from(minted(1).unwrap()), Err(CallError::InvalidArgument(_))), "a Minted is no Animal")?;
+    check(matches!(Meter::try_from(make_boom(1).unwrap()), Err(CallError::InvalidArgument(_))), "a Boom is no Meter")?;
+    // Another class's wrapper as the receiver: checked by cast.
+    check(dogs[0].name().unwrap() == "rex", "Dog.name, an Animal's")?;
+    let minted = Minted::try_from(minted(2).unwrap()).unwrap();
+    check(matches!(minted.name(), Err(CallError::InvalidArgument(_))), "a Minted is no Animal")
+}
+
 /// A receiver of another type than the declaration's is refused before Swift runs: a class's object (a subclass's
 /// passes), a struct's value, a generic struct's value of another struct.
 fn receivers_are_checked() -> Result<(), Failed> {
@@ -147,5 +193,6 @@ fn main() {
         Trial::test("concrete_bindings", concrete_bindings),
         Trial::test("sequences_iterate", sequences_iterate),
         Trial::test("receivers_are_checked", receivers_are_checked),
+        Trial::test("typed_wrappers", typed_wrappers),
     ]);
 }

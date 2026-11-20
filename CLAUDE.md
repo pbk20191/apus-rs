@@ -43,7 +43,7 @@ Judge every change by two questions, in this order:
 
 | Path | What |
 |---|---|
-| `src/swift/` | the `swift` backend: tasks (`task.rs`), Swift calls (`call.rs` async, `sync.rs` sync, `func.rs` argument lowering), values (`value.rs`, `any.rs`, `enums.rs`), closures, sequences (`sequence.rs`), streams, isolation, `swift!` (`macros.rs`) |
+| `src/swift/` | the `swift` backend: tasks (`task.rs`), Swift calls (`call.rs` async, `sync.rs` sync, `func.rs` argument lowering), values (`value.rs`, `any.rs`, `enums.rs`), closures, sequences (`sequence.rs`), typed wrappers (`wrapper.rs`), streams, isolation, `swift!` (`macros.rs`) |
 | `src/dispatch/` | the libdispatch backend |
 | `sys/` | `apus-sys`: the whole runtime ABI in `sys/include/apus/abi.h`, C funclets/thunks in `sys/csrc/`, bindings generated from the header and committed |
 | `mangle/` | `apus-mangle`: Swift declaration → symbol, call kind, ownership, generic plan |
