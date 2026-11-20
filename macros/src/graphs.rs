@@ -21,6 +21,14 @@ pub struct Symbol {
     /// `swiftGenerics`: the generic parameters (name, depth) and the requirements (kind, lhs, rhs, rhs's USR).
     pub params: Vec<(String, u64)>,
     pub constraints: Vec<(String, String, String, Option<String>)>,
+    /// `swiftExtension`: the member is declared in an extension of a type of `extended_module`, which states these
+    /// requirements.
+    pub extension: Option<Extension>,
+}
+
+pub struct Extension {
+    pub extended_module: String,
+    pub constraints: Vec<(String, String, String, Option<String>)>,
 }
 
 pub struct Module {
@@ -183,6 +191,16 @@ fn extract(module: &str) -> Option<PathBuf> {
     result
 }
 
+/// Requirements as `swiftGenerics` and `swiftExtension` list them: (kind, lhs, rhs, rhs's USR).
+fn constraints(list: &serde_json::Value) -> Vec<(String, String, String, Option<String>)> {
+    let string = |v: &serde_json::Value| v.as_str().map(str::to_string);
+    list.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| Some((string(&c["kind"])?, string(&c["lhs"])?, string(&c["rhs"])?, string(&c["rhsPrecise"]))))
+        .collect()
+}
+
 fn load(file: &Path) -> Option<Module> {
     let text = std::fs::read_to_string(file).ok()?;
     let json: serde_json::Value = serde_json::from_str(&text).ok()?;
@@ -208,12 +226,11 @@ fn load(file: &Path) -> Option<Module> {
                     .flatten()
                     .filter_map(|p| Some((string(&p["name"])?, p["depth"].as_u64()?)))
                     .collect(),
-                constraints: generics["constraints"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|c| Some((string(&c["kind"])?, string(&c["lhs"])?, string(&c["rhs"])?, string(&c["rhsPrecise"]))))
-                    .collect(),
+                constraints: constraints(&generics["constraints"]),
+                extension: s.get("swiftExtension").map(|e| Extension {
+                    extended_module: string(&e["extendedModule"]).unwrap_or_default(),
+                    constraints: constraints(&e["constraints"]),
+                }),
             })
         })
         .collect();

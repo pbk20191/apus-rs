@@ -301,8 +301,10 @@ SDK), a program's own module's is emitted by `apus-build` (and found through `AP
 - Or the declaration is written by name, its labels, and `{ get }`/`{ set }` for a property or subscript:
   `SwiftData.ModelContext.fetch(_:)`, `Todos.Todo.title { get }`, `Todos.Todo.init(title:priority:)`. The rest comes
   from the graph (`static`, `mutating`, effects, generic requirements); bindings (`T = "Todos.Todo"`) apply as usual.
-  A name with several declarations or none, or one apus cannot write (a constrained extension's member, an imported
-  C type in its signature), is a compile error: write that one in full.
+  A member of an extension is written with its `(extension in M where …)` when Swift mangles it so (a protocol's, a
+  constrained one's, another module's), and requirements a member adds to its type's parameters go in its `where`.
+  A name with several declarations or none, or one apus cannot write (an imported C or Objective-C type in its
+  signature, a typealias, a parameter pack), is a compile error: write that one in full.
 - apus still mangles the declaration itself; one written from a graph must mangle to the symbol the graph names, and
   an SDK module's must be exported by the SDK (see `#[swift]` above), or it is a compile error.
 

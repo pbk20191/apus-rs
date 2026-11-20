@@ -172,6 +172,13 @@ apus::swift! {
     fn label_of_named(dog: &Dog) -> String;
     #[swift_linked = "Res.renamed(_:suffix:)", T = "Res.Dog"]
     fn renamed_named(dog: &SwiftObject, suffix: &str) -> SwiftObject;
+    // Members of constrained extensions, and a member's own `where`: written with their `(extension in …)`.
+    #[swift_linked = "Res.Tray.weight()", T = "Swift.Int"]
+    fn weight_named(self: &SwiftValue) -> i64;
+    #[swift_linked = "Res.Holder.unit()", T = "Swift.Int"]
+    fn unit_named() -> i64;
+    #[swift_linked = "Res.Tray.heaviest()", T = "Swift.Int"]
+    fn heaviest_named(self: &SwiftValue) -> i64;
 }
 
 fn declarations_by_name() -> Result<(), Failed> {
@@ -185,7 +192,11 @@ fn declarations_by_name() -> Result<(), Failed> {
     let dogs = dog_list(vec!["rex".into()]).unwrap();
     check(label_of_named(&dogs[0]).unwrap() == "named rex", "Res.labelOf(_:)")?;
     let renamed = Dog::try_from(renamed_named(&dogs[0], "!").unwrap()).unwrap();
-    check(renamed.name().unwrap() == "rex!", "Res.renamed(_:suffix:), a superclass requirement")
+    check(renamed.name().unwrap() == "rex!", "Res.renamed(_:suffix:), a superclass requirement")?;
+    let ints = int_tray(3).unwrap();
+    check(weight_named(&ints).unwrap() == 120, "Res.Tray.weight(), extension where T: Weighed")?;
+    check(unit_named().unwrap() == 1, "Res.Holder.unit(), static in a constrained extension")?;
+    check(heaviest_named(&ints).unwrap() == 3, "Res.Tray.heaviest(), where T: Comparable")
 }
 
 fn kinds_from_symbol_graphs() -> Result<(), Failed> {

@@ -99,13 +99,35 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
     }
     let all_params: Vec<&str> = symbol.params.iter().map(|(n, _)| n.as_str()).collect();
     let own_params: Vec<&str> = all_params.iter().copied().filter(|n| !context_params.iter().any(|c| c == n)).collect();
-    // The type's own requirements are part of its declaration; others on its parameters come from an extension.
-    let context_constraints: Vec<_> = symbol.constraints.iter().filter(|(_, lhs, _, _)| !own_params.contains(&root(lhs))).collect();
-    if !context_constraints.is_empty() {
-        let enclosing = module.find(context).find(|s| graphs::type_kind(&s.kind).is_some());
-        let declared = |c: &&(String, String, String, Option<String>)| enclosing.is_some_and(|e| e.constraints.contains(c));
-        if !context_constraints.iter().all(declared) {
-            return Err("a member of a constrained extension: write the declaration in full, with its `(extension in …)`".into());
+    // Requirements on the enclosing type's parameters (or a protocol's `Self`): the type's own are part of its
+    // declaration, an extension's go in its `(extension in M where …)`, and the member's own in its `where`.
+    let enclosing = module.find(context).find(|s| graphs::type_kind(&s.kind).is_some());
+    let protocol = enclosing.is_some_and(|e| e.kind == "swift.protocol");
+    let declared = |c: &(String, String, String, Option<String>)| {
+        enclosing.is_some_and(|e| e.constraints.contains(c))
+            // A protocol member's `Self: P`, P the protocol itself.
+            || (protocol && c.1 == "Self" && c.0 == "conformance" && Some(c.2.as_str()) == context.last().copied())
+    };
+    let extension_constraints: Vec<_> =
+        symbol.extension.iter().flat_map(|e| e.constraints.iter()).filter(|c| !declared(c)).collect();
+    let member_constraints: Vec<_> = symbol
+        .constraints
+        .iter()
+        .filter(|c| !own_params.contains(&root(&c.1)) && !declared(c) && !extension_constraints.contains(c))
+        .collect();
+    let mut extension = String::new();
+    if let Some(e) = &symbol.extension {
+        // Swift mangles an extension's member as the type's own unless the extension is another module's, adds
+        // requirements, or extends a protocol.
+        if protocol || e.extended_module != module_name || !extension_constraints.is_empty() {
+            let requirements: Vec<String> = extension_constraints
+                .iter()
+                .map(|(kind, lhs, rhs, usr)| requirement(kind, lhs, rhs, usr.as_deref(), &context_params_str(&context_params), module_name))
+                .collect::<Result<_, _>>()?;
+            extension = match requirements.is_empty() {
+                true => format!("(extension in {module_name}) "),
+                false => format!("(extension in {module_name} where {}) ", requirements.join(", ")),
+            };
         }
     }
 
@@ -165,13 +187,15 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
         }
         i += 1;
     }
-    // Requirements that are not a generic parameter's own conformance or superclass stay in a `where` clause.
+    // Requirements that are not a generic parameter's own conformance or superclass stay in a `where` clause, with
+    // those the member adds to its type's parameters.
     let rest: Vec<String> = symbol
         .constraints
         .iter()
         .filter(|(kind, lhs, _, _)| {
             own_params.contains(&root(lhs)) && (lhs.contains('.') || !matches!(kind.as_str(), "conformance" | "superclass"))
         })
+        .chain(member_constraints.iter().copied())
         .map(|(kind, lhs, rhs, usr)| requirement(kind, lhs, rhs, usr.as_deref(), &all_params, module_name))
         .collect::<Result<_, _>>()?;
     let mut body = body.trim().to_string();
@@ -201,7 +225,11 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
         body = format!("{body} where {}", rest.join(", "));
     }
     let modifiers = if modifiers.is_empty() { String::new() } else { format!("{} ", modifiers.join(" ")) };
-    Ok(format!("{modifiers}{prefix}.{body}"))
+    Ok(format!("{modifiers}{extension}{prefix}.{body}"))
+}
+
+fn context_params_str(params: &[String]) -> Vec<&str> {
+    params.iter().map(String::as_str).collect()
 }
 
 fn root(lhs: &str) -> &str {
@@ -249,7 +277,10 @@ fn requirement(kind: &str, lhs: &str, rhs: &str, usr: Option<&str>, params: &[&s
 fn named(spelling: &str, usr: Option<&str>, module: &str) -> Result<String, String> {
     let Some(usr) = usr else { return Ok(spelling.to_string()) };
     let owner = graphs::usr_module(usr).ok_or_else(|| format!("`{spelling}`: unknown type"))?;
-    if owner == "Swift" || owner == "_Concurrency" {
+    // A standard library type with a substitution (`s:Si`, `s:SS`) apus knows by its bare name; one spelled out
+    // (`s:s7DecoderP`, `s:s6HasherV`) is written with its module, or it would be taken for the declaring module's.
+    let spelled_out = usr.strip_prefix("s:s").is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
+    if (owner == "Swift" && !spelled_out) || owner == "_Concurrency" {
         return Ok(spelling.to_string());
     }
     let kind = match usr.chars().last() {
@@ -282,8 +313,13 @@ pub fn expected_symbol(text: &str) -> Option<String> {
     let mut path: Vec<&str> = short.context.clone();
     path.push(&short.title);
     let symbol = module.find(&path).find(|s| s.kind != "swift.typealias" && graphs::type_kind(&s.kind).is_none())?;
-    let mangled = format!("$s{}", symbol.usr.strip_prefix("s:")?);
-    let accessor = if short.accessor == Some("set") { 's' } else { 'g' };
+    usr_symbol(&symbol.usr, short.accessor)
+}
+
+/// The symbol a graph entry's USR names (see [`expected_symbol`]).
+fn usr_symbol(usr: &str, accessor: Option<&str>) -> Option<String> {
+    let mangled = format!("$s{}", usr.strip_prefix("s:")?);
+    let accessor = if accessor == Some("set") { 's' } else { 'g' };
     let replace_entity = |m: &str, from: &str, to: String| m.strip_suffix(from).map(|base| format!("{base}{to}"));
     Some(
         replace_entity(&mangled, "vpZ", format!("v{accessor}Z"))
@@ -293,4 +329,120 @@ pub fn expected_symbol(text: &str) -> Option<String> {
             .or_else(|| replace_entity(&mangled, "fc", "fC".into()))
             .unwrap_or(mangled),
     )
+}
+
+/// How much of a framework `swift!` can call: every function, initializer, property getter and subscript getter in
+/// the SDK's symbol graphs of the modules in `APUS_COVERAGE` (default: a few Swift-only frameworks), rewritten as
+/// a declaration, mangled, checked as `swift!` checks it, and found among the module's exported symbols; the
+/// reasons the others are refused, most common first.
+/// `APUS_COVERAGE=StoreKit,SwiftData cargo test -p apus-macros coverage -- --ignored --nocapture`
+#[cfg(test)]
+mod tests {
+    /// A protocol extension's member, from the SDK's graph: `(extension in …)`, as its symbol says.
+    #[test]
+    fn extension_members() {
+        let text = "SwiftData.ModelActor.modelContext { get }";
+        let expanded = super::expand(text).unwrap().unwrap();
+        assert_eq!(expanded, "(extension in SwiftData) SwiftData.ModelActor(protocol).modelContext: SwiftData.ModelContext(class) { get }");
+        let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(symbol), super::expected_symbol(text));
+    }
+}
+
+#[cfg(test)]
+mod coverage {
+    use super::{graphs, rewrite, usr_symbol};
+    use std::collections::BTreeMap;
+
+    /// A refusal's message with what names one declaration (`…` in backticks, numbers) taken out, to group them.
+    fn reason(stage: &str, message: &str) -> String {
+        let mut out = String::new();
+        let mut quoted = false;
+        for c in message.chars() {
+            match c {
+                '`' if quoted => {
+                    quoted = false;
+                    out.push_str("`…`");
+                }
+                '`' => quoted = true,
+                _ if quoted => {}
+                c if c.is_ascii_digit() => {}
+                c => out.push(c),
+            }
+        }
+        format!("{stage}: {}", out.chars().take(150).collect::<String>())
+    }
+
+    #[test]
+    #[ignore]
+    fn coverage() {
+        graphs::graphs();
+        let modules = std::env::var("APUS_COVERAGE").unwrap_or_else(|_| "StoreKit,SwiftData,MusicKit,WeatherKit,AppIntents,SwiftUI".into());
+        for name in modules.split(',') {
+            let Some(module) = graphs::graphs().module(name) else {
+                println!("{name}: no symbol graph");
+                continue;
+            };
+            let exported = crate::sdk::exported_symbols(name);
+            let mut reasons: BTreeMap<String, (usize, String)> = BTreeMap::new();
+            let (mut total, mut callable, mut generic) = (0, 0, 0);
+            for symbol in &module.symbols {
+                let accessor = match symbol.kind.as_str() {
+                    "swift.func" | "swift.method" | "swift.type.method" | "swift.init" => None,
+                    "swift.property" | "swift.type.property" | "swift.subscript" | "swift.type.subscript" => Some("get"),
+                    _ => continue,
+                };
+                // A protocol extension's member shown on a conforming type: called through the protocol.
+                if symbol.usr.contains("::SYNTHESIZED::") {
+                    continue;
+                }
+                total += 1;
+                let path: Vec<&str> = symbol.path.iter().map(String::as_str).collect();
+                let outcome = (|| {
+                    let declaration = rewrite(name, module, &path[..path.len() - 1], symbol, accessor).map_err(|e| reason("rewrite", &e))?;
+                    let parsed = apus_mangle::Declaration::parse_resolving(&declaration, graphs::graphs()).map_err(|e| {
+                        if std::env::var_os("APUS_COVERAGE_DETAIL").is_some() {
+                            println!("PARSE {declaration}\n  {e}");
+                        }
+                        reason("parse", &e.to_string())
+                    })?;
+                    let mangled = parsed.symbol().map_err(|e| reason("mangle", &e.to_string()))?;
+                    if let Some(expected) = usr_symbol(&symbol.usr, accessor).filter(|expected| *expected != mangled) {
+                        if std::env::var_os("APUS_COVERAGE_DETAIL").is_some() {
+                            println!("DIFF {declaration}\n  want {expected}\n  got  {mangled}");
+                        }
+                        return Err("mangle: differs from the symbol graph's USR".to_string());
+                    }
+                    let bound = !parsed.generic_parameter_names().is_empty();
+                    let checked = if bound { parsed.check_bound_callable() } else { parsed.check_callable() };
+                    checked.map_err(|e| reason("refused", &e.to_string()))?;
+                    let call = apus_mangle::call_symbol(&declaration).map_err(|e| reason("mangle", &e.to_string()))?;
+                    let thunk = apus_mangle::dispatch_thunk(&declaration).ok().flatten();
+                    let suffix = if parsed.is_async() { "Tu" } else { "" };
+                    if let Some(exported) = exported {
+                        if !std::iter::once(&call).chain(thunk.as_ref()).any(|s| exported.contains(&format!("{s}{suffix}"))) {
+                            return Err("not exported (inlinable, or a protocol's default implementation)".to_string());
+                        }
+                    }
+                    Ok((bound, declaration))
+                })();
+                match outcome {
+                    Ok((bound, _)) => {
+                        callable += 1;
+                        generic += usize::from(bound);
+                    }
+                    Err(why) => {
+                        let entry = reasons.entry(why).or_insert((0, path.join(".")));
+                        entry.0 += 1;
+                    }
+                }
+            }
+            println!("\n{name}: {callable}/{total} callable ({generic} of them bound generics)");
+            let mut sorted: Vec<_> = reasons.into_iter().collect();
+            sorted.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+            for (why, (count, example)) in sorted.iter().take(25) {
+                println!("  {count:5}  {why}   e.g. {example}");
+            }
+        }
+    }
 }

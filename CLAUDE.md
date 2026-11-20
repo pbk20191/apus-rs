@@ -71,6 +71,9 @@ README.md documents every user-facing rule; keep it in step with behavior change
 - Probes: a type nothing references is dead-stripped from the static `Probe` archive (return its metadata from a
   function); tests in one binary run in parallel (no shared counters); never release objects under a lock their
   `deinit` takes.
+- Framework coverage (how much of an SDK module `swift!` can call, and what refuses the rest):
+  `APUS_COVERAGE=StoreKit,SwiftData cargo test -p apus-macros coverage -- --ignored --nocapture`
+  (`APUS_COVERAGE_DETAIL=1` prints each mangling difference and parse error).
 - Builds need `MACOSX_DEPLOYMENT_TARGET` (set in `.cargo/config.toml`).
 - Commit locally with clear messages; push only when the owner asks — the repository is public, so check outgoing
   diffs for local paths and secrets first.
