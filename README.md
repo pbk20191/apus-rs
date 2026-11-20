@@ -293,7 +293,9 @@ println!("{}", products.description());                                     // S
 
 **Symbol graphs.** A declaration need not spell everything out when its module has a symbol graph: an SDK
 module's is extracted once (`swift-symbolgraph-extract`, about four seconds, cached under the temporary directory per
-SDK), a program's own module's is emitted by `apus-build` (and found through `APUS_SYMBOL_GRAPHS`).
+SDK) with a compact copy beside it (written the first time, up to ten seconds for SwiftUI's 500 MB graph): an index
+read by each build (SwiftUI's in about 0.2 s) and the symbols, each read when looked up. A program's own module's
+graph is emitted by `apus-build` (and found through `APUS_SYMBOL_GRAPHS`).
 
 - Kinds may be left out: `SwiftData.ModelContext.fetch<T: PersistentModel>(_: FetchDescriptor<T>) throws -> [T]`
   (`ModelContext` is a class, `PersistentModel` class-bound, as `(class)` and `(AnyObject)` would say). A kind or mark

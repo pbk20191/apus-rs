@@ -6,12 +6,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Fragment {
     pub kind: String,
     pub spelling: String,
     pub precise: Option<String>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Symbol {
     /// `swift.class`, `swift.method`, …
     pub kind: String,
@@ -26,18 +28,63 @@ pub struct Symbol {
     pub extension: Option<Extension>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Extension {
     pub extended_module: String,
     pub constraints: Vec<(String, String, String, Option<String>)>,
 }
 
+/// A module's symbols: indexed by kind, USR and path, each read whole only when asked for (an SDK module's from its
+/// compact copy, see [`load_cached`]).
 pub struct Module {
-    pub symbols: Vec<Symbol>,
+    entries: Vec<Entry>,
+    data: Option<std::fs::File>,
+}
+
+struct Entry {
+    kind: String,
+    usr: String,
+    path: Vec<String>,
+    /// Where its symbol is in the data file.
+    at: (u64, u64),
+    symbol: OnceLock<Option<Symbol>>,
 }
 
 impl Module {
+    fn symbol<'a>(&'a self, entry: &'a Entry) -> Option<&'a Symbol> {
+        entry
+            .symbol
+            .get_or_init(|| {
+                use std::os::unix::fs::FileExt;
+                let mut bytes = vec![0; (entry.at.1 - entry.at.0) as usize];
+                self.data.as_ref()?.read_exact_at(&mut bytes, entry.at.0).ok()?;
+                serde_json::from_slice(&bytes).ok()
+            })
+            .as_ref()
+    }
+
     pub fn find<'a>(&'a self, path: &'a [&str]) -> impl Iterator<Item = &'a Symbol> + 'a {
-        self.symbols.iter().filter(move |s| s.path.len() == path.len() && s.path.iter().zip(path).all(|(a, b)| a == b))
+        let matches = move |e: &&Entry| e.path.len() == path.len() && e.path.iter().zip(path).all(|(a, b)| a == b);
+        self.entries.iter().filter(matches).filter_map(|e| self.symbol(e))
+    }
+
+    /// The symbols with USR `usr` (a typealias's, a type's), of kind `kind` if given.
+    pub fn by_usr<'a>(&'a self, usr: &'a str, kind: Option<&'a str>) -> impl Iterator<Item = &'a Symbol> + 'a {
+        let matches = move |e: &&Entry| e.usr == usr && kind.is_none_or(|k| e.kind == k);
+        self.entries.iter().filter(matches).filter_map(|e| self.symbol(e))
+    }
+
+    #[cfg(test)]
+    pub fn symbols(&self) -> impl Iterator<Item = &Symbol> {
+        self.entries.iter().filter_map(|e| self.symbol(e))
+    }
+
+    fn of(symbols: Vec<Symbol>) -> Module {
+        let entries = symbols
+            .into_iter()
+            .map(|s| Entry { kind: s.kind.clone(), usr: s.usr.clone(), path: s.path.clone(), at: (0, 0), symbol: OnceLock::from(Some(s)) })
+            .collect();
+        Module { entries, data: None }
     }
 }
 
@@ -62,7 +109,7 @@ impl Graphs {
         if let Some(known) = self.modules.lock().unwrap_or_else(|e| e.into_inner()).get(name) {
             return *known;
         }
-        let loaded = locate(name).and_then(|file| load(&file)).map(|m| &*Box::leak(Box::new(m)));
+        let loaded = locate(name).and_then(|(file, cached)| if cached { load_cached(&file) } else { load(&file) }).map(|m| &*Box::leak(Box::new(m)));
         self.modules.lock().unwrap_or_else(|e| e.into_inner()).insert(name.to_string(), loaded);
         loaded
     }
@@ -138,17 +185,67 @@ pub fn usr_module(usr: &str) -> Option<String> {
     .to_string())
 }
 
-fn locate(module: &str) -> Option<PathBuf> {
+/// The module's graph file, and whether it is the SDK's (extracted into the cache, so its compact copy is kept).
+fn locate(module: &str) -> Option<(PathBuf, bool)> {
     for dir in std::env::var("APUS_SYMBOL_GRAPHS").unwrap_or_default().split(':').filter(|d| !d.is_empty()) {
         let file = Path::new(dir).join(format!("{module}.symbols.json"));
         if file.exists() {
-            return Some(file);
+            return Some((file, false));
         }
     }
     if module == "Swift" || module == "_Concurrency" {
         return None;
     }
-    extract(module)
+    extract(module).map(|file| (file, true))
+}
+
+/// An SDK module's graph from its compact copy beside it, written the first time: an index of its symbols' kinds,
+/// USRs and paths (`.apus2.idx`), and the symbols (`.apus2.dat`), each read when looked up. The graph is tens or
+/// hundreds of megabytes (SwiftUI's: 500), which every crate naming the module would otherwise read whole.
+fn load_cached(file: &Path) -> Option<Module> {
+    let (index, data) = (file.with_extension("apus2.idx"), file.with_extension("apus2.dat"));
+    if let Some(module) = load_compact(&index, &data) {
+        return Some(module);
+    }
+    let module = load(file)?;
+    let _ = save_compact(&module, &index, &data);
+    Some(module)
+}
+
+type IndexEntry = (String, String, Vec<String>, u64, u64);
+
+fn load_compact(index: &Path, data: &Path) -> Option<Module> {
+    let entries: Vec<IndexEntry> = serde_json::from_slice(&std::fs::read(index).ok()?).ok()?;
+    let data = std::fs::File::open(data).ok()?;
+    // The index's data file, not another's: it ends where the index's last symbol does.
+    if entries.last().map(|e| e.4) != Some(data.metadata().ok()?.len()) {
+        return None;
+    }
+    let entries = entries.into_iter().map(|(kind, usr, path, start, end)| Entry { kind, usr, path, at: (start, end), symbol: OnceLock::new() }).collect();
+    Some(Module { entries, data: Some(data) })
+}
+
+/// Writes the data, then the index, each whole or not at all (another build may be reading them); both are the same
+/// whichever build writes them.
+fn save_compact(module: &Module, index: &Path, data: &Path) -> std::io::Result<()> {
+    let mut bytes = Vec::new();
+    let mut entries: Vec<IndexEntry> = Vec::new();
+    for entry in &module.entries {
+        let Some(symbol) = module.symbol(entry) else { continue };
+        let start = bytes.len() as u64;
+        serde_json::to_writer(&mut bytes, symbol)?;
+        entries.push((entry.kind.clone(), entry.usr.clone(), entry.path.clone(), start, bytes.len() as u64));
+    }
+    let write = |file: &Path, bytes: &[u8]| {
+        // Its own name per file, process and thread: builds and threads may write at once.
+        let mut work = file.as_os_str().to_owned();
+        work.push(format!(".{}.{:?}.tmp", std::process::id(), std::thread::current().id()).replace(['(', ')'], ""));
+        let work = PathBuf::from(work);
+        std::fs::write(&work, bytes)?;
+        std::fs::rename(&work, file)
+    };
+    write(data, &bytes)?;
+    write(index, &serde_json::to_vec(&entries)?)
 }
 
 /// Extracts `module`'s graph from the SDK into a cache shared by the builds against this SDK (about four seconds the
@@ -191,48 +288,135 @@ fn extract(module: &str) -> Option<PathBuf> {
     result
 }
 
-/// Requirements as `swiftGenerics` and `swiftExtension` list them: (kind, lhs, rhs, rhs's USR).
-fn constraints(list: &serde_json::Value) -> Vec<(String, String, String, Option<String>)> {
-    let string = |v: &serde_json::Value| v.as_str().map(str::to_string);
-    list.as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|c| Some((string(&c["kind"])?, string(&c["lhs"])?, string(&c["rhs"])?, string(&c["rhsPrecise"]))))
-        .collect()
+/// The parts of a graph apus reads; the rest (documentation, locations, relationships, availability) is skipped.
+mod raw {
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    pub struct Graph {
+        pub symbols: Vec<Symbol>,
+    }
+
+    #[derive(Deserialize)]
+    pub struct Symbol {
+        pub kind: Named,
+        pub identifier: Identifier,
+        #[serde(rename = "pathComponents", default)]
+        pub path: Vec<String>,
+        #[serde(rename = "declarationFragments", default)]
+        pub fragments: Vec<Fragment>,
+        #[serde(rename = "swiftGenerics", default)]
+        pub generics: Option<Generics>,
+        #[serde(rename = "swiftExtension", default)]
+        pub extension: Option<Extension>,
+    }
+
+    #[derive(Deserialize)]
+    pub struct Named {
+        pub identifier: String,
+    }
+
+    #[derive(Deserialize)]
+    pub struct Identifier {
+        pub precise: String,
+    }
+
+    #[derive(Deserialize)]
+    pub struct Fragment {
+        pub kind: String,
+        pub spelling: String,
+        #[serde(rename = "preciseIdentifier", default)]
+        pub precise: Option<String>,
+    }
+
+    #[derive(Deserialize, Default)]
+    pub struct Generics {
+        #[serde(default)]
+        pub parameters: Vec<Parameter>,
+        #[serde(default)]
+        pub constraints: Vec<Constraint>,
+    }
+
+    #[derive(Deserialize)]
+    pub struct Parameter {
+        pub name: String,
+        pub depth: u64,
+    }
+
+    #[derive(Deserialize)]
+    pub struct Constraint {
+        pub kind: String,
+        pub lhs: String,
+        pub rhs: String,
+        #[serde(rename = "rhsPrecise", default)]
+        pub rhs_precise: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    pub struct Extension {
+        #[serde(rename = "extendedModule", default)]
+        pub extended_module: String,
+        #[serde(default)]
+        pub constraints: Vec<Constraint>,
+    }
 }
 
 fn load(file: &Path) -> Option<Module> {
-    let text = std::fs::read_to_string(file).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let string = |v: &serde_json::Value| v.as_str().map(str::to_string);
-    let symbols = json["symbols"]
-        .as_array()?
-        .iter()
-        .filter_map(|s| {
-            let generics = &s["swiftGenerics"];
-            Some(Symbol {
-                kind: string(&s["kind"]["identifier"])?,
-                usr: string(&s["identifier"]["precise"])?,
-                path: s["pathComponents"].as_array()?.iter().filter_map(string).collect(),
-                fragments: s["declarationFragments"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|f| Some(Fragment { kind: string(&f["kind"])?, spelling: string(&f["spelling"])?, precise: string(&f["preciseIdentifier"]) }))
-                    .collect(),
-                params: generics["parameters"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|p| Some((string(&p["name"])?, p["depth"].as_u64()?)))
-                    .collect(),
-                constraints: constraints(&generics["constraints"]),
-                extension: s.get("swiftExtension").map(|e| Extension {
-                    extended_module: string(&e["extendedModule"]).unwrap_or_default(),
-                    constraints: constraints(&e["constraints"]),
-                }),
-            })
+    let bytes = std::fs::read(file).ok()?;
+    let graph: raw::Graph = serde_json::from_slice(&bytes).ok()?;
+    let constraints = |list: Vec<raw::Constraint>| list.into_iter().map(|c| (c.kind, c.lhs, c.rhs, c.rhs_precise)).collect();
+    let symbols = graph
+        .symbols
+        .into_iter()
+        .map(|s| {
+            let generics = s.generics.unwrap_or_default();
+            Symbol {
+                kind: s.kind.identifier,
+                usr: s.identifier.precise,
+                path: s.path,
+                fragments: s.fragments.into_iter().map(|f| Fragment { kind: f.kind, spelling: f.spelling, precise: f.precise }).collect(),
+                params: generics.parameters.into_iter().map(|p| (p.name, p.depth)).collect(),
+                constraints: constraints(generics.constraints),
+                extension: s.extension.map(|e| Extension { extended_module: e.extended_module, constraints: constraints(e.constraints) }),
+            }
         })
         .collect();
-    Some(Module { symbols })
+    Some(Module::of(symbols))
+}
+
+#[cfg(test)]
+mod tests {
+    /// A graph read from its compact copy holds what the graph itself gives.
+    #[test]
+    fn compact_copy() {
+        let file = super::extract("SwiftData").expect("the SDK's SwiftData graph");
+        let full = super::load(&file).unwrap();
+        let dir = std::env::temp_dir().join(format!("apus-compact-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (index, data) = (dir.join("SwiftData.idx"), dir.join("SwiftData.dat"));
+        super::save_compact(&full, &index, &data).unwrap();
+        let read = super::load_compact(&index, &data).unwrap();
+        assert_eq!(read.symbols().count(), full.symbols().count());
+        let _ = std::fs::remove_dir_all(&dir);
+        let find = |m: &super::Module| {
+            m.find(&["ModelContext", "fetch(_:)"]).map(|s| (s.usr.clone(), s.fragments.len(), s.constraints.clone())).collect::<Vec<_>>()
+        };
+        assert_eq!(find(&read), find(&full));
+        assert!(!find(&full).is_empty());
+    }
+
+    #[test]
+    #[ignore]
+    fn load_time() {
+        for m in ["Foundation", "SwiftUI"] {
+            let file = super::extract(m).unwrap();
+            let t = std::time::Instant::now();
+            let module = super::load_cached(&file).unwrap();
+            let first = t.elapsed();
+            let t = std::time::Instant::now();
+            let module2 = super::load_cached(&file).unwrap();
+            let found = module2.find(&["View", "body"]).count() + module.find(&["Date", "now"]).count();
+            println!("{m}: first {first:?} cached {:?} ({found})", t.elapsed());
+        }
+    }
 }

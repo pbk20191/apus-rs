@@ -371,7 +371,7 @@ fn type_fragment(fragments: &[Fragment], i: usize, params: &[&str], module: &str
     match (alias, nested) {
         (Some(usr), false) if depth < 4 => {
             let declared = graphs::usr_module(usr).and_then(|m| graphs::graphs().module(&m));
-            let alias = declared.and_then(|m| m.symbols.iter().find(|s| s.usr == usr && s.kind == "swift.typealias"));
+            let alias = declared.and_then(|m| m.by_usr(usr, Some("swift.typealias")).next());
             let Some(alias) = alias else { return Err(format!("`{}` ({usr}): write the declaration in full", f.spelling)) };
             // `typealias Name = Type`: what follows ` = `, which names no generic parameter of the alias's context.
             let Some(start) = alias.fragments.iter().position(|f| f.kind == "text" && f.spelling.contains('=')) else {
@@ -409,7 +409,7 @@ const VARIADIC: char = '\u{1}';
 fn variadic_mark(f: &Fragment) -> Option<&'static str> {
     let Some(usr) = f.precise.as_deref() else { return Some("") };
     let module = graphs::usr_module(usr).and_then(|m| graphs::graphs().module(&m));
-    let Some(ty) = module.and_then(|m| m.symbols.iter().find(|s| s.usr == usr)) else { return Some("") };
+    let Some(ty) = module.and_then(|m| m.by_usr(usr, None).next()) else { return Some("") };
     match ty.fragments.iter().any(|f| f.kind == "text" && f.spelling.contains("each ")) {
         false => Some(""),
         // One parameter, the pack: anything else is not written.
@@ -604,7 +604,7 @@ mod coverage {
             let exported = crate::sdk::exported_symbols(name);
             let mut reasons: BTreeMap<String, (usize, String)> = BTreeMap::new();
             let (mut total, mut callable, mut generic) = (0, 0, 0);
-            for symbol in &module.symbols {
+            for symbol in module.symbols() {
                 let accessor = match symbol.kind.as_str() {
                     "swift.func" | "swift.method" | "swift.type.method" | "swift.init" => None,
                     "swift.property" | "swift.type.property" | "swift.subscript" | "swift.type.subscript" => Some("get"),
