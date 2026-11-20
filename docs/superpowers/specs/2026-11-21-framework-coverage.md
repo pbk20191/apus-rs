@@ -14,13 +14,13 @@
 
 ## 결과 (호출 가능 / 전체)
 
-| 모듈 | 처음 | rewrite 수정 후 |
-|---|---|---|
-| StoreKit | 265/804 | 343/804 |
-| SwiftData | 268/505 | 347/505 |
-| MusicKit | 657/974 | 828/974 |
-| WeatherKit | 187/382 | 267/382 |
-| AppIntents | 480/3771 | 654/3771 |
+| 모듈 | 처음 | extension, stdlib 이름 | 중첩 타입 |
+|---|---|---|---|
+| StoreKit | 265/804 | 343/804 | 524/804 |
+| SwiftData | 268/505 | 347/505 | 383/505 |
+| MusicKit | 657/974 | 828/974 | 857/974 |
+| WeatherKit | 187/382 | 267/382 | 275/382 |
+| AppIntents | 480/3771 | 654/3771 | 665/3771 |
 
 ## 고친 것 (rewrite, ABI와 무관)
 
@@ -32,9 +32,11 @@
   - 전에는 선언한 모듈의 타입으로 해석되었다. 그래서 `init(from:)`, `encode(to:)`, `hash(into:)`가 USR과 달랐다.
   - 이 차이는 비교 검사로 컴파일 단계에서 거부되었으므로 UB는 아니었다.
 
+- 중첩 타입(`Product.SubscriptionInfo.Item`): graph는 이름 조각마다 fragment를 따로 준다. rewrite가 조각마다 모듈을
+  붙여 쓰고 있었다. 이제 안쪽 이름은 kind만 붙여 쓴다.
+
 ## 남은 큰 항목
 
-- 중첩 타입의 kind를 찾지 못하는 경우. StoreKit `Product.SubscriptionInfo.RenewalInfo…`에서 182개.
 - 가져온 C/Objective-C 타입(`c:` USR, `So…` 심볼): rewrite가 거부한다.
 - typealias(`…a` USR)를 풀지 못한다.
 - `Foundation.Predicate`처럼 파라미터 팩을 받는 타입(`_QP`): mangler가 팩을 모른다.

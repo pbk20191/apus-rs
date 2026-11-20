@@ -182,6 +182,10 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
                 body.push_str(rest);
                 own_generics_skipped = true;
             }
+            // `Outer.Inner`: the graph gives each name its own fragment; an inner one is written with its kind only.
+            "typeIdentifier" if i >= 2 && fragments[i - 1].spelling == "." && fragments[i - 2].kind == "typeIdentifier" => {
+                body.push_str(&nested_name(f)?)
+            }
             "typeIdentifier" => body.push_str(&type_name(f, &all_params, module_name)?),
             _ => body.push_str(&f.spelling),
         }
@@ -297,6 +301,17 @@ fn named(spelling: &str, usr: Option<&str>, module: &str) -> Result<String, Stri
     Ok(format!("{owner}.{spelling}{kind}"))
 }
 
+/// A type nested in the one before it (`Inner` of `Outer.Inner`): its name and kind.
+fn nested_name(f: &Fragment) -> Result<String, String> {
+    let kind = match f.precise.as_deref().and_then(|usr| usr.chars().last()) {
+        Some('V') => "(struct)",
+        Some('C') => "(class)",
+        Some('O') => "(enum)",
+        _ => return Err(format!("`{}` ({:?}): write the declaration in full", f.spelling, f.precise)),
+    };
+    Ok(format!("{}{kind}", f.spelling))
+}
+
 fn type_name(f: &Fragment, params: &[&str], module: &str) -> Result<String, String> {
     if params.contains(&f.spelling.as_str()) || f.spelling == "Self" {
         return Ok(f.spelling.clone());
@@ -344,6 +359,17 @@ mod tests {
         let text = "SwiftData.ModelActor.modelContext { get }";
         let expanded = super::expand(text).unwrap().unwrap();
         assert_eq!(expanded, "(extension in SwiftData) SwiftData.ModelActor(protocol).modelContext: SwiftData.ModelContext(class) { get }");
+        let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(symbol), super::expected_symbol(text));
+    }
+    /// A nested type in a signature: its module once, each enclosing type with its kind.
+    #[test]
+    fn nested_types() {
+        let text = "StoreKit.Product.SubscriptionInfo.RenewalInfo.AdvancedCommerceInfo.items { get }";
+        let expanded = super::expand(text).unwrap().unwrap();
+        assert!(expanded.ends_with(
+            "items: [StoreKit.Product(struct).SubscriptionInfo(struct).RenewalInfo(struct).AdvancedCommerceInfo(struct).Item(struct)] { get }"
+        ), "{expanded}");
         let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
         assert_eq!(Some(symbol), super::expected_symbol(text));
     }
