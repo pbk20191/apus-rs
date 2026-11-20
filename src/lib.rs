@@ -11,7 +11,7 @@ mod runloop;
 pub mod swift;
 
 #[cfg(feature = "swift")]
-pub use apus_macros::{mangle, result_type};
+pub use apus_macros::{mangle, result_type, swift_protocol, swift_type};
 #[cfg(feature = "swift")]
 #[doc(hidden)]
 pub use apus_macros::{__call_symbol, __consumes_self, __dispatch_thunk, __opaque_descriptor, __returns_self, __swift_route};

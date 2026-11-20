@@ -89,6 +89,50 @@ pub fn result_type(input: TokenStream) -> TokenStream {
     }
 }
 
+/// The one string literal of a macro's input.
+fn single_literal(input: TokenStream) -> Option<String> {
+    match flatten(input).as_slice() {
+        [literal] => string_literal(literal),
+        _ => None,
+    }
+}
+
+/// Expands to the mangled name (a string literal, no `$s`) of a concrete Swift type, written as in a declaration, for
+/// `SwiftType::from_mangled_name`:
+///
+/// ```ignore
+/// assert_eq!(apus::swift_type!("Todos.Todo(class)"), "5Todos4TodoC");
+/// assert_eq!(apus::swift_type!("[String]"), "SaySSG");
+/// // let todo = apus::swift::SwiftType::from_mangled_name(apus::swift_type!("Todos.Todo(class)"));
+/// ```
+#[proc_macro]
+pub fn swift_type(input: TokenStream) -> TokenStream {
+    let Some(ty) = single_literal(input) else {
+        return compile_error("expected a Swift type as a string literal, e.g. swift_type!(\"Todos.Todo(class)\")");
+    };
+    match apus_mangle::type_name(&ty) {
+        Ok(name) => TokenTree::Literal(Literal::string(&name)).into(),
+        Err(error) => compile_error(&format!("cannot mangle {error}")),
+    }
+}
+
+/// Expands to a protocol's descriptor symbol (a string literal), for `SwiftProtocol::new`:
+///
+/// ```ignore
+/// assert_eq!(apus::swift_protocol!("SwiftData.PersistentModel"), "$s9SwiftData15PersistentModelMp");
+/// static MODEL: apus::swift::SwiftProtocol = apus::swift::SwiftProtocol::new(apus::swift_protocol!("Swift.Hashable"));
+/// ```
+#[proc_macro]
+pub fn swift_protocol(input: TokenStream) -> TokenStream {
+    let Some(protocol) = single_literal(input) else {
+        return compile_error("expected a Swift protocol as a string literal, e.g. swift_protocol!(\"SwiftData.PersistentModel\")");
+    };
+    match apus_mangle::protocol_descriptor_of(&protocol) {
+        Ok(symbol) => TokenTree::Literal(Literal::string(&symbol)).into(),
+        Err(error) => compile_error(&format!("cannot mangle {error}")),
+    }
+}
+
 /// Expands to the declaration's opaque type descriptor symbol as an `Option<&'static str>`: `Some("…QOMQ")` for a
 /// `some P` result, else `None`.
 #[doc(hidden)]

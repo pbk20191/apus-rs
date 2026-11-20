@@ -209,6 +209,18 @@
 /// const SYMBOL: &str = apus::mangle!("Probe.f(_: Mystery(struct)) -> Int");
 /// assert_eq!(SYMBOL, "$s5Probe1fySiAA7MysteryVF");
 /// ```
+///
+/// [`swift_type!`](crate::swift_type) and [`swift_protocol!`](crate::swift_protocol) name a type and a protocol the
+/// same way, for `SwiftType::from_mangled_name` and `SwiftProtocol::new`:
+///
+/// ```
+/// assert_eq!(apus::swift_type!("SwiftData.FetchResultsCollection(struct)<Todos.Todo(class)>"), "9SwiftData22FetchResultsCollectionVy5Todos4TodoCG");
+/// assert_eq!(apus::swift_protocol!("SwiftData.PersistentModel"), "$s9SwiftData15PersistentModelMp");
+/// ```
+///
+/// ```compile_fail
+/// const NAME: &str = apus::swift_type!("Todos.Todo"); // needs its kind: `Todos.Todo(class)`
+/// ```
 #[macro_export]
 macro_rules! swift {
     () => {};

@@ -76,6 +76,34 @@ pub fn result_type(declaration: &str) -> Result<Option<String>, Error> {
     mangler::result_type(&decl).map_err(Error)
 }
 
+/// The module a bare name in `ty` belongs to: its leading `Module.` (`Todos.Todo(class)`), else the standard library.
+fn leading_module(ty: &str) -> &str {
+    let ty = ty.trim_start();
+    let end = ty.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(ty.len());
+    if end > 0 && ty[end..].starts_with('.') { &ty[..end] } else { "Swift" }
+}
+
+/// The mangled name of a concrete type written as in a declaration (`Todos.Todo(class)`,
+/// `SwiftData.FetchResultsCollection(struct)<Todos.Todo(class)>`), in the form the Swift runtime resolves
+/// (`swift_getTypeByMangledNameInContext`): `"5Todos4TodoC"`. A bare name belongs to the leading module.
+pub fn type_name(ty: &str) -> Result<String, Error> {
+    let declaration = format!("{}.__apus_type() -> {ty}", leading_module(ty));
+    result_type(&declaration)
+        .map_err(|Error(e)| Error(format!("`{ty}`: {e}")))?
+        .ok_or_else(|| Error(format!("`{ty}`: the type must be concrete")))
+}
+
+/// A protocol's descriptor symbol (`…Mp`, documented mangling) from its name: `"$s9SwiftData15PersistentModelMp"` for
+/// `SwiftData.PersistentModel`.
+pub fn protocol_descriptor_of(protocol: &str) -> Result<String, Error> {
+    let declaration = format!("{}.__apus_protocol<T: {protocol}>(_: T)", leading_module(protocol));
+    let decl = parse::parse(&declaration).map_err(|e| Error(format!("`{protocol}`: {e}")))?;
+    match decl.requirements.as_slice() {
+        [ast::Requirement::Conforms(_, p)] => mangler::protocol_descriptor(p).map_err(Error),
+        _ => Err(Error(format!("`{protocol}` is not one protocol"))),
+    }
+}
+
 /// Where a call to a synchronous declaration must run: apus hops there first and back afterwards. An async
 /// declaration hops by itself, a `nonisolated` member needs nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

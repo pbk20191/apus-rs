@@ -442,3 +442,17 @@ fn result_types() {
     assert_eq!(result_type("Probe.f<T>(_: T) -> [T]").unwrap(), None);
     assert_eq!(result_type("Probe.f<S: Sequence>(_: S) -> S.Element where S.Element == Int").unwrap().as_deref(), Some("Si"));
 }
+
+#[test]
+fn type_names_and_protocol_descriptors() {
+    use apus_mangle::{protocol_descriptor_of, type_name};
+    assert_eq!(type_name("Todos.Todo(class)").unwrap(), "5Todos4TodoC");
+    assert_eq!(
+        type_name("SwiftData.FetchResultsCollection(struct)<Todos.Todo(class)>").unwrap(),
+        "9SwiftData22FetchResultsCollectionVy5Todos4TodoCG"
+    );
+    assert_eq!(type_name("[String]").unwrap(), "SaySSG");
+    assert!(type_name("Todos.Todo").is_err(), "a type needs its kind");
+    assert_eq!(protocol_descriptor_of("SwiftData.PersistentModel").unwrap(), "$s9SwiftData15PersistentModelMp");
+    assert_eq!(protocol_descriptor_of("Swift.Hashable").unwrap(), "$sSHMp");
+}
