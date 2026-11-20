@@ -206,7 +206,7 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
         .chain(member_constraints.iter().copied())
         .map(|(kind, lhs, rhs, usr)| requirement(kind, lhs, rhs, usr.as_deref(), &all_params, module_name))
         .collect::<Result<_, _>>()?;
-    let mut body = strip_defaults(body.trim());
+    let mut body = packs(&strip_defaults(body.trim()));
     // A property: `name: Type { get … }`, with the accessor written.
     if let Some(accessor) = accessor {
         let effects = match body.find(" {") {
@@ -391,9 +391,65 @@ fn type_fragment(fragments: &[Fragment], i: usize, params: &[&str], module: &str
             Ok(written)
         }
         (Some(usr), _) => Err(format!("`{}` ({usr}): write the declaration in full", f.spelling)),
-        (None, true) => nested_name(f),
-        (None, false) => type_name(f, params, module),
+        (None, nested) => {
+            // Only a type with generic arguments may be variadic (its module's graph is read then).
+            let arguments = fragments.get(i + 1).is_some_and(|n| n.spelling.starts_with('<'));
+            let mark = if arguments { variadic_mark(f) } else { Some("") };
+            let mark = mark.ok_or_else(|| format!("`{}`: a variadic type with other parameters: write the declaration in full", f.spelling))?;
+            let name = if nested { nested_name(f)? } else { type_name(f, params, module)? };
+            Ok(name + mark)
+        }
     }
+}
+
+/// Marks a variadic generic type (`struct Predicate<each Input>`, from its module's graph), whose arguments
+/// [`packs`] writes as its one pack.
+const VARIADIC: char = '\u{1}';
+
+fn variadic_mark(f: &Fragment) -> Option<&'static str> {
+    let Some(usr) = f.precise.as_deref() else { return Some("") };
+    let module = graphs::usr_module(usr).and_then(|m| graphs::graphs().module(&m));
+    let Some(ty) = module.and_then(|m| m.symbols.iter().find(|s| s.usr == usr)) else { return Some("") };
+    match ty.fragments.iter().any(|f| f.kind == "text" && f.spelling.contains("each ")) {
+        false => Some(""),
+        // One parameter, the pack: anything else is not written.
+        true if ty.params.len() == 1 => Some("\u{1}"),
+        true => None,
+    }
+}
+
+/// `Predicate\u{1}<A, B>` as `Predicate<Pack{A, B}>`.
+fn packs(body: &str) -> String {
+    let mut out = String::new();
+    let mut closing: Vec<usize> = Vec::new(); // angle depths whose `>` closes a pack
+    let mut depth = 0usize;
+    let mut chars = body.chars().peekable();
+    let mut previous = ' ';
+    while let Some(c) = chars.next() {
+        match c {
+            VARIADIC if chars.peek() == Some(&'<') => {
+                chars.next();
+                depth += 1;
+                closing.push(depth);
+                out.push_str("<Pack{");
+                previous = '<';
+                continue;
+            }
+            VARIADIC => continue,
+            '<' => depth += 1,
+            '>' if previous != '-' => {
+                if closing.last() == Some(&depth) {
+                    closing.pop();
+                    out.push('}');
+                }
+                depth = depth.saturating_sub(1);
+            }
+            _ => {}
+        }
+        out.push(c);
+        previous = c;
+    }
+    out
 }
 
 /// A type nested in the one before it (`Inner` of `Outer.Inner`): its name and kind.
@@ -486,6 +542,16 @@ mod tests {
             "StoreKit.Product.SubscriptionInfo.RenewalInfo.AdvancedCommerceInfo.period { get }",
             "period: StoreKit.Product(struct).SubscriptionPeriod(struct) { get }",
         );
+    }
+
+    /// A variadic generic type's arguments are its pack: `Predicate<each Input>`.
+    #[test]
+    fn variadic_types() {
+        let text = "SwiftData.HistoryDescriptor.predicate { get }";
+        let expanded = super::expand(text).unwrap().unwrap();
+        assert!(expanded.contains("predicate: Foundation.Predicate(struct)<Pack{TransactionType}>? { get }"), "{expanded}");
+        let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(symbol), super::expected_symbol(text), "{expanded}");
     }
 
     /// A nested type in a signature: its module once, each enclosing type with its kind.

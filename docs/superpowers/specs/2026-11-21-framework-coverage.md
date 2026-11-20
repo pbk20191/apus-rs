@@ -14,13 +14,13 @@
 
 ## 결과 (호출 가능 / 전체)
 
-| 모듈 | 처음 | extension, stdlib 이름 | 중첩 타입 | ObjC 클래스, 속성 |
-|---|---|---|---|---|
-| StoreKit | 265/804 | 343/804 | 524/804 | 590/804 |
-| SwiftData | 268/505 | 347/505 | 383/505 | 390/505 |
-| MusicKit | 657/974 | 828/974 | 857/974 | 861/974 |
-| WeatherKit | 187/382 | 267/382 | 275/382 | 335/382 |
-| AppIntents | 480/3771 | 654/3771 | 665/3771 | 678/3771 |
+| 모듈 | 처음 | extension, stdlib 이름 | 중첩 타입 | ObjC 클래스, 속성 | 기본값, typealias, 팩 |
+|---|---|---|---|---|---|
+| StoreKit | 265/804 | 343/804 | 524/804 | 590/804 | 602/804 |
+| SwiftData | 268/505 | 347/505 | 383/505 | 390/505 | 425/505 |
+| MusicKit | 657/974 | 828/974 | 857/974 | 861/974 | 862/974 |
+| WeatherKit | 187/382 | 267/382 | 275/382 | 335/382 | 336/382 |
+| AppIntents | 480/3771 | 654/3771 | 665/3771 | 678/3771 | 749/3771 |
 
 ## 고친 것 (rewrite, ABI와 무관)
 
@@ -43,10 +43,21 @@
   - 조각으로 나뉜 `@` `MainActor`를 하나로 읽는다.
   - `nonisolated` 속성을 받아들인다.
 
+- 기본값은 지운다(`= #isolation`만 남긴다). 심볼에도 호출에도 영향이 없기 때문이다.
+- 모듈의 typealias는 그것이 가리키는 타입으로 쓴다. Swift가 그렇게 mangle한다.
+  - 제네릭 typealias와 stdlib typealias(`Array<T>.Index`)는 거부한다.
+  - stdlib는 graph가 없다.
+- 파라미터 팩을 받는 타입(`Predicate<each Input>`): 그 타입의 graph 선언에 `each`가 있으면 인자를 `Pack{…}`으로 쓴다.
+  parser와 mangler는 이미 `Pack{}`을 지원한다.
+  - 실험(2026-11-21) 결과는 다음과 같다.
+    - `Predicate<Int>`는 `Si_QP`로 mangle된다.
+    - `Predicate<Int, String>`은 `Si_SSQP`로 mangle된다.
+    - `Predicate<E>`는 `x_QP`로 mangle된다.
+  - 파라미터가 팩 하나뿐인 타입만 쓴다.
+
 ## 남은 큰 항목
 
 - 가져온 C 타입(enum `c:@E@`, struct `c:@SA@`, typedef `c:@T@`)과 Objective-C에서 온 멤버(`So…` 심볼): rewrite가 거부한다.
-- typealias(`…a` USR)를 풀지 못한다.
-- `Foundation.Predicate`처럼 파라미터 팩을 받는 타입(`_QP`): mangler가 팩을 모른다.
+- 프로토콜의 associated type(`…Qa`, `Self.Filter`)과 stdlib typealias.
 - export되지 않은 것(`@inlinable` 등): shim이 필요하다.
 - AppIntents: result builder와 string interpolation 같은 컴파일 시점 기능, 그리고 "parse: expected …".
