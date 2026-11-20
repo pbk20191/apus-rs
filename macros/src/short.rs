@@ -190,11 +190,7 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
                 body.push_str(rest);
                 own_generics_skipped = true;
             }
-            // `Outer.Inner`: the graph gives each name its own fragment; an inner one is written with its kind only.
-            "typeIdentifier" if i >= 2 && fragments[i - 1].spelling == "." && fragments[i - 2].kind == "typeIdentifier" => {
-                body.push_str(&nested_name(f)?)
-            }
-            "typeIdentifier" => body.push_str(&type_name(f, &all_params, module_name)?),
+            "typeIdentifier" => body.push_str(&type_fragment(fragments, i, &all_params, module_name, 0)?),
             _ => body.push_str(&f.spelling),
         }
         i += 1;
@@ -210,7 +206,7 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
         .chain(member_constraints.iter().copied())
         .map(|(kind, lhs, rhs, usr)| requirement(kind, lhs, rhs, usr.as_deref(), &all_params, module_name))
         .collect::<Result<_, _>>()?;
-    let mut body = body.trim().to_string();
+    let mut body = strip_defaults(body.trim());
     // A property: `name: Type { get … }`, with the accessor written.
     if let Some(accessor) = accessor {
         let effects = match body.find(" {") {
@@ -238,6 +234,56 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
     }
     let modifiers = if modifiers.is_empty() { String::new() } else { format!("{} ", modifiers.join(" ")) };
     Ok(format!("{modifiers}{extension}{prefix}.{body}"))
+}
+
+/// The parameter list without default values (` = …`), which neither the symbol nor the call depends on; apus
+/// reads `= #isolation` only, which makes the caller pass its isolation.
+fn strip_defaults(body: &str) -> String {
+    // The first `(` outside the generic clause (`f<T: M.P(protocol)>(…)`).
+    let mut angle = 0usize;
+    let open = body.char_indices().find(|&(at, c)| {
+        match c {
+            '<' => angle += 1,
+            '>' if !body[..at].ends_with('-') => angle = angle.saturating_sub(1),
+            '(' if angle == 0 => return true,
+            _ => {}
+        }
+        false
+    });
+    let Some((open, _)) = open else { return body.to_string() };
+    let mut out = String::from(&body[..=open]);
+    let (mut depth, mut skipping) = (0usize, false);
+    let chars: Vec<char> = body[open + 1..].chars().collect();
+    let mut k = 0;
+    while k < chars.len() {
+        let c = chars[k];
+        if depth == 0 && !skipping && c == ' ' && chars.get(k + 1) == Some(&'=') && chars.get(k + 2) == Some(&' ') {
+            let rest: String = chars[k + 3..].iter().collect();
+            if !rest.starts_with("#isolation") {
+                skipping = true;
+                k += 3;
+                continue;
+            }
+        }
+        match c {
+            '(' | '[' | '<' => depth += 1,
+            ')' | ']' | '>' if depth == 0 && c == ')' => {
+                out.extend(&chars[k..]);
+                return out;
+            }
+            ')' | ']' => depth -= 1,
+            // `->` is no closing bracket.
+            '>' if k > 0 && chars[k - 1] == '-' => {}
+            '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => skipping = false,
+            _ => {}
+        }
+        if !skipping {
+            out.push(c);
+        }
+        k += 1;
+    }
+    out
 }
 
 fn context_params_str(params: &[String]) -> Vec<&str> {
@@ -316,6 +362,40 @@ fn named(spelling: &str, usr: Option<&str>, module: &str) -> Result<String, Stri
     Ok(format!("{owner}.{spelling}{kind}"))
 }
 
+/// The type the fragment at `i` names: a typealias as the type it stands for (Swift mangles that), a type nested in
+/// the one before it (`Inner` of `Outer.Inner`, which the graph splits) with its kind only, any other with its module.
+fn type_fragment(fragments: &[Fragment], i: usize, params: &[&str], module: &str, depth: usize) -> Result<String, String> {
+    let f = &fragments[i];
+    let nested = i >= 2 && fragments[i - 1].spelling.ends_with('.') && fragments[i - 2].kind == "typeIdentifier";
+    let alias = f.precise.as_deref().filter(|usr| usr.ends_with('a') && !usr.ends_with("Qa") && usr.starts_with("s:"));
+    match (alias, nested) {
+        (Some(usr), false) if depth < 4 => {
+            let declared = graphs::usr_module(usr).and_then(|m| graphs::graphs().module(&m));
+            let alias = declared.and_then(|m| m.symbols.iter().find(|s| s.usr == usr && s.kind == "swift.typealias"));
+            let Some(alias) = alias else { return Err(format!("`{}` ({usr}): write the declaration in full", f.spelling)) };
+            // `typealias Name = Type`: what follows ` = `, which names no generic parameter of the alias's context.
+            let Some(start) = alias.fragments.iter().position(|f| f.kind == "text" && f.spelling.contains('=')) else {
+                return Err(format!("`{}` ({usr}): write the declaration in full", f.spelling));
+            };
+            let target = &alias.fragments[start + 1..];
+            if target.iter().any(|f| f.kind == "typeIdentifier" && f.precise.is_none()) {
+                return Err(format!("`{}` ({usr}): a generic typealias: write the declaration in full", f.spelling));
+            }
+            let mut written = alias.fragments[start].spelling.split('=').nth(1).unwrap_or("").trim_start().to_string();
+            for j in start + 1..alias.fragments.len() {
+                match alias.fragments[j].kind.as_str() {
+                    "typeIdentifier" => written.push_str(&type_fragment(&alias.fragments, j, params, module, depth + 1)?),
+                    _ => written.push_str(&alias.fragments[j].spelling),
+                }
+            }
+            Ok(written)
+        }
+        (Some(usr), _) => Err(format!("`{}` ({usr}): write the declaration in full", f.spelling)),
+        (None, true) => nested_name(f),
+        (None, false) => type_name(f, params, module),
+    }
+}
+
 /// A type nested in the one before it (`Inner` of `Outer.Inner`): its name and kind.
 fn nested_name(f: &Fragment) -> Result<String, String> {
     let kind = match f.precise.as_deref().and_then(|usr| usr.chars().last()) {
@@ -390,6 +470,22 @@ mod tests {
         check("WeatherKit.DayWeather.highTemperature { get }", "Foundation.Measurement(struct)<__C.NSUnitTemperature(class)>");
         check("StoreKit.Product.SubscriptionPeriod.weekly { get }", "static StoreKit.Product(struct).SubscriptionPeriod(struct).weekly");
         check("StoreKit.AppStore.presentMultiSeatInvitationSheet(from:originalTransactionID:)", "@MainActor static");
+    }
+
+    /// Default values are left out (`#isolation` aside); a typealias is written as the type it names.
+    #[test]
+    fn defaults_and_typealiases() {
+        let check = |text: &str, contains: &str| {
+            let expanded = super::expand(text).unwrap().unwrap();
+            assert!(expanded.contains(contains), "{expanded}");
+            let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+            assert_eq!(Some(symbol), super::expected_symbol(text), "{expanded}");
+        };
+        check("StoreKit.Product.SubscriptionPeriod.dateRange(referenceDate:)", "dateRange(referenceDate: Foundation.Date(struct)) ->");
+        check(
+            "StoreKit.Product.SubscriptionInfo.RenewalInfo.AdvancedCommerceInfo.period { get }",
+            "period: StoreKit.Product(struct).SubscriptionPeriod(struct) { get }",
+        );
     }
 
     /// A nested type in a signature: its module once, each enclosing type with its kind.
