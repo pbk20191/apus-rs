@@ -782,14 +782,18 @@ impl Declaration {
         if let ast::Signature::Case(_) = &self.0.signature {
             return Err(Error("an enum case is not callable: `mangle!` gives its tag symbol, for `SwiftEnumCase`".into()));
         }
-        // A conformance an extension adds (`where T: P`) is one more witness table after `Self`'s metadata.
+        // A conformance an extension adds (`where T: P`) is one more witness table, which an instance member of a
+        // generic struct or enum takes after `Self`'s metadata, and a generic class's member or a protocol
+        // extension's member besides what `self` gives (observed, not documented). A struct's or enum's static member
+        // or initializer takes its whole signature's generic arguments, the added conformance's among them.
         let added = extension_requirements(&self.0).any(|r| match r {
             ast::Requirement::Conforms(_, protocol) => !protocol.is_marker() && !self.0.context_requirements.contains(r),
             _ => false,
         });
-        if added && self.value_context() == ValueContext::SelfMetadata {
+        let value_static = self.value_context() == ValueContext::GenericArguments;
+        if added && !value_static {
             return Err(Error(
-                "a member of a generic struct or enum in an extension that adds a conformance (`where T: P`) is not \
+                "a member of a generic type or protocol in an extension that adds a conformance (`where T: P`) is not \
                  supported: it takes that conformance's witness table too"
                     .into(),
             ));
@@ -1456,6 +1460,18 @@ mod isolation_tests {
         let error = super::check_callable("(extension in M where T: P) M.D(struct)<T>.c: Int { get }").unwrap_err().to_string();
         assert!(error.contains("witness"), "{error}");
         assert!(super::check_callable("(extension in M where T: P) M.D(struct)<T: P>.c: Int { get }").is_ok());
+        // A generic class's member and a protocol extension's take the added conformance's witness table as well
+        // (`(T.P, self)`, observed): refused alike. A struct's static member takes the whole signature's arguments.
+        for added in [
+            "(extension in M where T: P) M.C(class)<T>.c() -> Int",
+            "static (extension in M where T: P) M.C(class)<T>.s() -> Int",
+            "(extension in M where Self: Q) M.P(protocol).f() -> Int",
+            "(extension in M where Self.Element: Q) M.P(protocol).f() -> Int",
+        ] {
+            let error = super::check_callable(added).unwrap_err().to_string();
+            assert!(error.contains("witness"), "{added}: {error}");
+        }
+        assert!(super::check_callable("static (extension in M where T: P) M.D(struct)<T>.s() -> Int").is_ok());
         assert_eq!(context("M.D(struct)<T>.init(x: Int)"), ValueContext::GenericArguments);
         for plain in ["M.S(struct).v: Int { get }", "M.C(class)<T>.f()", "M.f<T>(_: T)", "M.P(protocol).f()"] {
             assert_eq!(context(plain), ValueContext::None, "{plain}");
