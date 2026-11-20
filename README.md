@@ -282,6 +282,28 @@ println!("{}", products.description());                                     // S
 - `SwiftFn` calls **synchronous** Swift functions the same way, on the current thread:
   `TOTAL.call::<i64>(()).on_value(&big).invoke()?` (a getter of a struct passed by address).
 
+Names need not be mangled by hand: `apus::swift_type!("SwiftData.FetchResultsCollection(struct)<Todos.Todo(class)>")`
+and `apus::swift_protocol!("SwiftData.PersistentModel")` expand to the mangled type name and the protocol descriptor
+symbol, for `SwiftType::from_mangled_name` and `SwiftProtocol::new`.
+
+In `swift!`, a generic function whose generic parameters are the types of its arguments gets its generic arguments
+filled in automatically. One whose parameters are not (`fetch<T>(_: FetchDescriptor<T>)`) can have them **bound to
+concrete types** after the declaration; the Rust signature then lists only the Swift parameters, and the result's type
+is the one with the bindings substituted:
+
+```rust
+apus::swift! {
+    #[swift = "SwiftData.ModelContext(class).fetch<T: PersistentModel(AnyObject)>(_: FetchDescriptor(struct)<T>, \
+               batchSize: Int) throws -> FetchResultsCollection(struct)<T>", T = "Todos.Todo(class)"]
+    fn fetch_todos(self: &SwiftObject, descriptor: &SwiftValue, batch_size: i64) throws -> SwiftValue;
+}
+```
+
+The bound types and their conformances are looked up when the call is made (`CallError::Unavailable` if a type is
+missing, `NotConforming` if it does not conform). The function is still generic, so a value of type `T` goes by
+address whatever is bound (`&SwiftValue`, `-> SwiftValue`; `swift!` refuses another Rust type), and `T` may appear
+only as a parameter or result itself or among a type's generic arguments (not in `T?`, a tuple or a closure).
+
 ### Enums
 
 An enum value is a `SwiftValue` (pass and return it by address, like a framework struct). Its cases are read and made

@@ -132,6 +132,39 @@ pub fn __generic_args(
     GenericArgs { metadata: metadata.to_vec(), witnesses: witnesses.to_vec(), error_slot }
 }
 
+/// The generic arguments of a function whose generic parameters `swift!` binds to concrete types
+/// (`#[swift = "…", T = "Type"]`): each bound type found by its mangled name once, then lowered as [`GenericArgs`].
+#[doc(hidden)]
+pub struct ConcreteArgs(Result<GenericArgs, &'static str>);
+
+/// `types`: each generic parameter's bound type, (mangled name, where it is kept once found); `witnesses`: (generic
+/// parameter index, protocol, layout) in canonical order.
+#[doc(hidden)]
+pub fn __concrete_args(
+    types: &'static [(&'static str, std::sync::OnceLock<Option<SwiftType>>)],
+    witnesses: &[(usize, &'static SwiftProtocol, ProtocolLayout)],
+) -> ConcreteArgs {
+    // A type not found is reported by its name.
+    let metadata: Result<Vec<SwiftType>, &'static str> = types
+        .iter()
+        .map(|(name, found)| found.get_or_init(|| SwiftType::from_mangled_name(name)).ok_or(*name))
+        .collect();
+    ConcreteArgs(metadata.map(|metadata| GenericArgs {
+        witnesses: witnesses.iter().map(|&(param, protocol, layout)| (metadata[param], protocol, layout)).collect(),
+        metadata,
+        error_slot: None,
+    }))
+}
+
+impl SwiftArg for ConcreteArgs {
+    fn lower(&self, into: &mut ArgLowering) {
+        match &self.0 {
+            Ok(generic) => generic.lower(into),
+            Err(name) => into.fail(CallError::Unavailable(name)),
+        }
+    }
+}
+
 /// What the declaration says of a required protocol (`apus_mangle::ProtocolLayout`): a parameter is passed as a
 /// reference exactly when Swift knows its conforming types are classes, which for a protocol only its descriptor tells.
 #[doc(hidden)]

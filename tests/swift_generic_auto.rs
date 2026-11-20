@@ -5,7 +5,7 @@ mod common;
 #[path = "common/probe.rs"]
 mod probe;
 
-use apus::swift::{spawn, CallError, SwiftType, SwiftValue};
+use apus::swift::{spawn, CallError, SwiftObject, SwiftType, SwiftValue};
 use common::{block, check, Failed, Trial};
 
 apus::swift! {
@@ -36,6 +36,30 @@ apus::swift! {
     async fn later(self: &SwiftValue, n: i64) -> i64;
     #[swift_linked = "static Res.Tray(struct)<T>.size(plus: Int) -> Int"]
     fn size(n: i64, t: SwiftType) -> i64;
+
+    #[swift_linked = "Res.sumText<T: AdditiveArithmetic>(_: [T]) -> String", T = "Swift.Double"]
+    fn sum_text(values: Vec<f64>) -> String;
+    #[swift = "Res.sumOf<T: AdditiveArithmetic>(_: [T]) -> T", T = "Swift.Int"]
+    fn sum_of(values: Vec<i64>) -> SwiftValue;
+    #[swift = "Res.sumOf<T: AdditiveArithmetic>(_: [T]) -> T", T = "Res.Nope(struct)"]
+    fn sum_of_nope(values: Vec<i64>) -> SwiftValue; // refused before the call: Nope is not AdditiveArithmetic
+    #[swift_linked = "Res.labelOf<T: Named(AnyObject)>(_: T) -> String", T = "Res.Dog(class)"]
+    fn label_of_dog(x: &SwiftObject) -> String;
+    #[swift_linked = "Res.dog(name: String) -> Dog(class)"]
+    fn dog(name: &str) -> SwiftObject;
+    #[swift_linked = "Res.nopeType() -> Any.Type"]
+    fn nope_type() -> SwiftType;
+}
+
+/// Generic parameters bound to concrete types: their metadata and witness tables come from the types named.
+fn concrete_bindings() -> Result<(), Failed> {
+    check(sum_text(vec![1.5, 2.0]).unwrap() == "3.5", "sumText<Double>")?;
+    let sum = sum_of(vec![1, 2, 3]).unwrap();
+    check(sum.ty() == SwiftType::of::<i64>(), "sumOf<Int> is an Int")?;
+    check(sum.description() == "6", sum.description())?;
+    check(label_of_dog(&dog("Rex").unwrap()).unwrap() == "named Rex", "labelOf<Dog>")?;
+    let _ = nope_type(); // keeps Nope in the archive
+    check(matches!(sum_of_nope(Vec::new()), Err(CallError::NotConforming { .. })), "Nope is not AdditiveArithmetic")
 }
 
 /// A member of a generic struct gets `Self`'s metadata from its receiver, after its arguments and before its own
@@ -83,5 +107,6 @@ fn main() {
         Trial::test("automatic_generic_arguments", automatic_generic_arguments),
         Trial::test("a_value_that_does_not_conform", a_value_that_does_not_conform),
         Trial::test("members_of_generic_structs", members_of_generic_structs),
+        Trial::test("concrete_bindings", concrete_bindings),
     ]);
 }

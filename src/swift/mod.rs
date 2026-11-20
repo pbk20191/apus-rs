@@ -36,7 +36,7 @@ pub use value::{IntoSwift, OpaqueResult, Opened, OpenedType, SwiftProtocol, Swif
 pub use isolation::Isolation;
 #[doc(hidden)]
 pub use generic::{
-    __generic_args, __metatype_of, __object_type_of, __type_of, AsMetatype, ClassBound, ClassReference, GenericArgs, HasSwiftType, ProtocolLayout, ValueReceiver, __self_type,
+    __concrete_args, __generic_args, __metatype_of, ConcreteArgs, __object_type_of, __type_of, AsMetatype, ClassBound, ClassReference, GenericArgs, HasSwiftType, ProtocolLayout, ValueReceiver, __self_type,
     Metatype,
 };
 pub use func::{__bind, __bind_sync, __declared_class, BindAsyncReceiver, ClassSelf, BindReceiver, Consumed, DeclaredResult, ErrorSlot, ArgLowering, DirectValue, ErrorArg, ErrorRef, Existential, SwiftArg, SwiftArgs, SwiftAsyncFn, SwiftObject, SwiftReceiver, SwiftRet};

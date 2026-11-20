@@ -189,9 +189,20 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         return item_compile_error("__swift_route: expected `PATH ; …`");
     };
     let (path, rest) = (&tokens[..split], &tokens[split + 1..]);
-    let [TokenTree::Ident(binding), TokenTree::Ident(how), TokenTree::Ident(asyncness), tail @ ..] = rest else {
-        return item_compile_error("__swift_route: expected `binding how async|sync …`");
+    let [TokenTree::Ident(binding), TokenTree::Ident(how), TokenTree::Ident(asyncness), TokenTree::Group(bindings), tail @ ..] = rest else {
+        return item_compile_error("__swift_route: expected `binding how async|sync [bindings] …`");
     };
+    // `T = "Module.Type(kind)"` after the declaration: generic parameters bound to concrete types.
+    let mut bound: Vec<(String, String)> = Vec::new();
+    for item in flatten(bindings.stream()).split(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')) {
+        match item {
+            [] => {}
+            [TokenTree::Ident(name), TokenTree::Punct(eq), ty] if eq.as_char() == '=' && string_literal(ty).is_some() => {
+                bound.push((name.to_string(), string_literal(ty).expect("checked")));
+            }
+            _ => return item_compile_error("expected generic parameters bound as `T = \"Module.Type(kind)\"` after the declaration"),
+        }
+    }
     let declaration = tail.last().and_then(|t| flatten(t.clone().into()).first().and_then(string_literal));
     // A declared call's declaration, parsed once for every question below.
     let declared = match (how.to_string().as_str(), declaration) {
@@ -200,6 +211,17 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             Err(error) => return item_compile_error(&format!("cannot mangle `{declaration}`: {error}")),
         },
         _ => None,
+    };
+    let concrete = match (&declared, bound.is_empty()) {
+        (_, true) => None,
+        (None, false) => return item_compile_error("binding generic parameters (`T = \"…\"`) needs a Swift declaration: #[swift = \"…\"] or #[swift_linked = \"…\"]"),
+        (Some((declaration, parsed)), false) => {
+            let pairs: Vec<(&str, &str)> = bound.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect();
+            match parsed.bind(&pairs) {
+                Ok(plan) => Some(plan),
+                Err(error) => return item_compile_error(&format!("`{declaration}`: {error}")),
+            }
+        }
     };
     // The Rust signature's `throws`: a bracket group holding just that word.
     let rust_throws = tail.iter().any(|t| matches!(t, TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket && g.stream().to_string() == "throws"));
@@ -307,7 +329,7 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         let formal = parsed.formal_count();
         let explicit_slot = rust_error_slot;
         match parsed.generic_plan() {
-            Ok(Some(plan)) if rust_args.len() == plan.formal_count && !explicit_slot => {
+            Ok(Some(plan)) if rust_args.len() == plan.formal_count && !explicit_slot && concrete.is_none() => {
                 if parsed.nonsending() {
                     return item_compile_error(&format!("`{declaration}`: automatic generic arguments with nonisolated(nonsending): pass them explicitly"));
                 }
@@ -336,9 +358,55 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
                 generic = [auto, bracket(metadata), bracket(witnesses), bracket(slot), bracket(result)].into_iter().collect();
                 automatic = true;
             }
-            Err(error) if rust_args.len() == formal => return item_compile_error(&format!("`{declaration}`: {error}")),
+            Err(error) if rust_args.len() == formal && concrete.is_none() => return item_compile_error(&format!("`{declaration}`: {error}")),
             _ => {}
         }
+    }
+    // Bound generic parameters: the bound types' metadata and witness tables, found by name when the call is made;
+    // the result's type with the bindings substituted. A value of type `T` goes by address whatever `T` is bound to.
+    if let (Some((declaration, parsed)), Some(plan)) = (&declared, &concrete) {
+        if rust_args.len() != parsed.formal_count() {
+            return item_compile_error(&format!(
+                "`{declaration}`: with its generic parameters bound, the Rust signature lists exactly the declaration's parameters"
+            ));
+        }
+        let by_address = |ty: &str| ty.replace(' ', "").starts_with('&') && !ty.replace(' ', "").starts_with("&mut") && ty.ends_with("SwiftValue");
+        for (i, (address, ty)) in plan.by_address.iter().zip(&argument_types).enumerate() {
+            if *address && !by_address(ty) {
+                return item_compile_error(&format!(
+                    "`{declaration}`: parameter {} is a generic parameter's value, which goes by address whatever type is bound: declare it `&SwiftValue`",
+                    i + 1
+                ));
+            }
+        }
+        if plan.result_by_address && !rust_return(tail).ends_with("SwiftValue") {
+            return item_compile_error(&format!(
+                "`{declaration}` returns a generic parameter's value, by address whatever type is bound: declare `-> SwiftValue`"
+            ));
+        }
+        let literal = |text: &str| TokenTree::Literal(Literal::string(text));
+        let bracket = |tokens: Vec<TokenTree>| TokenTree::Group(Group::new(Delimiter::Bracket, tokens.into_iter().collect()));
+        let witnesses = plan
+            .witnesses
+            .iter()
+            .map(|(param, protocol, layout)| {
+                let entry = vec![
+                    TokenTree::Literal(Literal::usize_unsuffixed(*param)),
+                    literal(protocol),
+                    TokenTree::Ident(proc_macro::Ident::new(&format!("{layout:?}"), proc_macro::Span::call_site())),
+                ];
+                TokenTree::Group(Group::new(Delimiter::Parenthesis, entry.into_iter().collect()))
+            })
+            .collect();
+        generic = [
+            TokenTree::Ident(proc_macro::Ident::new("concrete", proc_macro::Span::call_site())),
+            bracket(plan.types.iter().map(|t| literal(t)).collect()),
+            bracket(witnesses),
+            bracket(plan.result.iter().map(|r| literal(r)).collect()),
+        ]
+        .into_iter()
+        .collect();
+        automatic = true;
     }
     // Function-typed parameters: the shape the closure argument must have, checked when the call is made.
     if let Some((declaration, parsed)) = &declared {

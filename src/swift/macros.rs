@@ -96,6 +96,41 @@
 /// }
 /// ```
 ///
+/// - A generic function's parameters can be bound to concrete types after the declaration:
+///   `#[swift = "SwiftData.ModelContext(class).fetch<T: PersistentModel(AnyObject)>(…) throws -> FetchResultsCollection(struct)<T>", T = "Todos.Todo(class)"]`.
+///   The Rust signature lists the declaration's parameters only: the bound types' metadata and witness tables are
+///   found by name when the call is made (`CallError::Unavailable` if a type is missing, `NotConforming` if it does not
+///   conform), and the result's type is the one with `T` substituted. The function is still generic: a value of type
+///   `T` goes by address whatever type is bound (`&SwiftValue`, `-> SwiftValue`); a class-bound one is a reference.
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "Res.sumOf<T: AdditiveArithmetic>(_: [T]) -> T", T = "Swift.Int"]
+///     fn sum_of(values: Vec<i64>) -> i64; // returned by address: `-> SwiftValue`
+/// }
+/// ```
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "Res.firstOf<T>(_: T, _: Int) -> Int", T = "Swift.Int"]
+///     fn first_of(x: i64, n: i64) -> i64; // `x` goes by address: `&SwiftValue`
+/// }
+/// ```
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "Res.sumOf<T: AdditiveArithmetic>(_: [T]) -> T", U = "Swift.Int"]
+///     fn sum_of(values: Vec<i64>) -> apus::swift::SwiftValue; // no parameter `U`
+/// }
+/// ```
+///
+/// ```
+/// apus::swift! {
+///     #[swift = "Res.sumOf<T: AdditiveArithmetic>(_: [T]) -> T", T = "Swift.Int"]
+///     fn sum_of(values: Vec<i64>) -> apus::swift::SwiftValue;
+/// }
+/// ```
+///
 /// - A generic struct's or enum's instance member gets `Self`'s metadata from its receiver; its static members and
 ///   initializers take the type's generic arguments after their own. A standard library struct's or enum's instance
 ///   member is refused: Swift passes that `self` in registers.
@@ -230,17 +265,17 @@ macro_rules! swift {
     () => {};
 
     // The attribute says how the function is named and bound; `__swift_fn!` reads the signature after it.
-    ($(#[doc = $doc:literal])* #[swift = $spec:literal] $($rest:tt)*) => {
-        $crate::__swift_fn! { [runtime declared $spec] [$(#[doc = $doc])*] $($rest)* }
+    ($(#[doc = $doc:literal])* #[swift = $spec:literal $(, $param:ident = $bound:literal)* $(,)?] $($rest:tt)*) => {
+        $crate::__swift_fn! { [runtime declared $spec [$($param = $bound),*]] [$(#[doc = $doc])*] $($rest)* }
     };
-    ($(#[doc = $doc:literal])* #[swift_linked = $spec:literal] $($rest:tt)*) => {
-        $crate::__swift_fn! { [linked declared $spec] [$(#[doc = $doc])*] $($rest)* }
+    ($(#[doc = $doc:literal])* #[swift_linked = $spec:literal $(, $param:ident = $bound:literal)* $(,)?] $($rest:tt)*) => {
+        $crate::__swift_fn! { [linked declared $spec [$($param = $bound),*]] [$(#[doc = $doc])*] $($rest)* }
     };
     ($(#[doc = $doc:literal])* #[symbol = $spec:literal] $($rest:tt)*) => {
-        $crate::__swift_fn! { [runtime literal $spec] [$(#[doc = $doc])*] $($rest)* }
+        $crate::__swift_fn! { [runtime literal $spec []] [$(#[doc = $doc])*] $($rest)* }
     };
     ($(#[doc = $doc:literal])* #[linked = $spec:literal] $($rest:tt)*) => {
-        $crate::__swift_fn! { [linked literal $spec] [$(#[doc = $doc])*] $($rest)* }
+        $crate::__swift_fn! { [linked literal $spec []] [$(#[doc = $doc])*] $($rest)* }
     };
 }
 
@@ -249,34 +284,34 @@ macro_rules! swift {
 #[macro_export]
 macro_rules! __swift_fn {
     // `self: &mut SwiftValue`: a struct's setter or mutating method, on the Rust value itself (sync only).
-    ([$binding:ident $how:ident $spec:literal] [$(#[$doc:meta])*]
+    ([$binding:ident $how:ident $spec:literal $bind:tt] [$(#[$doc:meta])*]
      $vis:vis async fn $name:ident (self : &mut $receiver:ty $(, $arg:ident : $ty:ty)* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
-        $crate::__swift_route! { $crate::__swift_item ; $binding $how async [$(#[$doc])*] [$vis] $name [this : &mut $receiver] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
+        $crate::__swift_route! { $crate::__swift_item ; $binding $how async $bind [$(#[$doc])*] [$vis] $name [this : &mut $receiver] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
         $crate::swift! { $($rest)* }
     };
-    ([$binding:ident $how:ident $spec:literal] [$(#[$doc:meta])*]
+    ([$binding:ident $how:ident $spec:literal $bind:tt] [$(#[$doc:meta])*]
      $vis:vis fn $name:ident (self : &mut $receiver:ty $(, $arg:ident : $ty:ty)* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
-        $crate::__swift_route! { $crate::__swift_item ; $binding $how sync [$(#[$doc])*] [$vis] $name [this : &mut $receiver] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
+        $crate::__swift_route! { $crate::__swift_item ; $binding $how sync $bind [$(#[$doc])*] [$vis] $name [this : &mut $receiver] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
         $crate::swift! { $($rest)* }
     };
-    ([$binding:ident $how:ident $spec:literal] [$(#[$doc:meta])*]
+    ([$binding:ident $how:ident $spec:literal $bind:tt] [$(#[$doc:meta])*]
      $vis:vis async fn $name:ident (self : & $receiver:ty $(, $arg:ident : $ty:ty)* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
-        $crate::__swift_route! { $crate::__swift_item ; $binding $how async [$(#[$doc])*] [$vis] $name [this : & $receiver] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
+        $crate::__swift_route! { $crate::__swift_item ; $binding $how async $bind [$(#[$doc])*] [$vis] $name [this : & $receiver] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
         $crate::swift! { $($rest)* }
     };
-    ([$binding:ident $how:ident $spec:literal] [$(#[$doc:meta])*]
+    ([$binding:ident $how:ident $spec:literal $bind:tt] [$(#[$doc:meta])*]
      $vis:vis async fn $name:ident ($($arg:ident : $ty:ty),* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
-        $crate::__swift_route! { $crate::__swift_item ; $binding $how async [$(#[$doc])*] [$vis] $name [] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
+        $crate::__swift_route! { $crate::__swift_item ; $binding $how async $bind [$(#[$doc])*] [$vis] $name [] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
         $crate::swift! { $($rest)* }
     };
-    ([$binding:ident $how:ident $spec:literal] [$(#[$doc:meta])*]
+    ([$binding:ident $how:ident $spec:literal $bind:tt] [$(#[$doc:meta])*]
      $vis:vis fn $name:ident (self : & $receiver:ty $(, $arg:ident : $ty:ty)* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
-        $crate::__swift_route! { $crate::__swift_item ; $binding $how sync [$(#[$doc])*] [$vis] $name [this : & $receiver] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
+        $crate::__swift_route! { $crate::__swift_item ; $binding $how sync $bind [$(#[$doc])*] [$vis] $name [this : & $receiver] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
         $crate::swift! { $($rest)* }
     };
-    ([$binding:ident $how:ident $spec:literal] [$(#[$doc:meta])*]
+    ([$binding:ident $how:ident $spec:literal $bind:tt] [$(#[$doc:meta])*]
      $vis:vis fn $name:ident ($($arg:ident : $ty:ty),* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
-        $crate::__swift_route! { $crate::__swift_item ; $binding $how sync [$(#[$doc])*] [$vis] $name [] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
+        $crate::__swift_route! { $crate::__swift_item ; $binding $how sync $bind [$(#[$doc])*] [$vis] $name [] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
         $crate::swift! { $($rest)* }
     };
 }
@@ -406,6 +441,12 @@ macro_rules! __swift_args {
         $(let $o = $crate::swift::Consumed($o);)*
         ($($arg,)*)
     }};
+    // `extra generic`: one more argument after the formal ones, the generic arguments already built.
+    ([$($arg:ident),*] [$($o:ident)*] [extra $g:ident $(closures [$(($c:ident $shape:literal))*])?]) => {{
+        $($(let $c = $crate::swift::DeclaredClosure($c, $shape);)*)?
+        $(let $o = $crate::swift::Consumed($o);)*
+        ($($arg,)* $g,)
+    }};
     ([$($arg:ident),*] [$($o:ident)*] [auto [$(($mf:ident $m:ident))*] [$(($wf:ident $w:ident $p:literal $pl:ident))*] [$($sf:ident $slot:ident)?] [$($rf:ident $result:ident)?] $(closures [$(($c:ident $shape:literal))*])?]) => {{
         let generic = $crate::swift::__generic_args(
             &[$($crate::swift::$mf(&$m)),*],
@@ -460,6 +501,22 @@ macro_rules! __swift_call {
     ($function:ident [$($arg:ident),*] [$($generic:tt)*] $declared:expr) => {
         $crate::__swift_call!(@ $function [$($arg),*] [] [$($generic)*] $declared)
     };
+    // `concrete [type…] [(parameter protocol layout)…] [result?]`: generic parameters bound to the types named.
+    (@ $function:ident [$($arg:ident),*] $o:tt [concrete [$($t:literal)*] [$(($wp:literal $p:literal $pl:ident))*] [$($result:literal)?] $($closures:tt)*] $declared:expr) => {{
+        static TYPES: [(&str, ::std::sync::OnceLock<::core::option::Option<$crate::swift::SwiftType>>); [$($t),*].len()] =
+            [$(($t, ::std::sync::OnceLock::new())),*];
+        let generic = $crate::swift::__concrete_args(
+            &TYPES,
+            &[$(($wp, {
+                static PROTOCOL: $crate::swift::SwiftProtocol = $crate::swift::SwiftProtocol::new($p);
+                &PROTOCOL
+            }, $crate::swift::ProtocolLayout::$pl)),*],
+        );
+        #[allow(unused_mut)]
+        let mut declared = $declared;
+        $(declared.name = ::core::option::Option::Some($result);)?
+        $function.call_declared($crate::__swift_args!([$($arg),*] $o [extra generic $($closures)*]), declared)
+    }};
     (@ $function:ident [$($arg:ident),*] $o:tt [auto $m:tt $w:tt $slot:tt [$rf:ident $result:ident] $($closures:tt)*] $declared:expr) => {
         $function.call_returning(
             $crate::swift::$rf(&$result),

@@ -126,6 +126,11 @@ public func make<T: Animal>(_ t: T.Type, name: String) -> T { t.init(name: name)
 public func dogType() -> Animal.Type { Dog.self }
 public func anyTypeName(_ t: Any.Type) -> String { "\(t)" }
 public func zero<T: AdditiveArithmetic>(_ t: T.Type) -> T { T.zero }
+// Generic parameters bound to concrete types in `swift!` (T is no argument's own type); `Nope` conforms to nothing.
+public func sumText<T: AdditiveArithmetic>(_ values: [T]) -> String { "\(values.reduce(.zero, +))" }
+public func sumOf<T: AdditiveArithmetic>(_ values: [T]) -> T { values.reduce(.zero, +) }
+public struct Nope {}
+public func nopeType() -> Any.Type { Nope.self }
 public func meters(_ value: Double) -> Measurement<UnitLength> { Measurement(value: value, unit: .meters) }
 public func unitSymbol(_ unit: Unit) -> String { unit.symbol }
 // A class-bound protocol (`Named: AnyObject`): its parameter is one reference; `Tagged` is not class-bound.
