@@ -1,0 +1,9 @@
+[package]
+name = "apus-build"
+version = "0.1.0"
+edition = "2021"
+description = "Build-script helper: compiles a program's own Swift sources into a static library apus can call"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]

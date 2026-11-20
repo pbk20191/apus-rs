@@ -8,3 +8,6 @@ publish = false
 
 [dependencies]
 apus = { path = "../.." }
+
+[build-dependencies]
+apus-build = { path = "../../builder" }

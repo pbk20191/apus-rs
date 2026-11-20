@@ -161,7 +161,7 @@ harness = false
 required-features = ["test-probe"]
 
 [workspace]
-members = [".", "sys", "mangle", "macros", "examples/swift-data"]
+members = [".", "sys", "mangle", "macros", "builder", "examples/swift-data"]
 
 [[test]]
 name = "swift_enum"

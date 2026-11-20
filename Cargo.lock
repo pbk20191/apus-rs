@@ -78,10 +78,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "apus-build"
+version = "0.1.0"
+
+[[package]]
 name = "apus-example-swift-data"
 version = "0.1.0"
 dependencies = [
  "apus",
+ "apus-build",
 ]
 
 [[package]]

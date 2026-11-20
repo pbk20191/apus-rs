@@ -49,7 +49,8 @@ Judge every change by two questions, in this order:
 | `mangle/` | `apus-mangle`: Swift declaration → symbol, call kind, ownership, generic plan |
 | `macros/` | `swift!`'s routing (`__swift_route`), `mangle!`, `result_type!` |
 | `tests/support/*.swift` | Swift probes: `probe.swift`/`fns.swift` (module `Probe`, no library evolution), `resilient.swift` (module `Res`, library evolution, like Apple's frameworks), `notes.swift` (module `Notes`: a SwiftData model) |
-| `examples/swift-data/` | a SwiftData program: its own build.rs compiles the Swift model (a workspace member) |
+| `builder/` | `apus-build`: a build script's helper compiling a program's own Swift module (library evolution) and linking it |
+| `examples/swift-data/` | a SwiftData program: its build.rs compiles the Swift model with `apus-build` (a workspace member) |
 | `docs/superpowers/` | dated specs (Korean), plans and spikes; `docs/prior-art.md` |
 
 README.md documents every user-facing rule; keep it in step with behavior changes.

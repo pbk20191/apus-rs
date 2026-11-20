@@ -382,9 +382,36 @@ apus::swift! {
 }
 ```
 
-`fetch<T>(_:batchSize:) -> FetchResultsCollection<T>` takes its generic arguments explicitly, and `swift!` cannot
-name a result built from them: call it with `SwiftFn::call_returning`, giving the result's type. Sort descriptors
-and predicates take key paths and `#Predicate`, which only the compiler makes: they come from Swift too.
+`fetch<T>(_:batchSize:) -> FetchResultsCollection<T>` is generic over the model, which no argument's type gives: bind
+`T = "Todos.Todo(class)"` (see Generic functions above). Sort descriptors and predicates take key paths and
+`#Predicate`, which only the compiler makes: they come from Swift too.
+
+### Using a Swift module of your own
+
+The Swift a program still needs (a `@Model`, a `#Predicate`) is a module of its own, which
+[`apus-build`](builder/src/lib.rs) compiles from `build.rs` into a static library and links, built like Apple's
+frameworks (library evolution) for the program's `MACOSX_DEPLOYMENT_TARGET`:
+
+```toml
+# Cargo.toml
+[build-dependencies]
+apus-build = { path = "…/builder" }
+
+# .cargo/config.toml (apus needs it anyway: see Tested on)
+[env]
+MACOSX_DEPLOYMENT_TARGET = "14.0"
+```
+
+```rust
+// build.rs: every *.swift in swift/, as module Todos
+fn main() {
+    apus_build::SwiftModule::new("Todos", "swift").build();
+}
+```
+
+Its declarations are then `#[swift_linked = "Todos.…"]` (bound at link time). `examples/swift-data` is the whole
+setup. In this repository, `.vscode/settings.json` gives rust-analyzer its own target directory: sharing the one
+terminal builds rewrite makes its proc-macro server fail now and then while it reads a macro being rebuilt.
 
 ### Async sequences
 
