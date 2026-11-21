@@ -90,6 +90,10 @@ apus::swift! {
     fn c_transform(t: CGAffineTransform, by: f64) -> CValue<CGAffineTransform>;
     #[swift_linked = "Probe.cTransformAsync(_: __C.CGAffineTransform(struct)) async -> __C.CGAffineTransform(struct)"]
     async fn c_transform_async(t: CGAffineTransform) -> CValue<CGAffineTransform>;
+    #[swift_linked = "Probe.cPosix(_: Darwin.POSIXErrorCode(enum)) -> Darwin.POSIXErrorCode(enum)"]
+    fn c_posix(c: i32) -> CValue<i32>;
+    #[swift = "Foundation.POSIXError.EPERM { get }"]
+    fn eperm() -> CValue<i32>;
     #[swift_linked = "Probe.echoObject(_: __C.NSObject(class)) -> __C.NSObject(class)"]
     fn echo(o: &objc2::rc::Retained<AnyObject>) -> objc2::rc::Retained<AnyObject>;
 }
@@ -118,6 +122,9 @@ fn large_structs_by_address() -> Result<(), Failed> {
 }
 
 fn enums_and_typed_strings() -> Result<(), Failed> {
+    // An `@objc` enum of a Swift module: its raw integer.
+    check(c_posix(1).unwrap().0 == 2, "POSIXErrorCode: EPERM -> ENOENT")?;
+    check(eperm().unwrap().0 == 1, "POSIXError.EPERM by name")?;
     check(c_unit(8).unwrap().0 == 8 | 16, "NSCalendar.Unit: .month ∪ .day")?;
     check(c_result(-1).unwrap().0 == 1, "ComparisonResult: ascending -> descending")?;
     let string: objc2::rc::Retained<AnyObject> = unsafe { objc2::msg_send![objc2::class!(NSString), stringWithUTF8String: c"NSURLNameKey".as_ptr()] };

@@ -311,8 +311,10 @@ graph is emitted by `apus-build` (and found through `APUS_SYMBOL_GRAPHS`).
   `TimeInterval` as `Double`), what a module declares in an imported type with that extension
   (`__C.NSRunLoop(class).(extension in Foundation) SchedulerTimeType(struct)`), and a variadic type's arguments as
   its pack (`Foundation.Predicate(struct)<Pack{T}>`). A name with several declarations or none, or one apus cannot
-  write (a C type of a module-qualified USR such as `POSIXErrorCode`, a protocol's associated type, a standard library
-  typealias), is a compile error: write that one in full.
+  write (a protocol's associated type, a standard library typealias), is a compile error: write that one in full. An
+  `@objc` enum of a Swift module (`POSIXErrorCode`, `MachErrorCode`) is written in its module
+  (`_DarwinFoundation1.POSIXErrorCode(enum)`; `Darwin.POSIXErrorCode(enum)` too) and mangled by that module's ABI
+  name (`-module-abi-name Darwin`).
 - Objective-C methods and C functions have no Swift symbol: call them through objc2 and its framework crates
   (`objc2-foundation`, …), not apus; `Retained<T>` and blocks cross into Swift calls as they are.
 - A value of a C type (struct, enum, option set, typedef struct) is passed and returned by swiftcall's lowering of
@@ -323,8 +325,10 @@ graph is emitted by `apus-build` (and found through `APUS_SYMBOL_GRAPHS`).
   objc2 crates (`objc2_core_foundation::CGRect`, `objc2_foundation::NSRange`, `NSCalendarUnit`, `&NSString` for an
   `NS_TYPED_ENUM`; any `objc2::Encode` type, feature `objc2`, else an integer or float for a C scalar), which `swift!`
   lowers from its type encoding; a result is `-> CValue<T>` (`.0` is the value), a typed string's `-> Retained<T>`.
+  An `@objc` enum (found so by its module's symbol graph) is one too: its raw integer (`i32` for `POSIXErrorCode`).
   `SwiftValue` for one is a compile error. Refused with `CallError::InvalidArgument`: in registers, a word mixing integers and floating point or holding two `float`s; unions and bitfields, an object
-  inside a struct, an optional struct, and a result in both kinds of registers.
+  inside a struct, an optional struct, enum or option set (argument or result), and a result in both kinds of
+  registers.
 
 ```rust
 apus::swift! {

@@ -684,12 +684,17 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
                     "`{declaration}` returns an Objective-C block (+1): declare `-> RcBlock<dyn Fn(…)>` (feature `block2`; `Option<…>` if optional)"
                 ))
             }
-            // A typed string (`NS_TYPED_ENUM`) comes back as its object (+1); any other C value as its C layout.
-            Some(apus_mangle::ResultKind::CValue) if !ret.starts_with("CValue") && !ret.contains("Retained") => {
-                return item_compile_error(&format!(
-                    "`{declaration}` returns a value of a type imported from C, as its C layout: declare `-> CValue<T>`, T its \
-                     Rust type (an objc2 crate's), or `-> Retained<T>` for a typed string's object"
-                ))
+            // A typed string (`NS_TYPED_ENUM`) comes back as its object (+1); any other C value as its C layout. An
+            // optional one comes with its tag (by address when that makes five registers): a typed string's only.
+            Some(apus_mangle::ResultKind::CValue(optional)) => {
+                let as_layout = ret.rsplit("::").next().is_some_and(|last| last.starts_with("CValue"));
+                if !ret.contains("Retained") && (optional || !as_layout) {
+                    return item_compile_error(&format!(
+                        "`{declaration}` returns a value of a type imported from C, as its C layout: declare `-> CValue<T>`, \
+                         T its Rust type (an objc2 crate's), or `-> Retained<T>` for a typed string's object (`Option<…>` if \
+                         optional; an optional C struct, enum or option set is not supported)"
+                    ));
+                }
             }
             _ => {}
         }

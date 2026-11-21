@@ -470,12 +470,16 @@ fn replaces_outer(fragments: &[Fragment], i: usize) -> bool {
 
 /// A type imported from C, mangled by its C name in `__C` (`So6CGRectV`): a struct or enum (`NS_ENUM`, `NS_OPTIONS`)
 /// as a struct, an anonymous struct by its typedef (`So9NSDecimala`), a typedef as what the graph of `module` makes of
-/// it: a type named after it (`NS_TYPED_ENUM`, a Core Foundation class) or the type it stands for. A C type of a
-/// module-qualified USR (`c:@M@…`) is not mangled in `__C` and refused.
+/// it: a type named after it (`NS_TYPED_ENUM`, a Core Foundation class) or the type it stands for. A module-qualified
+/// enum USR (`c:@M@_DarwinFoundation1@E@POSIXErrorCode`) is an `@objc` enum of that Swift module, mangled there.
 fn imported_type(f: &Fragment, usr: &str, params: &[&str], module: &str, depth: usize) -> Result<String, String> {
     let full = || format!("`{}` ({usr}): write the declaration in full", f.spelling);
     let (kind, name) = usr[3..].split_once('@').ok_or_else(full)?;
     match kind {
+        "M" => match name.split_once("@E@") {
+            Some((swift_module, enumeration)) if !enumeration.contains('@') => Ok(format!("{swift_module}.{enumeration}(enum)")),
+            _ => Err(full()),
+        },
         "S" | "E" => Ok(format!("__C.{name}(struct)")),
         "SA" => Ok(format!("__C.{name}(typedef struct)")),
         "T" => {
@@ -669,6 +673,18 @@ mod tests {
         check("Foundation.URLResourceValues.allValues { get }", "__C.NSURLResourceKey(typedef struct)");
         check("Foundation.RunLoop.SchedulerTimeType.Stride.magnitude { get }", "magnitude: Double");
         check("Foundation.Decimal.FormatStyle.attributed { get }", "__C.NSDecimal(typedef struct)");
+        // An `@objc` enum of a Swift module (`c:@M@…`), mangled by its module's ABI name (`_DarwinFoundation1`: Darwin).
+        check("Foundation.POSIXError.EPERM { get }", "_DarwinFoundation1.POSIXErrorCode(enum)");
+        check("Foundation.MachError.success { get }", "Darwin.MachErrorCode(enum)");
+        // Its value crosses as its raw integer, like a C enum's, whichever module it is written in.
+        for text in [
+            "static Foundation.POSIXError(struct).EPERM: _DarwinFoundation1.POSIXErrorCode(enum) { get }",
+            "static Foundation.POSIXError(struct).EPERM: Darwin.POSIXErrorCode(enum) { get }",
+            "static Foundation.MachError(struct).success: Darwin.MachErrorCode(enum) { get }",
+        ] {
+            let parsed = apus_mangle::Declaration::parse_resolving(text, crate::graphs::graphs()).unwrap();
+            assert!(matches!(parsed.result_kind(), Some(apus_mangle::ResultKind::CValue(false))), "{text}");
+        }
     }
 
     /// Default values are left out (`#isolation` aside); a typealias is written as the type it names.

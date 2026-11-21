@@ -204,6 +204,10 @@ pub trait KindResolver: Sync {
     fn original_module(&self, _module: &str, _name: &str) -> Option<String> {
         None
     }
+    /// Whether the top-level enum `name` of `module` is `@objc` (`POSIXErrorCode`): its value is its raw integer.
+    fn objc_enum(&self, _module: &str, _name: &str) -> bool {
+        false
+    }
 }
 
 /// See [`KindResolver::original_module`].
@@ -304,12 +308,13 @@ pub enum ResultKind {
     CFunction,
     /// An Objective-C block (+1).
     Block,
-    /// A value of a type imported from C, optional or not.
-    CValue,
+    /// A value of a type imported from C or of an `@objc` enum; `true` if optional.
+    CValue(bool),
 }
 
-/// A value of a type imported from C (`__C.CGRect(struct)`, `__C.NSURLResourceKey(typedef struct)`): `Some(true)`
-/// for an optional one. Swift passes it by swiftcall's lowering of its C layout.
+/// A value of a type imported from C (`__C.CGRect(struct)`, `__C.NSURLResourceKey(typedef struct)`) or of an `@objc`
+/// enum (`Darwin.POSIXErrorCode(enum)`, a C enum to Objective-C, its value its raw integer: owner-accepted, observed):
+/// `Some(true)` for an optional one. Swift passes it by swiftcall's lowering of its C layout.
 fn c_value(ty: &ast::Ty) -> Option<bool> {
     let (ty, optional) = match ty {
         ast::Ty::Optional(wrapped) => (&**wrapped, true),
@@ -318,6 +323,11 @@ fn c_value(ty: &ast::Ty) -> Option<bool> {
     match ty {
         ast::Ty::Nominal { module, path, .. }
             if module == "__C" && matches!(path.last(), Some((_, ast::Kind::Struct | ast::Kind::Enum | ast::Kind::TypedefStruct))) =>
+        {
+            Some(optional)
+        }
+        ast::Ty::Nominal { module, path, .. }
+            if matches!(path.as_slice(), [(name, ast::Kind::Enum)] if kind_resolver().is_some_and(|r| r.objc_enum(module, name))) =>
         {
             Some(optional)
         }
@@ -1096,7 +1106,7 @@ impl Declaration {
             ast::Ty::Param(param) if class_bound_params(decl).contains(param) => Some(ResultKind::ClassReference),
             ast::Ty::Metatype(_) => Some(ResultKind::Metatype),
             ty if is_error(ty) => Some(ResultKind::Error),
-            ty if c_value(ty).is_some() => Some(ResultKind::CValue),
+            ty if c_value(ty).is_some() => c_value(ty).map(ResultKind::CValue),
             ty => foreign_function(ty).map(|function| match function.convention {
                 ast::Convention::C => ResultKind::CFunction,
                 _ => ResultKind::Block,

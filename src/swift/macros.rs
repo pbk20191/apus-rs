@@ -255,14 +255,32 @@
 /// ```
 ///
 /// A value of a type imported from C (`__C.CGPoint(struct)`, an `NS_OPTIONS` set, `__C.NSURLResourceKey(typedef
-/// struct)`) is passed and returned by swiftcall's lowering of its C layout (up to four registers): `&SwiftValue` or
-/// `SwiftValue` for one is a compile error. Pass what C passes (an option set's raw integer, an `NS_TYPED_ENUM`'s
-/// string object):
+/// struct)`) or of an `@objc` enum (`Darwin.POSIXErrorCode(enum)`) is passed and returned by swiftcall's lowering of
+/// its C layout: `&SwiftValue` or `SwiftValue` for one is a compile error. Pass what C passes (an option set's or an
+/// `@objc` enum's raw integer, an `NS_TYPED_ENUM`'s string object):
 ///
 /// ```compile_fail
 /// apus::swift! {
 ///     #[swift_linked = "Res.mask(_: __C.NSCalendarUnit(struct)) -> Int"]
 ///     fn mask(unit: &apus::swift::SwiftValue) -> i64; // an option set is its raw value, in a register
+/// }
+/// ```
+///
+/// ```compile_fail
+/// apus::swift! {
+///     #[swift = "Foundation.POSIXError.EPERM { get }"]
+///     fn eperm() -> apus::swift::SwiftValue; // an `@objc` enum is its raw `Int32`, in a register
+/// }
+/// ```
+///
+/// An optional C value comes back with its tag, maybe by address: only a typed string's (`-> Option<Retained<T>>`) is
+/// supported.
+///
+/// ```compile_fail
+/// use apus::swift::CValue;
+/// apus::swift! {
+///     #[swift = "Res.maybeUnit() -> __C.NSCalendarUnit(struct)?"]
+///     fn maybe_unit() -> CValue<u64>;
 /// }
 /// ```
 ///

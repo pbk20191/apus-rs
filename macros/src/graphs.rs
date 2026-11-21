@@ -124,18 +124,46 @@ impl apus_mangle::KindResolver for Graphs {
         self.class_bound_at(module, protocol, 0)
     }
 
+    /// Looked up in `module`'s graph; only a type it does not declare, in those of the modules it re-exports
+    /// (`Darwin.POSIXErrorCode`: `_DarwinFoundation1`'s).
+    fn objc_enum(&self, module: &str, name: &str) -> bool {
+        let path = [name];
+        let declared = |module: &str| -> Option<bool> {
+            let mut enums = self.module(module)?.find(&path).filter(|s| s.kind == "swift.enum").peekable();
+            enums.peek()?;
+            Some(enums.any(|s| s.usr.starts_with("c:")))
+        };
+        declared(module).unwrap_or_else(|| interface(module).reexports.iter().any(|m| m != module && declared(m) == Some(true)))
+    }
+
     fn original_module(&self, module: &str, name: &str) -> Option<String> {
-        static MOVED: OnceLock<Mutex<HashMap<String, &'static HashMap<String, String>>>> = OnceLock::new();
-        let mut modules = MOVED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
-        let moved = *modules.entry(module.to_string()).or_insert_with(|| Box::leak(Box::new(moved_types(module))));
-        moved.get(name).cloned()
+        let moved = interface(module);
+        moved.types.get(name).cloned().or_else(|| moved.abi_name.clone())
     }
 }
 
-/// The top-level types of an SDK module that moved there from another (`@_originallyDefinedIn(module: "M", macOS …)`
-/// in its `.swiftinterface`; symbol graphs leave the attribute out), by name, with the module they were defined in.
-fn moved_types(module: &str) -> HashMap<String, String> {
-    let mut moved = HashMap::new();
+/// What an SDK module's `.swiftinterface` says, read once.
+fn interface(module: &str) -> &'static Moved {
+    static MOVED: OnceLock<Mutex<HashMap<String, &'static Moved>>> = OnceLock::new();
+    let mut modules = MOVED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    modules.entry(module.to_string()).or_insert_with(|| Box::leak(Box::new(moved_types(module))))
+}
+
+/// What an SDK module's `.swiftinterface` says about the module its types are mangled in, and what it re-exports.
+#[derive(Default)]
+struct Moved {
+    /// The top-level types that moved there from another module (`@_originallyDefinedIn(module: "M", macOS …)`;
+    /// symbol graphs leave the attribute out), by name, with the module they were defined in.
+    types: HashMap<String, String>,
+    /// The name its symbols are mangled with when it is not the module's (`-module-abi-name Darwin` in the flags of
+    /// `_DarwinFoundation1`, which declares `POSIXErrorCode`).
+    abi_name: Option<String>,
+    /// The Swift modules it re-exports (`@_exported import _DarwinFoundation1`).
+    reexports: Vec<String>,
+}
+
+fn moved_types(module: &str) -> Moved {
+    let mut moved = Moved::default();
     if matches!(module, "Swift" | "_Concurrency" | "__C") {
         return moved;
     }
@@ -147,8 +175,18 @@ fn moved_types(module: &str) -> HashMap<String, String> {
     ];
     let interface = dirs.iter().flat_map(|dir| arch.map(|a| dir.join(format!("{a}-apple-macos.swiftinterface")))).find(|f| f.exists());
     let Some(text) = interface.and_then(|f| std::fs::read_to_string(f).ok()) else { return moved };
+    if let Some(flags) = text.lines().find_map(|line| line.strip_prefix("// swift-module-flags:")) {
+        let mut words = flags.split_whitespace();
+        moved.abi_name = words.by_ref().find(|w| *w == "-module-abi-name").and(words.next()).filter(|name| *name != module).map(str::to_string);
+    }
     let mut original: Option<&str> = None;
     for line in text.lines() {
+        if let Some(name) = line.strip_prefix("@_exported import ").and_then(|rest| rest.split_whitespace().next()) {
+            if !name.contains('.') {
+                moved.reexports.push(name.to_string());
+            }
+            continue;
+        }
         if let Some(rest) = line.strip_prefix("@_originallyDefinedIn(module: \"") {
             if rest.contains("macOS") {
                 original = rest.split('"').next();
@@ -162,7 +200,7 @@ fn moved_types(module: &str) -> HashMap<String, String> {
         let introducer = words.iter().position(|w| matches!(*w, "struct" | "class" | "enum" | "protocol" | "actor" | "typealias"));
         match introducer.and_then(|at| words.get(at + 1)) {
             Some(name) => {
-                moved.insert(name.trim_matches('`').to_string(), from.to_string());
+                moved.types.insert(name.trim_matches('`').to_string(), from.to_string());
                 original = None;
             }
             None if line.starts_with('@') || line.starts_with('#') => {}

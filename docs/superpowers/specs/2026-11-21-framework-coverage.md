@@ -81,6 +81,18 @@
   - coverage는 Swift 심볼이 없는 Objective-C/C 선언(`c:` USR)을 따로 센다.
   - 결과: Foundation 3020 → 3512/5127(Objective-C/C 선언 4721개 제외), SwiftUI 1584 → 1688.
 
+- 모듈이 붙은 C 타입(`c:@M@<모듈>@E@<이름>`, 2026-11-21):
+  - Swift 모듈에 선언된 `@objc enum`이다: `POSIXErrorCode`는 `_DarwinFoundation1`, `MachErrorCode`는 `Darwin`.
+  - 이름은 모듈의 ABI 이름으로 mangle된다(`_DarwinFoundation1`의 `-module-abi-name Darwin`, swiftc로 확인).
+    `.swiftinterface`의 flags에서 읽는다.
+  - 값은 raw 정수로 레지스터에 넘어가고 돌아온다(swiftc로 확인: 다른 모듈에서 부를 때, library evolution에서도
+    `i32`). 문서화된 규칙은 아니어서 owner가 승인했다(2026-11-21). C 값처럼 `CValueArg`/`CValue<i32>`로 다룬다.
+  - `@objc` 여부는 선언한 모듈의 graph(USR이 `c:`)로 판정한다. 그 모듈에 없는 이름이면 다시 내보낸 모듈
+    (`@_exported import`)을 본다(`Darwin.POSIXErrorCode`).
+  - 버그 수정: 전에는 `Darwin.MachErrorCode(enum)`을 전체 선언으로 쓰면 `SwiftValue`(주소)로 넘겨 UB였다. optional C 값
+    결과(`CGRect?`)를 `-> CValue<T>`로 받으면 tag를 빼고 읽거나(레지스터) 결과 주소 없이 불러 UB였다. 이제 둘 다 컴파일
+    오류다. Foundation 3512 → 3670/4902. `apus::swift::CValue<T>`처럼 경로를 붙인 결과 타입은 거부되던 것도 고쳤다.
+
 ## 남은 큰 항목
 
 - 생성자에 붙은 `where`가 타입 파라미터를 고정하는 경우(`init(…) where Message == EmptyView`). 넘기는 generic 인자가
@@ -99,7 +111,6 @@
     (`(extension in _System_Foundation)`)를 참조하는데, graph USR은 extension 표시가 없다. 지금은 `.tbd` 검사로 컴파일 오류가
     나므로 안전하다. Foundation 전체에서 이런 extension은 두 개(`URL`, `FilePath`)뿐이라 미뤄 둔다.
 
-- 모듈이 붙은 C 타입(`POSIXErrorCode`, `MachErrorCode`): 약 160개.
 - 프로토콜의 associated type(`…Qa`, `Self.Filter`)과 stdlib typealias.
 - export되지 않은 것(`@inlinable` 등): shim이 필요하다.
 - AppIntents: result builder와 string interpolation 같은 컴파일 시점 기능, 그리고 "parse: expected …".

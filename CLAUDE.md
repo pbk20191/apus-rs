@@ -32,7 +32,8 @@ Judge every change by two questions, in this order:
   a class-bound protocol's requirements and extension methods take `self` as the reference itself. (2026-11-21) A
   conformance an extension or a member adds to a generic type's parameters (`extension Box where T: P`) is one more
   witness table, in canonical requirement order among the member's own generic arguments (after `Self`'s metadata for
-  a struct's or enum's instance member; besides `self` for a class's members). Apple's
+  a struct's or enum's instance member; besides `self` for a class's members). An `@objc` enum (`POSIXErrorCode`) is
+  passed and returned as its raw integer, like the C enum Objective-C sees. Apple's
   frameworks are compiled this way, so ABI stability fixes it.
 - Anything else (runtime internals, compiler-computed layouts of non-resilient types, private SPI, behavior observed
   but not documented) is **not** built on silently: stop and tell the owner what is unguaranteed and the alternatives,
