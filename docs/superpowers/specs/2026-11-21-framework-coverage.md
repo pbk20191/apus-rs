@@ -85,8 +85,19 @@
 
 - 생성자에 붙은 `where`가 타입 파라미터를 고정하는 경우(`init(…) where Message == EmptyView`). 넘기는 generic 인자가
   달라지므로 지금처럼 거부한다. SwiftUI에서 많다.
-- Foundation: "export 안 됨" 2878개. 일부는 `@inlinable`이다. 일부는 `_System_Foundation` 같은 다시 내보낸 모듈의
-  extension인데, graph는 Foundation의 멤버로 보여 준다. 예: `URL.init(_: FilePath)`.
+- Foundation "export 안 됨" 660개 분석(2026-11-21, `.swiftinterface`와 `.tbd`로 확인):
+  - 217개: importer가 클라이언트마다 만드는 C 타입 멤버(`NS_OPTIONS`/`NS_ENUM`의 `init(rawValue:)`, struct의 memberwise
+    `init`, typed string의 `init(_: String)`). 심볼이 원래 없다. Rust에서는 objc2 값을 직접 만든다. coverage는 이제
+    Objective-C/C 선언과 함께 제외한다(Swift extension 밖의 `__C` 멤버). Foundation 3512/4902, StoreKit 629/658.
+  - 391개: `Locale.LanguageCode`/`Region`/`Script` 등의 `@_alwaysEmitIntoClient` 상수. `.tbd`에는 property descriptor(`MV`)만
+    있다.
+  - 나머지 약 50개도 `@_alwaysEmitIntoClient`/`@inlinable`이다: `FormatStyle.percent` 같은 static 멤버, `URLSession`의 async
+    편의 메서드, `Data.span`/`append(_: UInt8)`, `AttributedString` view의 `count`/`index`, `TimeZone.gmt`. shim 없이는 부를 수
+    없다.
+  - 2개만 mangling 문제다: `URL.init(_: FilePath)`, `init(_:isDirectory:)`. 이 extension에 `@_originallyDefinedIn(module:
+    "_System_Foundation", macOS 15)`이 붙어 있어 swiftc는 `$s10Foundation3URLV08_System_A0EyACSg0C08FilePathVcfC`
+    (`(extension in _System_Foundation)`)를 참조하는데, graph USR은 extension 표시가 없다. 지금은 `.tbd` 검사로 컴파일 오류가
+    나므로 안전하다. Foundation 전체에서 이런 extension은 두 개(`URL`, `FilePath`)뿐이라 미뤄 둔다.
 
 - 모듈이 붙은 C 타입(`POSIXErrorCode`, `MachErrorCode`): 약 160개.
 - 프로토콜의 associated type(`…Qa`, `Self.Filter`)과 stdlib typealias.

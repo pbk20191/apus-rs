@@ -757,6 +757,18 @@ mod coverage {
         format!("{stage}: {}", out.chars().take(150).collect::<String>())
     }
 
+    /// A member of an imported C type outside any Swift extension: made by the importer, with no symbol to call.
+    fn importer_made(declaration: &str) -> bool {
+        let mut rest = declaration;
+        while let Some((word, tail)) = rest.split_once(' ') {
+            if !matches!(word, "static" | "mutating" | "nonmutating") && !word.starts_with('@') {
+                break;
+            }
+            rest = tail;
+        }
+        rest.starts_with("__C.")
+    }
+
     #[test]
     #[ignore]
     fn coverage() {
@@ -782,6 +794,7 @@ mod coverage {
                 }
                 total += 1;
                 let path: Vec<&str> = symbol.path.iter().map(String::as_str).collect();
+                let mut written = None;
                 let outcome = (|| {
                     let declaration = rewrite(name, module, &path[..path.len() - 1], symbol, accessor).map_err(|e| {
                         if std::env::var_os("APUS_COVERAGE_DETAIL").is_some() {
@@ -789,6 +802,7 @@ mod coverage {
                         }
                         reason("rewrite", &e)
                     })?;
+                    written = Some(declaration.clone());
                     let parsed = apus_mangle::Declaration::parse_resolving(&declaration, graphs::graphs()).map_err(|e| {
                         if std::env::var_os("APUS_COVERAGE_DETAIL").is_some() {
                             println!("PARSE {declaration}\n  {e}");
@@ -811,7 +825,8 @@ mod coverage {
                     let suffix = if parsed.is_async() { "Tu" } else { "" };
                     if let Some(exported) = exported {
                         if !std::iter::once(&call).chain(thunk.as_ref()).any(|s| exported.contains(&format!("{s}{suffix}"))) {
-                            if std::env::var_os("APUS_COVERAGE_DETAIL").is_some() {
+                            // An Objective-C or C declaration is left out below, not reported.
+                            if std::env::var_os("APUS_COVERAGE_DETAIL").is_some() && !symbol.usr.starts_with("c:") && !importer_made(&declaration) {
                                 println!("EXPORT {declaration}\n  {call}{suffix}");
                             }
                             return Err("not exported (inlinable, or a protocol's default implementation)".to_string());
@@ -824,8 +839,9 @@ mod coverage {
                         callable += 1;
                         generic += usize::from(bound);
                     }
-                    // An Objective-C or C declaration without a Swift symbol (one for the Objective-C runtime).
-                    Err(_) if symbol.usr.starts_with("c:") => {
+                    // An Objective-C or C declaration without a Swift symbol (one for the Objective-C runtime), or a
+                    // member the importer makes in each client (a C type's `init(rawValue:)`, memberwise `init`).
+                    Err(_) if symbol.usr.starts_with("c:") || written.as_deref().is_some_and(importer_made) => {
                         total -= 1;
                         foreign += 1;
                     }
@@ -835,7 +851,7 @@ mod coverage {
                     }
                 }
             }
-            println!("\n{name}: {callable}/{total} callable ({generic} of them bound generics; {foreign} Objective-C or C declarations left out)");
+            println!("\n{name}: {callable}/{total} callable ({generic} of them bound generics; {foreign} Objective-C or C declarations and imported members left out)");
             let mut sorted: Vec<_> = reasons.into_iter().collect();
             sorted.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
             for (why, (count, example)) in sorted.iter().take(25) {
