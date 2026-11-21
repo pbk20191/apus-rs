@@ -404,6 +404,19 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
                  declare `-> DirectValue` (or `SwiftObject` for an object)"
             ));
         }
+        // A C value goes by swiftcall's lowering of its C layout (registers, up to four); not as a `SwiftValue`.
+        let (imported_args, imported_result) = parsed.imported_values();
+        let rust_types = rust_argument_types(tail);
+        let by_address = |ty: &str| ty.rsplit([':', ' ', '&']).next() == Some("SwiftValue");
+        let imported_arg = (rust_types.len() == imported_args.len())
+            .then(|| imported_args.iter().zip(&rust_types).position(|(imported, ty)| *imported && by_address(ty)))
+            .flatten();
+        if imported_arg.is_some() || (imported_result && last_segment == "SwiftValue") {
+            return item_compile_error(&format!(
+                "`{declaration}`: a value of a type imported from C is passed and returned as its C layout, not as a \
+                 `SwiftValue`: declare what C passes (an option set's raw integer, a typed string's object)"
+            ));
+        }
         match parsed.typed_throws() {
             Ok(false) if rust_error_slot => {
                 return item_compile_error(&format!("`{declaration}` has no typed throws: it takes no `ErrorSlot`"))

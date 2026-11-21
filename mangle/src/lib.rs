@@ -842,6 +842,33 @@ impl Declaration {
             && *result == ast::Ty::Param(ast::GenericParam { depth: 0, index: 0 })
     }
 
+    /// Per formal parameter, and for the result, whether its type is a value imported from C (`__C.CGPoint(struct)`,
+    /// `__C.NSURLResourceKey(typedef struct)`, or an optional of one): passed by swiftcall's lowering of its C layout.
+    pub fn imported_values(&self) -> (Vec<bool>, bool) {
+        fn imported(ty: &ast::Ty) -> bool {
+            match ty {
+                ast::Ty::Optional(wrapped) => imported(wrapped),
+                ast::Ty::Nominal { module, path, .. } => {
+                    module == "__C" && matches!(path.last(), Some((_, ast::Kind::Struct | ast::Kind::Enum | ast::Kind::TypedefStruct)))
+                }
+                _ => false,
+            }
+        }
+        match &self.0.signature {
+            ast::Signature::Function { params, result, .. } => (params.iter().map(|p| imported(&p.ty)).collect(), imported(result)),
+            ast::Signature::Getter(ty) => (Vec::new(), imported(ty)),
+            ast::Signature::Setter(ty) => (vec![imported(ty)], false),
+            ast::Signature::Subscript { params, result, setter } => {
+                let indices = params.iter().map(|p| imported(&p.ty));
+                match setter {
+                    true => (std::iter::once(imported(result)).chain(indices).collect(), false),
+                    false => (indices.collect(), imported(result)),
+                }
+            }
+            ast::Signature::Case(_) => (Vec::new(), false),
+        }
+    }
+
     /// Per formal parameter, whether the callee consumes it (+1) instead of borrowing it: every parameter of an
     /// initializer and a setter's new value (Swift's defaults, SE-0377), or any marked `consuming`/`__owned`.
     pub fn consumed(&self) -> Vec<bool> {

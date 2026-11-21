@@ -306,10 +306,16 @@ graph is emitted by `apus-build` (and found through `APUS_SYMBOL_GRAPHS`).
   A member of an extension is written with its `(extension in M where …)` when Swift mangles it so (a protocol's, a
   constrained one's, another module's), and requirements a member adds to its type's parameters go in its `where`.
   Default values are left out (`= #isolation` aside), a module's typealias is written as the type it names, an
-  Objective-C class by its Objective-C name (`__C.CLLocation(class)`), and a variadic type's arguments as its pack
-  (`Foundation.Predicate(struct)<Pack{T}>`). A name with several declarations or none, or one apus cannot write (an
-  imported C enum, struct or typedef, a protocol's associated type, a standard library typealias), is a compile error:
-  write that one in full.
+  Objective-C class by its Objective-C name (`__C.CLLocation(class)`), a C type by its C name (`__C.CGRect(struct)`,
+  `NSCalendar.Unit` as `__C.NSCalendarUnit(struct)`, `URLResourceKey` as `__C.NSURLResourceKey(typedef struct)`,
+  `TimeInterval` as `Double`), what a module declares in an imported type with that extension
+  (`__C.NSRunLoop(class).(extension in Foundation) SchedulerTimeType(struct)`), and a variadic type's arguments as
+  its pack (`Foundation.Predicate(struct)<Pack{T}>`). A name with several declarations or none, or one apus cannot
+  write (a C type of a module-qualified USR such as `POSIXErrorCode`, a protocol's associated type, a standard library
+  typealias), is a compile error: write that one in full.
+- A value of a C type (struct, enum, option set, typedef struct) is passed and returned by swiftcall's lowering of
+  its C layout (up to four registers): declare it as what C passes (an option set's raw integer, an `NS_TYPED_ENUM`'s
+  string object); `SwiftValue` for one is a compile error (refused even for a larger struct, which goes by address).
 - A type that moved to another module keeps the module it was defined in in its symbols (`@_originallyDefinedIn`,
   docs/ReferenceGuides/UnderscoredAttributes.md): apus reads which ones did from the SDK's `.swiftinterface`
   (`CoreFoundation.CGFloat` is mangled as CoreGraphics', SwiftUICore's types as SwiftUI's).

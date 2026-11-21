@@ -422,6 +422,12 @@ fn framework_symbols() {
         .unwrap(),
         "$ss8DurationV10FoundationE15TimeFormatStyleV7PatternV10hourMinuteAGvgZ"
     );
+    // A type Foundation declares in its extension of a C struct Swift names after its typedef (`Decimal`); observed
+    // with swiftc: `func a(_: Decimal.FormatStyle)` in module M.
+    assert_eq!(
+        mangle("M.a(_: __C.NSDecimal(typedef struct).(extension in Foundation) FormatStyle(struct))").unwrap(),
+        "$s1M1ayySo9NSDecimala10FoundationE11FormatStyleVF"
+    );
 }
 
 #[test]

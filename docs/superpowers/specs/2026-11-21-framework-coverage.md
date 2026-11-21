@@ -68,6 +68,18 @@
   - 파라미터의 result builder(`@ContentBuilder actions:`)는 컴파일 시점 기능이므로 지운다.
   - `@export(implementation)`와 `dynamic`도 지운다. 심볼은 `.tbd`로 검사한다.
 - `Void`가 typealias 분기에 먼저 걸리던 것을 고쳤다.
+- 가져온 C 타입과 Objective-C 클래스의 Swift extension:
+  - C 타입은 C 이름으로 `__C`에 있는 것처럼 mangle된다(Mangling.rst "Imported C and C++ structs"는 struct의 `V`를
+    문서화한다). 나머지는 swiftc로 확인했다(2026-11-21): `NS_ENUM`과 `NS_OPTIONS`는 `So…V`, `NS_TYPED_ENUM`과
+    익명 struct는 typedef 이름으로 `So…a`, 보통 typedef(`TimeInterval`)는 원래 타입(`Sd`)이다.
+  - graph가 USR(`c:@S@`, `c:@E@`, `c:@SA@`, `c:@T@`)과 종류(struct, class, typealias)를 알려 주므로 그대로 다시 쓴다.
+    모듈이 붙은 USR(`c:@M@_DarwinFoundation@E@POSIXErrorCode`)은 `Darwin.POSIXErrorCode`로 mangle되므로 거부한다.
+  - Objective-C 클래스나 C 타입 안에 모듈이 선언한 것은 extension 표시를 단다:
+    `So9NSRunLoopC10FoundationE17SchedulerTimeTypeV`, `So9NSDecimala10FoundationE11FormatStyleV`.
+  - 결과는 USR과 `.tbd`로 검사하므로 이름이 틀리면 컴파일 오류다.
+  - 이런 C 값은 C 배치대로 넘어가므로 `SwiftValue`로 선언하면 컴파일 오류로 거부한다(전에는 검사가 없어 UB였다).
+  - coverage는 Swift 심볼이 없는 Objective-C/C 선언(`c:` USR)을 따로 센다.
+  - 결과: Foundation 3020 → 3512/5127(Objective-C/C 선언 4721개 제외), SwiftUI 1584 → 1688.
 
 ## 남은 큰 항목
 
@@ -76,7 +88,7 @@
 - Foundation: "export 안 됨" 2878개. 일부는 `@inlinable`이다. 일부는 `_System_Foundation` 같은 다시 내보낸 모듈의
   extension인데, graph는 Foundation의 멤버로 보여 준다. 예: `URL.init(_: FilePath)`.
 
-- 가져온 C 타입(enum `c:@E@`, struct `c:@SA@`, typedef `c:@T@`)과 Objective-C에서 온 멤버(`So…` 심볼): rewrite가 거부한다.
+- 모듈이 붙은 C 타입(`POSIXErrorCode`, `MachErrorCode`): 약 160개.
 - 프로토콜의 associated type(`…Qa`, `Self.Filter`)과 stdlib typealias.
 - export되지 않은 것(`@inlinable` 등): shim이 필요하다.
 - AppIntents: result builder와 string interpolation 같은 컴파일 시점 기능, 그리고 "parse: expected …".

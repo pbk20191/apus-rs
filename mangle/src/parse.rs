@@ -433,7 +433,7 @@ impl<'a> Parser<'a> {
         for (i, (name, kind, _)) in path.iter().enumerate() {
             let names: Vec<&str> = path[..=i].iter().map(|(n, _, _)| n.as_str()).collect();
             let kind = kind.or_else(|| self.resolve(&module, &names)).ok_or_else(|| needs_kind(name))?;
-            if matches!(kind, Kind::TypedefStruct | Kind::TypedefClass) && (module != "__C" || path.len() != 1) {
+            if matches!(kind, Kind::TypedefStruct | Kind::TypedefClass) && (module != "__C" || i != 0) {
                 return Err(format!("`{name}`: a typedef kind names an imported C type, `__C.{name}(typedef …)`"));
             }
             resolved.push((name.clone(), kind));

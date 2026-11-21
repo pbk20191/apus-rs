@@ -85,13 +85,23 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
     // The enclosing types, each with its kind and generic parameters.
     let mut prefix = module_name.to_string();
     let mut context_params: Vec<String> = Vec::new();
+    // An Objective-C class or C type the module extends (`RunLoop`, `Decimal`) is mangled by its C name, and what the
+    // module declares in it as an extension's (`So9NSRunLoopC10FoundationE17SchedulerTimeTypeV`).
+    // An imported type nested in another (`NSTextCheckingResult.CheckingType`) is in `__C` all the same.
+    let mut imported_at = None;
     for i in 0..context.len() {
         let enclosing = module.find(&context[..=i]).find(|s| graphs::type_kind(&s.kind).is_some()).ok_or_else(|| format!("no type `{}`", context[..=i].join(".")))?;
         let kind = kind_mark(graphs::type_kind(&enclosing.kind).expect("a type"));
         let own: Vec<String> = enclosing.params.iter().map(|(n, _)| n.clone()).filter(|n| !context_params.contains(n)).collect();
-        prefix.push('.');
-        prefix.push_str(context[i]);
-        prefix.push_str(kind);
+        match imported_name(&enclosing.usr, &enclosing.kind) {
+            Some(name) => {
+                prefix = name;
+                imported_at = Some(i);
+            }
+            None if enclosing.usr.starts_with("c:") => return Err(format!("`{}` ({}): write the declaration in full", context[..=i].join("."), enclosing.usr)),
+            None if imported_at.is_some_and(|at| at + 1 == i) => prefix.push_str(&format!(".(extension in {module_name}) {}{kind}", context[i])),
+            None => prefix.push_str(&format!(".{}{kind}", context[i])),
+        }
         if !own.is_empty() {
             prefix.push_str(&format!("<{}>", own.join(", ")));
         }
@@ -119,7 +129,7 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
     if let Some(e) = &symbol.extension {
         // Swift mangles an extension's member as the type's own unless the extension is another module's, adds
         // requirements, or extends a protocol.
-        if protocol || e.extended_module != module_name || !extension_constraints.is_empty() {
+        if protocol || e.extended_module != module_name || !extension_constraints.is_empty() || imported_at.is_some_and(|at| at + 1 == context.len()) {
             let requirements: Vec<String> = extension_constraints
                 .iter()
                 .map(|(kind, lhs, rhs, usr)| requirement(kind, lhs, rhs, usr.as_deref(), &context_params_str(&context_params), module_name))
@@ -135,6 +145,7 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
     let fragments = &symbol.fragments;
     let mut modifiers = Vec::new();
     let mut body = String::new();
+    let mut outer = 0; // where the last type written starts
     let mut i = 0;
     // Modifiers and attributes, up to the introducer (`func`, `init`, `var`, `subscript`).
     while i < fragments.len() {
@@ -204,7 +215,13 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
                     i += 1;
                 }
             }
-            "typeIdentifier" => body.push_str(&type_fragment(fragments, i, &all_params, module_name, 0)?),
+            "typeIdentifier" => {
+                if replaces_outer(fragments, i) {
+                    body.truncate(outer);
+                }
+                outer = body.len();
+                body.push_str(&type_fragment(fragments, i, &all_params, module_name, 0)?);
+            }
             _ => body.push_str(&f.spelling),
         }
         i += 1;
@@ -378,43 +395,129 @@ fn named(spelling: &str, usr: Option<&str>, module: &str) -> Result<String, Stri
 
 /// The type the fragment at `i` names: a typealias as the type it stands for (Swift mangles that), a type nested in
 /// the one before it (`Inner` of `Outer.Inner`, which the graph splits) with its kind only, any other with its module.
+/// A typealias or C type nested in another (`Notification.Name`) is written whole: see [`replaces_outer`].
 fn type_fragment(fragments: &[Fragment], i: usize, params: &[&str], module: &str, depth: usize) -> Result<String, String> {
     let f = &fragments[i];
     let nested = i >= 2 && fragments[i - 1].spelling.ends_with('.') && fragments[i - 2].kind == "typeIdentifier";
-    // `Void` is written `()` (see `named`).
-    let alias = f.precise.as_deref().filter(|usr| usr.ends_with('a') && !usr.ends_with("Qa") && usr.starts_with("s:") && *usr != "s:s4Voida");
-    match (alias, nested) {
-        (Some(usr), false) if depth < 4 => {
+    let usr = f.precise.as_deref();
+    if let Some(usr) = usr.filter(|usr| imported(usr)) {
+        return imported_type(f, usr, params, module, depth);
+    }
+    match (usr.filter(|usr| swift_alias(usr)), nested) {
+        (Some(usr), _) => {
             let declared = graphs::usr_module(usr).and_then(|m| graphs::graphs().module(&m));
             let alias = declared.and_then(|m| m.by_usr(usr, Some("swift.typealias")).next());
-            let Some(alias) = alias else { return Err(format!("`{}` ({usr}): write the declaration in full", f.spelling)) };
-            // `typealias Name = Type`: what follows ` = `, which names no generic parameter of the alias's context.
-            let Some(start) = alias.fragments.iter().position(|f| f.kind == "text" && f.spelling.contains('=')) else {
-                return Err(format!("`{}` ({usr}): write the declaration in full", f.spelling));
-            };
-            let target = &alias.fragments[start + 1..];
-            if target.iter().any(|f| f.kind == "typeIdentifier" && f.precise.is_none()) {
-                return Err(format!("`{}` ({usr}): a generic typealias: write the declaration in full", f.spelling));
-            }
-            let mut written = alias.fragments[start].spelling.split('=').nth(1).unwrap_or("").trim_start().to_string();
-            for j in start + 1..alias.fragments.len() {
-                match alias.fragments[j].kind.as_str() {
-                    "typeIdentifier" => written.push_str(&type_fragment(&alias.fragments, j, params, module, depth + 1)?),
-                    _ => written.push_str(&alias.fragments[j].spelling),
-                }
-            }
-            Ok(written)
+            let alias = alias.ok_or_else(|| format!("`{}` ({usr}): write the declaration in full", f.spelling))?;
+            expand_alias(alias, f, params, module, depth)
         }
-        (Some(usr), _) => Err(format!("`{}` ({usr}): write the declaration in full", f.spelling)),
         (None, nested) => {
             // Only a type with generic arguments may be variadic (its module's graph is read then).
             let arguments = fragments.get(i + 1).is_some_and(|n| n.spelling.starts_with('<'));
             let mark = if arguments { variadic_mark(f) } else { Some("") };
             let mark = mark.ok_or_else(|| format!("`{}`: a variadic type with other parameters: write the declaration in full", f.spelling))?;
-            let name = if nested { nested_name(f)? } else { type_name(f, params, module)? };
+            let name = if nested { nested_name(f, &fragments[i - 2])? } else { type_name(f, params, module)? };
             Ok(name + mark)
         }
     }
+}
+
+/// A Swift typealias's USR (`Void` is written `()`, see `named`; an associated type is not one).
+fn swift_alias(usr: &str) -> bool {
+    usr.starts_with("s:") && usr.ends_with('a') && !usr.ends_with("Qa") && usr != "s:s4Voida"
+}
+
+/// A C declaration's USR (`c:@S@CGRect`, `c:@T@NSURLResourceKey`); an Objective-C class's is `named`'s.
+fn imported(usr: &str) -> bool {
+    usr.starts_with("c:@")
+}
+
+/// A type imported from C or Objective-C as apus writes it, from its USR and graph kind: `__C.NSRunLoop(class)`,
+/// `__C.NSDecimal(typedef struct)` (see [`imported_type`]); `None` for another, or a typedef the graph names otherwise.
+fn imported_name(usr: &str, kind: &str) -> Option<String> {
+    if let Some(class) = usr.strip_prefix("c:objc(cs)") {
+        return Some(format!("__C.{class}(class)"));
+    }
+    let (c_kind, name) = usr.strip_prefix("c:@")?.split_once('@')?;
+    match (c_kind, kind) {
+        ("S" | "E", _) => Some(format!("__C.{name}(struct)")),
+        ("SA", _) | ("T", "swift.struct") => Some(format!("__C.{name}(typedef struct)")),
+        ("T", "swift.class") => Some(format!("__C.{name}(typedef class)")),
+        _ => None,
+    }
+}
+
+/// The module of an extension the USR of a type declared in it names, for a type extending an imported one
+/// (`s:So9NSRunLoopC10FoundationE17SchedulerTimeTypeV`: Foundation).
+fn imported_extension_module(usr: &str) -> Option<&str> {
+    fn identifier(s: &str) -> Option<(&str, &str)> {
+        let digits = s.chars().take_while(|c| c.is_ascii_digit()).count();
+        let length: usize = s[..digits].parse().ok()?;
+        let rest = &s[digits..];
+        (rest.len() >= length).then(|| rest.split_at(length))
+    }
+    let (_, rest) = identifier(usr.strip_prefix("s:So")?)?;
+    let rest = rest.strip_prefix(['C', 'V', 'a'])?;
+    let (module, rest) = identifier(rest)?;
+    rest.starts_with('E').then_some(module)
+}
+
+/// Whether the fragment at `i`, nested in the type before it, is written whole (a typealias's type or a C type's own
+/// name), so the outer type and its `.` already written are dropped.
+fn replaces_outer(fragments: &[Fragment], i: usize) -> bool {
+    let nested = i >= 2 && fragments[i - 1].spelling == "." && fragments[i - 2].kind == "typeIdentifier";
+    nested && fragments[i].precise.as_deref().is_some_and(|usr| imported(usr) || swift_alias(usr))
+}
+
+/// A type imported from C, mangled by its C name in `__C` (`So6CGRectV`): a struct or enum (`NS_ENUM`, `NS_OPTIONS`)
+/// as a struct, an anonymous struct by its typedef (`So9NSDecimala`), a typedef as what the graph of `module` makes of
+/// it: a type named after it (`NS_TYPED_ENUM`, a Core Foundation class) or the type it stands for. A C type of a
+/// module-qualified USR (`c:@M@…`) is not mangled in `__C` and refused.
+fn imported_type(f: &Fragment, usr: &str, params: &[&str], module: &str, depth: usize) -> Result<String, String> {
+    let full = || format!("`{}` ({usr}): write the declaration in full", f.spelling);
+    let (kind, name) = usr[3..].split_once('@').ok_or_else(full)?;
+    match kind {
+        "S" | "E" => Ok(format!("__C.{name}(struct)")),
+        "SA" => Ok(format!("__C.{name}(typedef struct)")),
+        "T" => {
+            let graph = graphs::graphs().module(module).ok_or_else(full)?;
+            let symbol = graph.by_usr(usr, None).find(|s| matches!(s.kind.as_str(), "swift.struct" | "swift.class" | "swift.typealias"));
+            match symbol.map(|s| (s.kind.as_str(), s)) {
+                Some(("swift.struct", _)) => Ok(format!("__C.{name}(typedef struct)")),
+                Some(("swift.class", _)) => Ok(format!("__C.{name}(typedef class)")),
+                Some((_, alias)) if depth < 4 => expand_alias(alias, f, params, module, depth),
+                _ => Err(full()),
+            }
+        }
+        _ => Err(full()),
+    }
+}
+
+/// `typealias Name = Type`: what follows ` = `, which names no generic parameter of the alias's context.
+fn expand_alias(alias: &graphs::Symbol, f: &Fragment, params: &[&str], module: &str, depth: usize) -> Result<String, String> {
+    let full = || format!("`{}` ({}): write the declaration in full", f.spelling, alias.usr);
+    if depth >= 4 {
+        return Err(full());
+    }
+    let start = alias.fragments.iter().position(|f| f.kind == "text" && f.spelling.contains('=')).ok_or_else(full)?;
+    let target = &alias.fragments[start + 1..];
+    if target.iter().any(|f| f.kind == "typeIdentifier" && f.precise.is_none()) {
+        return Err(format!("`{}` ({}): a generic typealias: write the declaration in full", f.spelling, alias.usr));
+    }
+    let mut written = alias.fragments[start].spelling.split('=').nth(1).unwrap_or("").trim_start().to_string();
+    let mut outer = written.len();
+    for j in start + 1..alias.fragments.len() {
+        match alias.fragments[j].kind.as_str() {
+            "typeIdentifier" => {
+                if replaces_outer(&alias.fragments, j) {
+                    written.truncate(outer);
+                }
+                outer = written.len();
+                written.push_str(&type_fragment(&alias.fragments, j, params, module, depth + 1)?);
+            }
+            _ => written.push_str(&alias.fragments[j].spelling),
+        }
+    }
+    Ok(written)
 }
 
 /// Marks a variadic generic type (`struct Predicate<each Input>`, from its module's graph), whose arguments
@@ -468,13 +571,19 @@ fn packs(body: &str) -> String {
 }
 
 /// A type nested in the one before it (`Inner` of `Outer.Inner`): its name and kind.
-fn nested_name(f: &Fragment) -> Result<String, String> {
+fn nested_name(f: &Fragment, outer: &Fragment) -> Result<String, String> {
     let kind = match f.precise.as_deref().and_then(|usr| usr.chars().last()) {
         Some('V') => "(struct)",
         Some('C') => "(class)",
         Some('O') => "(enum)",
         _ => return Err(format!("`{}` ({:?}): write the declaration in full", f.spelling, f.precise)),
     };
+    // A type declared in an extension of an imported one (`RunLoop.SchedulerTimeType`) is marked with it.
+    if outer.precise.as_deref().is_some_and(|usr| usr.starts_with("c:")) {
+        let module = f.precise.as_deref().and_then(imported_extension_module);
+        let module = module.ok_or_else(|| format!("`{}` ({:?}): write the declaration in full", f.spelling, f.precise))?;
+        return Ok(format!("(extension in {module}) {}{kind}", f.spelling));
+    }
     Ok(format!("{}{kind}", f.spelling))
 }
 
@@ -541,6 +650,25 @@ mod tests {
         check("WeatherKit.DayWeather.highTemperature { get }", "Foundation.Measurement(struct)<__C.NSUnitTemperature(class)>");
         check("StoreKit.Product.SubscriptionPeriod.weekly { get }", "static StoreKit.Product(struct).SubscriptionPeriod(struct).weekly");
         check("StoreKit.AppStore.presentMultiSeatInvitationSheet(from:originalTransactionID:)", "@MainActor static");
+    }
+
+    /// Types imported from C by their C names: a struct or enum (`NS_OPTIONS`) as `__C.Name(struct)`, one Swift names
+    /// after its typedef (`NS_TYPED_ENUM`, an anonymous struct) as `typedef struct`, a plain typedef as its type.
+    #[test]
+    fn imported_c_types() {
+        let check = |text: &str, contains: &str| {
+            let expanded = super::expand(text).unwrap().unwrap();
+            assert!(expanded.contains(contains), "{expanded}");
+            let symbol = apus_mangle::Declaration::parse(&expanded).expect(&expanded).symbol().unwrap();
+            assert_eq!(Some(symbol), super::expected_symbol(text), "{expanded}");
+        };
+        check(
+            "Foundation.FileManager.replaceItemAt(_:withItemAt:backupItemName:options:)",
+            "(extension in Foundation) __C.NSFileManager(class).replaceItemAt(_: Foundation.URL(struct), withItemAt: Foundation.URL(struct), backupItemName: String?, options: __C.NSFileManagerItemReplacementOptions(struct))",
+        );
+        check("Foundation.URLResourceValues.allValues { get }", "__C.NSURLResourceKey(typedef struct)");
+        check("Foundation.RunLoop.SchedulerTimeType.Stride.magnitude { get }", "magnitude: Double");
+        check("Foundation.Decimal.FormatStyle.attributed { get }", "__C.NSDecimal(typedef struct)");
     }
 
     /// Default values are left out (`#isolation` aside); a typealias is written as the type it names.
@@ -641,7 +769,7 @@ mod coverage {
             };
             let exported = crate::sdk::exported_symbols(name);
             let mut reasons: BTreeMap<String, (usize, String)> = BTreeMap::new();
-            let (mut total, mut callable, mut generic) = (0, 0, 0);
+            let (mut total, mut callable, mut generic, mut foreign) = (0, 0, 0, 0);
             for symbol in module.symbols() {
                 let accessor = match symbol.kind.as_str() {
                     "swift.func" | "swift.method" | "swift.type.method" | "swift.init" => None,
@@ -696,13 +824,18 @@ mod coverage {
                         callable += 1;
                         generic += usize::from(bound);
                     }
+                    // An Objective-C or C declaration without a Swift symbol (one for the Objective-C runtime).
+                    Err(_) if symbol.usr.starts_with("c:") => {
+                        total -= 1;
+                        foreign += 1;
+                    }
                     Err(why) => {
                         let entry = reasons.entry(why).or_insert((0, path.join(".")));
                         entry.0 += 1;
                     }
                 }
             }
-            println!("\n{name}: {callable}/{total} callable ({generic} of them bound generics)");
+            println!("\n{name}: {callable}/{total} callable ({generic} of them bound generics; {foreign} Objective-C or C declarations left out)");
             let mut sorted: Vec<_> = reasons.into_iter().collect();
             sorted.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
             for (why, (count, example)) in sorted.iter().take(25) {
