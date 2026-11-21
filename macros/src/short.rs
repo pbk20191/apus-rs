@@ -168,7 +168,9 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
             ("keyword", "mutating" | "nonisolated" | "consuming" | "borrowing" | "static") => modifiers.push(f.spelling.clone()),
             ("keyword", "class") => modifiers.push("static".into()),
             ("keyword", "final" | "open" | "public" | "override" | "required" | "convenience" | "nonmutating") => {}
-            ("attribute", "@discardableResult" | "@preconcurrency") => {}
+            ("attribute", "@discardableResult") => {}
+            // Its symbol leaves out `@Sendable` and global actors in function types, and marker protocols.
+            ("attribute", "@preconcurrency") => modifiers.insert(0, "@preconcurrency".into()),
             // The framework exports the function on the systems it names (`.tbd`-checked as any other); its body
             // offered for inlining, or for dynamic replacement, the symbol stays the one to call.
             (_, a) if a.trim_start().starts_with("@backDeployed") || a.trim_start().starts_with("@export(") => {}
@@ -237,7 +239,7 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
     }
     // Requirements that are not a generic parameter's own conformance or superclass stay in a `where` clause, with
     // those the member adds to its type's parameters.
-    let rest: Vec<String> = symbol
+    let mut rest: Vec<String> = symbol
         .constraints
         .iter()
         .filter(|(kind, lhs, _, _)| {
@@ -246,6 +248,13 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
         .chain(member_constraints.iter().copied())
         .map(|(kind, lhs, rhs, usr)| requirement(kind, lhs, rhs, usr.as_deref(), &all_params, module_name))
         .collect::<Result<_, _>>()?;
+    // `swiftGenerics` leaves out a layout requirement (`where Value: AnyObject`): read from the declaration's own
+    // `where` clause.
+    for layout in any_object_requirements(fragments) {
+        if !rest.contains(&layout) {
+            rest.push(layout);
+        }
+    }
     let mut body = packs(&strip_defaults(body.trim()));
     // A property: `name: Type { get … }`, with the accessor written.
     if let Some(accessor) = accessor {
@@ -424,7 +433,13 @@ fn type_fragment(fragments: &[Fragment], i: usize, params: &[&str], module: &str
             let arguments = fragments.get(i + 1).is_some_and(|n| n.spelling.starts_with('<'));
             let mark = if arguments { variadic_mark(f) } else { Some("") };
             let mark = mark.ok_or_else(|| format!("`{}`: a variadic type with other parameters: write the declaration in full", f.spelling))?;
-            let name = if nested { nested_name(f, &fragments[i - 2])? } else { type_name(f, params, module)? };
+            let name = match (nested, nested_standard_type(fragments, i)) {
+                (true, _) => nested_name(f, &fragments[i - 2])?,
+                // The standard library type a nested type is in (`String` of `String.Index`), written whole: bare,
+                // `String` would be read as the nested type's module.
+                (false, Some(kind)) => format!("Swift.{}{kind}", f.spelling),
+                (false, None) => type_name(f, params, module)?,
+            };
             Ok(name + mark)
         }
     }
@@ -600,6 +615,33 @@ fn nested_name(f: &Fragment, outer: &Fragment) -> Result<String, String> {
     Ok(format!("{}{kind}", f.spelling))
 }
 
+/// The kind of the standard library type at `i` when a nested type follows it (`String` in `String.Index`).
+fn nested_standard_type(fragments: &[Fragment], i: usize) -> Option<&'static str> {
+    let followed = fragments.get(i + 1).is_some_and(|f| f.spelling == ".") && fragments.get(i + 2).is_some_and(|f| f.kind == "typeIdentifier");
+    if !followed {
+        return None;
+    }
+    // Mangling.rst's standard substitutions of the types that declare nested types.
+    match fragments[i].precise.as_deref()? {
+        "s:SS" | "s:Sa" | "s:SD" | "s:Sh" | "s:Ss" => Some("(struct)"),
+        "s:Sq" => Some("(enum)"),
+        _ => None,
+    }
+}
+
+/// The `T: AnyObject` requirements of a declaration's `where` clause (`… where Value : AnyObject, Value : Observable`).
+fn any_object_requirements(fragments: &[Fragment]) -> Vec<String> {
+    let Some(at) = fragments.iter().position(|f| f.kind == "keyword" && f.spelling == "where") else { return Vec::new() };
+    let clause: String = fragments[at + 1..].iter().map(|f| f.spelling.as_str()).collect();
+    clause
+        .split(',')
+        .filter_map(|item| {
+            let (lhs, rhs) = item.split_once(':')?;
+            (rhs.trim() == "AnyObject").then(|| format!("{}: AnyObject", lhs.trim()))
+        })
+        .collect()
+}
+
 fn type_name(f: &Fragment, params: &[&str], module: &str) -> Result<String, String> {
     if params.contains(&f.spelling.as_str()) || f.spelling == "Self" {
         return Ok(f.spelling.clone());
@@ -659,6 +701,21 @@ mod tests {
         assert!(expanded.contains("SwiftUI.Form(struct)<Content: SwiftUI.View>"), "{expanded}");
         let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
         assert_eq!(Some(symbol), super::expected_symbol(text), "{expanded}");
+    }
+    /// What the graph says outside `swiftGenerics`: `@preconcurrency` (its symbol drops `@MainActor` from function
+    /// types), a layout requirement (`where Value: AnyObject`, `RlzC`), and a standard library type's nested type
+    /// (`String.Index`, `SS5IndexV`).
+    #[test]
+    fn attributes_layouts_and_nested_standard_types() {
+        let check = |text: &str, contains: &str| {
+            let expanded = super::expand(text).unwrap().unwrap();
+            assert!(expanded.contains(contains), "{expanded}");
+            let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+            assert_eq!(Some(symbol), super::expected_symbol(text), "{expanded}");
+        };
+        check("SwiftUI.Button.init(action:label:)", "@preconcurrency");
+        check("Foundation.UndoManager.registerUndo(withTarget:handler:)", "TargetType: AnyObject");
+        check("Foundation.URLComponents.rangeOfHost { get }", "Swift.String(struct).Index(struct)");
     }
     /// Imported Objective-C classes (by their Objective-C name), `@backDeployed` and `@MainActor` attributes.
     #[test]

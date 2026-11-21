@@ -116,10 +116,24 @@
       잘못 허용되던 것이고, 이제 거부한다.
     - MusicKit 885/974, WeatherKit 347/382, AppIntents 881/3771.
 
+- graph의 `swiftGenerics` 밖에 있는 정보(2026-11-22, rewrite 수정이라 ABI와 무관):
+  - `@preconcurrency`: 선언 조각에 있는데 버리고 있었다. 이제 `@preconcurrency`로 쓴다. 심볼은 function type의
+    `@Sendable`과 global actor를 뺀다(`Button.init(action:label:)`, `NewDocumentAction.callAsFunction(_:)`).
+  - `where T: AnyObject`: `swiftGenerics`에는 없고 선언의 `where`에만 있다. 거기서 읽는다(`RlzC`).
+    `UndoManager.registerUndo(withTarget:handler:)`, `FocusedValue.init(_:)`.
+  - 표준 라이브러리 타입 안의 타입(`String.Index`): 바깥 이름을 그냥 쓰면 `String`을 모듈로 읽었다
+    (`6String5IndexV`). 이제 `Swift.String(struct).Index(struct)`로 쓴다(`SS5IndexV`).
+  - 남은 SwiftUI 차이 5개는 `NSHostingView`의 `@objc override` 속성이다. Swift 심볼이 없으므로 Objective-C(objc2)의
+    몫이다.
+  - 결과:
+    - SwiftUI 1752 → 1774/2956
+    - Foundation 3699 → 3733/4905
+    - WeatherKit 347 → 353/382
+    - StoreKit 629 → 630/658
+
 ## 남은 큰 항목
 
-- SwiftUI의 `@MainActor` closure 파라미터(`Button.init(action:label:)`): 심볼이 `ScMYc`를 빼고 mangle된다. 아직 보지
-  않았다.
+- Foundation mangling 차이 106개, AppIntents 615개.
 - Foundation "export 안 됨" 660개 분석(2026-11-21, `.swiftinterface`와 `.tbd`로 확인):
   - 217개: importer가 클라이언트마다 만드는 C 타입 멤버(`NS_OPTIONS`/`NS_ENUM`의 `init(rawValue:)`, struct의 memberwise
     `init`, typed string의 `init(_: String)`). 심볼이 원래 없다. Rust에서는 objc2 값을 직접 만든다. coverage는 이제
