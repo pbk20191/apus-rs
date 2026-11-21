@@ -148,6 +148,8 @@ fn nominal_ref(ty: &ast::Ty) -> Option<NominalRef> {
             }
             _ => None,
         },
+        // A C value is no wrapper's: it goes as its C layout (`CValue`).
+        ty if c_value(ty).is_some() => None,
         ast::Ty::Nominal { module, path, .. } => Some(NominalRef {
             mangled: mangler::is_concrete_type(ty).then(|| mangler::type_name(ty).ok()).flatten(),
             name: std::iter::once(module.as_str()).chain(path.iter().map(|(name, _)| name.as_str())).collect::<Vec<_>>().join("."),
@@ -276,6 +278,8 @@ pub enum ArgumentKind {
     /// `any P`, optional or not: a class existential (its protocols class-bound) goes in registers, as its reference
     /// and witness tables; any other by address. Only the type's metadata tells which, at run time.
     Existential,
+    /// A value of a type imported from C (see [`Declaration::imported_values`]); `true` for an optional one.
+    CValue(bool),
 }
 
 /// `any Error` or `(any Error)?`: Swift passes and returns it as one error box reference.
@@ -300,6 +304,25 @@ pub enum ResultKind {
     CFunction,
     /// An Objective-C block (+1).
     Block,
+    /// A value of a type imported from C, optional or not.
+    CValue,
+}
+
+/// A value of a type imported from C (`__C.CGRect(struct)`, `__C.NSURLResourceKey(typedef struct)`): `Some(true)`
+/// for an optional one. Swift passes it by swiftcall's lowering of its C layout.
+fn c_value(ty: &ast::Ty) -> Option<bool> {
+    let (ty, optional) = match ty {
+        ast::Ty::Optional(wrapped) => (&**wrapped, true),
+        ty => (ty, false),
+    };
+    match ty {
+        ast::Ty::Nominal { module, path, .. }
+            if module == "__C" && matches!(path.last(), Some((_, ast::Kind::Struct | ast::Kind::Enum | ast::Kind::TypedefStruct))) =>
+        {
+            Some(optional)
+        }
+        _ => None,
+    }
 }
 
 /// A `@convention(c)` or `@convention(block)` function type, itself or optional.
@@ -845,15 +868,7 @@ impl Declaration {
     /// Per formal parameter, and for the result, whether its type is a value imported from C (`__C.CGPoint(struct)`,
     /// `__C.NSURLResourceKey(typedef struct)`, or an optional of one): passed by swiftcall's lowering of its C layout.
     pub fn imported_values(&self) -> (Vec<bool>, bool) {
-        fn imported(ty: &ast::Ty) -> bool {
-            match ty {
-                ast::Ty::Optional(wrapped) => imported(wrapped),
-                ast::Ty::Nominal { module, path, .. } => {
-                    module == "__C" && matches!(path.last(), Some((_, ast::Kind::Struct | ast::Kind::Enum | ast::Kind::TypedefStruct)))
-                }
-                _ => false,
-            }
-        }
+        let imported = |ty: &ast::Ty| c_value(ty).is_some();
         match &self.0.signature {
             ast::Signature::Function { params, result, .. } => (params.iter().map(|p| imported(&p.ty)).collect(), imported(result)),
             ast::Signature::Getter(ty) => (Vec::new(), imported(ty)),
@@ -1047,6 +1062,7 @@ impl Declaration {
             ast::Ty::Param(param) if class_bound.contains(param) => Some(ArgumentKind::ClassBound),
             ast::Ty::Metatype(_) => Some(ArgumentKind::Metatype),
             ty if is_error(ty) => Some(ArgumentKind::Error),
+            ty if c_value(ty).is_some() => c_value(ty).map(ArgumentKind::CValue),
             ast::Ty::Existential(_) => Some(ArgumentKind::Existential),
             ast::Ty::Optional(wrapped) if matches!(**wrapped, ast::Ty::Existential(_)) => Some(ArgumentKind::Existential),
             ty => foreign_function(ty).map(|function| match function.convention {
@@ -1080,6 +1096,7 @@ impl Declaration {
             ast::Ty::Param(param) if class_bound_params(decl).contains(param) => Some(ResultKind::ClassReference),
             ast::Ty::Metatype(_) => Some(ResultKind::Metatype),
             ty if is_error(ty) => Some(ResultKind::Error),
+            ty if c_value(ty).is_some() => Some(ResultKind::CValue),
             ty => foreign_function(ty).map(|function| match function.convention {
                 ast::Convention::C => ResultKind::CFunction,
                 _ => ResultKind::Block,

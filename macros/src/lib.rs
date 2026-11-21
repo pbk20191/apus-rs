@@ -414,7 +414,7 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         if imported_arg.is_some() || (imported_result && last_segment == "SwiftValue") {
             return item_compile_error(&format!(
                 "`{declaration}`: a value of a type imported from C is passed and returned as its C layout, not as a \
-                 `SwiftValue`: declare what C passes (an option set's raw integer, a typed string's object)"
+                 `SwiftValue`: declare its Rust type (an objc2 crate's: `CGRect`, `NSCalendarUnit`, `&NSString` for a typed string)"
             ));
         }
         match parsed.typed_throws() {
@@ -631,7 +631,10 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             .iter()
             .zip(&rust_args)
             .filter_map(|(kind, name)| {
+                let (optional, plain) = (String::from("?"), String::new());
                 let (wrapper, shape) = match kind.as_ref()? {
+                    apus_mangle::ArgumentKind::CValue(true) => ("CValueArg", Some(&optional)),
+                    apus_mangle::ArgumentKind::CValue(false) => ("CValueArg", Some(&plain)),
                     apus_mangle::ArgumentKind::ClassBound => ("ClassBound", None),
                     apus_mangle::ArgumentKind::Metatype => ("Metatype", None),
                     apus_mangle::ArgumentKind::Existential => ("Existential", None),
@@ -679,6 +682,13 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             Some(apus_mangle::ResultKind::Block) if !ret.contains("RcBlock") => {
                 return item_compile_error(&format!(
                     "`{declaration}` returns an Objective-C block (+1): declare `-> RcBlock<dyn Fn(…)>` (feature `block2`; `Option<…>` if optional)"
+                ))
+            }
+            // A typed string (`NS_TYPED_ENUM`) comes back as its object (+1); any other C value as its C layout.
+            Some(apus_mangle::ResultKind::CValue) if !ret.starts_with("CValue") && !ret.contains("Retained") => {
+                return item_compile_error(&format!(
+                    "`{declaration}` returns a value of a type imported from C, as its C layout: declare `-> CValue<T>`, T its \
+                     Rust type (an objc2 crate's), or `-> Retained<T>` for a typed string's object"
                 ))
             }
             _ => {}

@@ -3,6 +3,7 @@
 mod any;
 pub(crate) mod call;
 mod closure;
+mod cvalue;
 mod current;
 mod enums;
 mod foreign;
@@ -25,6 +26,9 @@ mod wrapper;
 
 pub use any::{FromSwiftAny, SwiftAny, SwiftError, SwiftHashable};
 pub use call::{timeout, AsyncFunctionPointer, CallError, IndirectSlot, RetRegs, SwiftAsync, SwiftCall};
+pub use cvalue::{AsCValue, CValue};
+#[doc(hidden)]
+pub use cvalue::{CLayout, CValueArg};
 pub use closure::{ByAddress, ClosureParam, ClosureResult, SwiftClosure};
 #[doc(hidden)]
 pub use closure::{ClosureArgs, ClosureFn, ClosureOut, DeclaredClosure, ResultKind, Shaped};

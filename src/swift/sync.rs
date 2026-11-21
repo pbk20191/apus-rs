@@ -204,7 +204,7 @@ impl<R: SwiftRet> SwiftSyncCall<R> {
         // A sync call runs right here: on the main actor if this is a main task's poll.
         let main_task = super::task::current().is_some_and(|task| task.main);
         unsafe { apus_sys::apus_fill_isolation(&mut self.lowering.regs, main_task) };
-        let kind = if self.indirect { KIND_INDIRECT } else if R::FLOAT { KIND_FLOATS } else { KIND_INTEGERS };
+        let kind = if self.indirect { KIND_INDIRECT } else if R::float() { KIND_FLOATS } else { KIND_INTEGERS };
         unsafe {
             super::call::start_all(&mut self.lowering.owned);
             apus_sys::rs_call_sync(function, &self.lowering.regs, self.slot.address(), &mut ret.0, kind);
@@ -238,7 +238,7 @@ impl<R: SwiftRet> SwiftSyncCall<R> {
     #[doc(hidden)]
     pub fn hop(self, to: HopTo) -> SwiftCall<R> {
         let SwiftSyncCall { function, symbol, lowering, slot, indirect, throws, invalid, .. } = self;
-        let kind = if indirect { KIND_INDIRECT } else if R::FLOAT { KIND_FLOATS } else { KIND_INTEGERS };
+        let kind = if indirect { KIND_INDIRECT } else if R::float() { KIND_FLOATS } else { KIND_INTEGERS };
         let executor = match to {
             HopTo::Main => Some(unsafe { super::rt::swift_task_getMainExecutor() }),
             HopTo::SelfActor => actor_executor(lowering.regs.self_),

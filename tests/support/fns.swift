@@ -362,3 +362,14 @@ public final class Loud: Speaker {
 }
 public func makeLoud() -> Speaker { Loud() }
 public func loudType() -> Speaker.Type { Loud.self }
+
+// Values of C types, passed by swiftcall's lowering of their C layout (tests/swift_c_values.rs).
+import CoreMedia
+
+@inline(never) public func cRect(_ r: CGRect) -> CGRect { r.offsetBy(dx: 1, dy: 2) }
+@inline(never) public func cRange(_ r: NSRange) -> NSRange { NSRange(location: r.location + 1, length: r.length * 2) }
+@inline(never) public func cTime(_ t: CMTime) -> CMTime { CMTime(value: t.value * 2, timescale: t.timescale + 1) }
+@inline(never) public func cUnit(_ u: NSCalendar.Unit) -> NSCalendar.Unit { u.union(.day) }
+@inline(never) public func cResult(_ r: ComparisonResult) -> ComparisonResult { r == .orderedAscending ? .orderedDescending : .orderedSame }
+@inline(never) public func cKey(_ k: URLResourceKey) -> Int { k.rawValue.count }
+@inline(never) public func cRectAsync(_ r: CGRect) async -> CGRect { await Task.yield(); return r.insetBy(dx: 1, dy: 1) }

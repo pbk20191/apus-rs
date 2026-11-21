@@ -693,6 +693,12 @@ pub trait SwiftRet: Sized {
     #[doc(hidden)]
     const FLOAT: bool = false;
 
+    /// [`FLOAT`](Self::FLOAT), for a type that knows it only at run time (a C value's layout).
+    #[doc(hidden)]
+    fn float() -> bool {
+        Self::FLOAT
+    }
+
     /// Takes the owned result out of the result registers (or the indirect slot).
     #[doc(hidden)]
     unsafe fn lift(ret: &RetRegs, indirect: &mut IndirectSlot) -> Self;
