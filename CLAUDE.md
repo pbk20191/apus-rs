@@ -8,6 +8,9 @@ the program: its logic and its tasks, which the Swift runtime and libdispatch ru
 only the one-time runtime self-check uses two short-lived ones).
 Swift is a thin boundary, written only where the language demands it, and every piece of that boundary apus can
 remove is progress.
+Objective-C and C APIs, and calling them, belong to other crates (objc2, block2 and the objc2 framework crates):
+apus calls only Swift symbols, and takes those crates' types (`Retained<T>`, blocks) where a Swift signature names
+an Objective-C or C type, rather than reimplementing them.
 
 Judge every change by two questions, in this order:
 1. **Is it sound by the Swift ABI?** Only what the ABI guarantees on Apple platforms may be relied on.

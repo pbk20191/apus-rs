@@ -313,6 +313,8 @@ graph is emitted by `apus-build` (and found through `APUS_SYMBOL_GRAPHS`).
   its pack (`Foundation.Predicate(struct)<Pack{T}>`). A name with several declarations or none, or one apus cannot
   write (a C type of a module-qualified USR such as `POSIXErrorCode`, a protocol's associated type, a standard library
   typealias), is a compile error: write that one in full.
+- Objective-C methods and C functions have no Swift symbol: call them through objc2 and its framework crates
+  (`objc2-foundation`, …), not apus; `Retained<T>` and blocks cross into Swift calls as they are.
 - A value of a C type (struct, enum, option set, typedef struct) is passed and returned by swiftcall's lowering of
   its C layout (up to four registers): declare it as what C passes (an option set's raw integer, an `NS_TYPED_ENUM`'s
   string object); `SwiftValue` for one is a compile error (refused even for a larger struct, which goes by address).
