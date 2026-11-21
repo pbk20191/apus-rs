@@ -317,12 +317,13 @@ graph is emitted by `apus-build` (and found through `APUS_SYMBOL_GRAPHS`).
   (`objc2-foundation`, …), not apus; `Retained<T>` and blocks cross into Swift calls as they are.
 - A value of a C type (struct, enum, option set, typedef struct) is passed and returned by swiftcall's lowering of
   its C layout (clang's `SwiftCallingConv.cpp`): each pointer-sized word of integers or pointers is one integer
-  register, a `double` or `float` alone in its word one floating-point register. Declare it as its Rust type from the
+  register, a `double` or `float` alone in its word one floating-point register; a value of more than four words
+  holding data (`CGAffineTransform`, `CMTimeRange`) goes by address, an argument as a copy the call keeps until it
+  ends, a result through the indirect result address. Declare it as its Rust type from the
   objc2 crates (`objc2_core_foundation::CGRect`, `objc2_foundation::NSRange`, `NSCalendarUnit`, `&NSString` for an
   `NS_TYPED_ENUM`; any `objc2::Encode` type, feature `objc2`, else an integer or float for a C scalar), which `swift!`
   lowers from its type encoding; a result is `-> CValue<T>` (`.0` is the value), a typed string's `-> Retained<T>`.
-  `SwiftValue` for one is a compile error. Refused with `CallError::InvalidArgument`: more than four registers (passed
-  by address), a word mixing integers and floating point or holding two `float`s, unions and bitfields, an object
+  `SwiftValue` for one is a compile error. Refused with `CallError::InvalidArgument`: in registers, a word mixing integers and floating point or holding two `float`s; unions and bitfields, an object
   inside a struct, an optional struct, and a result in both kinds of registers.
 
 ```rust

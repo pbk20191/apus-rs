@@ -108,6 +108,8 @@ pub(crate) enum Owned {
     Value(#[allow(dead_code)] SwiftValue),
     /// The storage of a value the callee took (an owned argument passed by address): freed, not destroyed.
     Storage(#[allow(dead_code)] UninitValue),
+    /// A C value's copy passed by address.
+    Words(#[allow(dead_code)] Box<[u64]>),
     /// Shared storage the callee works on in place (an `inout` self).
     Shared(#[allow(dead_code)] Arc<dyn std::any::Any + Send + Sync>),
     /// An Objective-C block (a `_Block_copy`), released with `_Block_release`.
@@ -184,7 +186,7 @@ impl Drop for Owned {
                 Owned::Bridge(word) => rt::swift_bridgeObjectRelease(word as *mut c_void),
                 #[cfg(feature = "block2")]
                 Owned::Block(block) => block2::ffi::_Block_release(block),
-                Owned::Value(_) | Owned::Storage(_) | Owned::Shared(_) | Owned::Pending(_) => {} // release themselves
+                Owned::Value(_) | Owned::Storage(_) | Owned::Words(_) | Owned::Shared(_) | Owned::Pending(_) => {} // release themselves
             }
         }
     }
@@ -201,11 +203,13 @@ pub struct IndirectSlot {
     pub(crate) opaque: Option<&'static super::value::OpaqueResult>,
     /// A protocol's `Self` result, allocated by [`resolve`](Self::resolve) for the receiver's type.
     pub(crate) receiver_self: bool,
+    /// Storage for a C value returned by address (more than four words).
+    pub(crate) words: Option<Box<[u64]>>,
 }
 
 impl IndirectSlot {
     pub(crate) fn inline() -> IndirectSlot {
-        IndirectSlot { inline: [0; 4], boxed: None, direct: false, opaque: None, receiver_self: false }
+        IndirectSlot { inline: [0; 4], boxed: None, direct: false, opaque: None, receiver_self: false, words: None }
     }
 
     pub(crate) fn receiver_self() -> IndirectSlot {
@@ -214,11 +218,16 @@ impl IndirectSlot {
 
     pub(crate) fn boxed(storage: UninitValue, direct: bool) -> IndirectSlot {
         assert!(!direct || storage.ty.size() <= 32, "a type larger than four words is not returned in registers");
-        IndirectSlot { inline: [0; 4], boxed: Some(storage), direct, opaque: None, receiver_self: false }
+        IndirectSlot { boxed: Some(storage), direct, ..IndirectSlot::inline() }
     }
 
     pub(crate) fn opaque(result: &'static super::value::OpaqueResult) -> IndirectSlot {
-        IndirectSlot { inline: [0; 4], boxed: None, direct: false, opaque: Some(result), receiver_self: false }
+        IndirectSlot { opaque: Some(result), ..IndirectSlot::inline() }
+    }
+
+    /// Storage of `size` bytes, 8-aligned: a C value returned by address.
+    pub(crate) fn words(size: usize) -> IndirectSlot {
+        IndirectSlot { words: Some(vec![0; size.div_ceil(8)].into_boxed_slice()), ..IndirectSlot::inline() }
     }
 
     /// Whether the storage still waits for [`resolve`](Self::resolve).
@@ -244,9 +253,10 @@ impl IndirectSlot {
 
     pub(crate) fn address(&mut self) -> *mut c_void {
         assert!(!self.pending(), "apus: an opaque result's storage is allocated before the call runs");
-        match &self.boxed {
-            Some(storage) => storage.ptr.as_ptr().cast(),
-            None => self.inline.as_mut_ptr().cast(),
+        match (&self.boxed, &mut self.words) {
+            (Some(storage), _) => storage.ptr.as_ptr().cast(),
+            (None, Some(words)) => words.as_mut_ptr().cast(),
+            (None, None) => self.inline.as_mut_ptr().cast(),
         }
     }
 }

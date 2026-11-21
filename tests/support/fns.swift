@@ -373,3 +373,7 @@ import CoreMedia
 @inline(never) public func cResult(_ r: ComparisonResult) -> ComparisonResult { r == .orderedAscending ? .orderedDescending : .orderedSame }
 @inline(never) public func cKey(_ k: URLResourceKey) -> Int { k.rawValue.count }
 @inline(never) public func cRectAsync(_ r: CGRect) async -> CGRect { await Task.yield(); return r.insetBy(dx: 1, dy: 1) }
+@inline(never) public func cTransform(_ t: CGAffineTransform, by k: Double) -> CGAffineTransform {
+    CGAffineTransform(a: t.a * k, b: t.b, c: t.c, d: t.d * k, tx: t.tx + 1, ty: t.ty - 1)
+}
+@inline(never) public func cTransformAsync(_ t: CGAffineTransform) async -> CGAffineTransform { await Task.yield(); return t.inverted() }

@@ -1,12 +1,13 @@
 //! Values of types imported from C (`CGRect`, `NSRange`, an `NS_OPTIONS` set, an `NS_TYPED_ENUM` string): Swift passes
 //! and returns them by swiftcall's lowering of their C layout (clang's `SwiftCallingConv.cpp`, `swiftcall`): the value
 //! is split into pointer-sized chunks; a chunk of integer or pointer data is one integer register, a `float` or
-//! `double` alone in its chunk one floating-point register, in order; more than four registers go by address.
+//! `double` alone in its chunk one floating-point register, in order; more than four registers go by address (an
+//! argument as the address of a copy the callee only reads, a result through the indirect result address).
 //!
 //! The Rust type is the one the objc2 crates define (`objc2_core_foundation::CGRect`, …), its layout read from its
 //! Objective-C type encoding (`objc2::Encode`, feature `objc2`); without the feature an integer or `f64` stands for a C
 //! scalar. apus refuses what it does not lower (a chunk mixing integers and floating point, two `float`s in a chunk,
-//! unions and bitfields, an object inside a struct, more than four registers) with `CallError::InvalidArgument`.
+//! unions and bitfields, an object inside a struct) with `CallError::InvalidArgument`.
 
 use super::call::{CallError, IndirectSlot, Owned, RetRegs};
 use super::func::{ArgLowering, DeclaredResult, SwiftArg, SwiftRet};
@@ -35,6 +36,12 @@ enum Piece {
     Object { offset: usize },
 }
 
+/// How a C value crosses: in these registers, or by address.
+enum Lowered {
+    Registers(Vec<Piece>),
+    Indirect { size: usize },
+}
+
 /// A C value's layout: its scalars and its size.
 #[doc(hidden)]
 pub struct CLayout {
@@ -48,23 +55,26 @@ impl CLayout {
         CLayout { leaves: vec![Leaf::Int { offset: 0, size, signed }], size }
     }
 
-    /// The registers, as swiftcall splits the value.
-    fn pieces(&self) -> Result<Vec<Piece>, &'static str> {
+    /// The registers, as swiftcall splits the value, or by address.
+    fn lower(&self) -> Result<Lowered, &'static str> {
         const CHUNK: usize = std::mem::size_of::<usize>();
+        let offset = |leaf: &Leaf| match leaf {
+            Leaf::Int { offset, .. } | Leaf::Float { offset } | Leaf::Double { offset } | Leaf::Object { offset } => *offset,
+        };
+        let chunks: Vec<Vec<&Leaf>> = (0..self.size.div_ceil(CHUNK))
+            .map(|chunk| self.leaves.iter().filter(|leaf| (chunk * CHUNK..(chunk + 1) * CHUNK).contains(&offset(leaf))).collect())
+            .collect();
+        // Every chunk holding data takes at least one register, so more than four such chunks go by address whatever
+        // their mix (clang's `shouldPassIndirectly`: more than four scalars).
+        if chunks.iter().filter(|leaves| !leaves.is_empty()).count() > 4 {
+            if self.leaves.iter().any(|leaf| matches!(leaf, Leaf::Object { .. })) {
+                return Err("a C struct holding an object is not supported");
+            }
+            return Ok(Lowered::Indirect { size: self.size });
+        }
         let mut pieces = Vec::new();
-        let chunks = self.size.div_ceil(CHUNK);
-        for chunk in 0..chunks {
-            let (start, end) = (chunk * CHUNK, (chunk + 1) * CHUNK);
-            let leaves: Vec<&Leaf> = self
-                .leaves
-                .iter()
-                .filter(|leaf| {
-                    let offset = match leaf {
-                        Leaf::Int { offset, .. } | Leaf::Float { offset } | Leaf::Double { offset } | Leaf::Object { offset } => *offset,
-                    };
-                    (start..end).contains(&offset)
-                })
-                .collect();
+        for (chunk, leaves) in chunks.iter().enumerate() {
+            let start = chunk * CHUNK;
             match leaves.as_slice() {
                 [] => {}
                 [Leaf::Float { offset }] => pieces.push(Piece::Float { offset: *offset }),
@@ -85,10 +95,7 @@ impl CLayout {
                 _ => return Err("a C value with integers and floating point (or two floats) in one word is not supported"),
             }
         }
-        if pieces.len() > 4 {
-            return Err("a C value of more than four registers goes by address: not supported");
-        }
-        Ok(pieces)
+        Ok(Lowered::Registers(pieces))
     }
 }
 
@@ -204,8 +211,19 @@ pub struct CValueArg<A>(pub A, pub &'static str);
 
 impl<A: AsCValue> SwiftArg for CValueArg<A> {
     fn lower(&self, into: &mut ArgLowering) {
-        let pieces = match A::layout().and_then(|layout| layout.pieces()) {
-            Ok(pieces) => pieces,
+        let pieces = match A::layout().and_then(|layout| layout.lower()) {
+            Ok(Lowered::Registers(pieces)) => pieces,
+            Ok(Lowered::Indirect { .. }) if self.1 == "?" => {
+                return into.fail(CallError::InvalidArgument("an optional C struct is not supported"));
+            }
+            Ok(Lowered::Indirect { size }) => {
+                // A copy: the call may outlive the borrow.
+                let mut copy = vec![0u64; size.div_ceil(8)].into_boxed_slice();
+                unsafe { std::ptr::copy_nonoverlapping(&self.0 as *const A as *const u8, copy.as_mut_ptr() as *mut u8, size) };
+                into.int(copy.as_ptr() as u64);
+                into.owned.push(Owned::Words(copy));
+                return;
+            }
             Err(why) => return into.fail(CallError::InvalidArgument(why)),
         };
         // Swift's optional of a C type is its nullable pointer only when the type is one (a typed string's object).
@@ -248,11 +266,14 @@ pub struct CValue<T>(pub T);
 
 impl<T: AsCValue> SwiftRet for CValue<T> {
     fn float() -> bool {
-        T::layout().and_then(|layout| layout.pieces()).is_ok_and(|p| !p.is_empty() && p.iter().all(|p| matches!(p, Piece::Float { .. } | Piece::Double { .. })))
+        matches!(T::layout().and_then(|layout| layout.lower()), Ok(Lowered::Registers(p)) if !p.is_empty() && p.iter().all(|p| matches!(p, Piece::Float { .. } | Piece::Double { .. })))
     }
 
-    unsafe fn lift(ret: &RetRegs, _indirect: &mut IndirectSlot) -> Self {
-        let pieces = T::layout().and_then(|layout| layout.pieces()).expect("checked by result_slot");
+    unsafe fn lift(ret: &RetRegs, indirect: &mut IndirectSlot) -> Self {
+        let pieces = match T::layout().and_then(|layout| layout.lower()).expect("checked by result_slot") {
+            Lowered::Registers(pieces) => pieces,
+            Lowered::Indirect { .. } => return CValue(indirect.address().cast::<T>().read()),
+        };
         let mut value = MaybeUninit::<T>::zeroed();
         let bytes = value.as_mut_ptr() as *mut u8;
         let write = |offset: usize, word: u64, size: usize| std::ptr::copy_nonoverlapping(word.to_le_bytes().as_ptr(), bytes.add(offset), size);
@@ -278,7 +299,10 @@ impl<T: AsCValue> SwiftRet for CValue<T> {
     }
 
     fn result_slot(_result_type: DeclaredResult) -> Result<(IndirectSlot, bool), CallError> {
-        let pieces = T::layout().and_then(|layout| layout.pieces()).map_err(CallError::InvalidArgument)?;
+        let pieces = match T::layout().and_then(|layout| layout.lower()).map_err(CallError::InvalidArgument)? {
+            Lowered::Registers(pieces) => pieces,
+            Lowered::Indirect { size } => return Ok((IndirectSlot::words(size), true)),
+        };
         if pieces.iter().any(|p| matches!(p, Piece::Object { .. })) {
             return Err(CallError::InvalidArgument("a typed string comes back as its object (+1): declare `-> Retained<T>`"));
         }

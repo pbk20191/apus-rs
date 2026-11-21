@@ -42,6 +42,19 @@ struct CMTime {
     flags: u32,
     epoch: i64,
 }
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CGAffineTransform {
+    a: f64,
+    b: f64,
+    c: f64,
+    d: f64,
+    tx: f64,
+    ty: f64,
+}
+unsafe impl Encode for CGAffineTransform {
+    const ENCODING: Encoding = Encoding::Struct("CGAffineTransform", &[f64::ENCODING; 6]);
+}
 unsafe impl Encode for CGPoint {
     const ENCODING: Encoding = Encoding::Struct("CGPoint", &[f64::ENCODING, f64::ENCODING]);
 }
@@ -73,6 +86,10 @@ apus::swift! {
     fn c_key(k: &AnyObject) -> i64;
     #[swift_linked = "Probe.cRectAsync(_: __C.CGRect(struct)) async -> __C.CGRect(struct)"]
     async fn c_rect_async(r: CGRect) -> CValue<CGRect>;
+    #[swift_linked = "Probe.cTransform(_: __C.CGAffineTransform(struct), by: Double) -> __C.CGAffineTransform(struct)"]
+    fn c_transform(t: CGAffineTransform, by: f64) -> CValue<CGAffineTransform>;
+    #[swift_linked = "Probe.cTransformAsync(_: __C.CGAffineTransform(struct)) async -> __C.CGAffineTransform(struct)"]
+    async fn c_transform_async(t: CGAffineTransform) -> CValue<CGAffineTransform>;
     #[swift_linked = "Probe.echoObject(_: __C.NSObject(class)) -> __C.NSObject(class)"]
     fn echo(o: &objc2::rc::Retained<AnyObject>) -> objc2::rc::Retained<AnyObject>;
 }
@@ -90,6 +107,16 @@ fn structs_cross_in_registers() -> Result<(), Failed> {
     check(inset.size == CGSize { width: 1.0, height: 2.0 }, format!("async CGRect: {inset:?}"))
 }
 
+// More than four registers: by address both ways (an argument as a copy, a result through the indirect result).
+fn large_structs_by_address() -> Result<(), Failed> {
+    let t = CGAffineTransform { a: 1.0, b: 2.0, c: 3.0, d: 4.0, tx: 5.0, ty: 6.0 };
+    let scaled = c_transform(t, 2.0).unwrap().0;
+    check(scaled == CGAffineTransform { a: 2.0, d: 8.0, tx: 6.0, ty: 5.0, ..t }, format!("CGAffineTransform: {scaled:?}"))?;
+    let scale = CGAffineTransform { a: 2.0, b: 0.0, c: 0.0, d: 4.0, tx: 0.0, ty: 0.0 };
+    let inverted = block(spawn(async move { c_transform_async(scale).await })).unwrap().unwrap().0;
+    check(inverted == CGAffineTransform { a: 0.5, d: 0.25, ..scale }, format!("async CGAffineTransform: {inverted:?}"))
+}
+
 fn enums_and_typed_strings() -> Result<(), Failed> {
     check(c_unit(8).unwrap().0 == 8 | 16, "NSCalendar.Unit: .month ∪ .day")?;
     check(c_result(-1).unwrap().0 == 1, "ComparisonResult: ascending -> descending")?;
@@ -101,6 +128,7 @@ fn enums_and_typed_strings() -> Result<(), Failed> {
 fn main() {
     common::run(vec![
         Trial::test("structs_cross_in_registers", structs_cross_in_registers),
+        Trial::test("large_structs_by_address", large_structs_by_address),
         Trial::test("enums_and_typed_strings", enums_and_typed_strings),
     ]);
 }
