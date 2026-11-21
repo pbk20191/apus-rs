@@ -174,6 +174,10 @@ the standard library spelled out:
   takes `Self`'s metadata after its arguments, which `swift!` takes from the receiver; a result of the type's own
   parameter (`Box<T>.item: T`) gets its type from there too. Its static members and initializers take the type's
   generic arguments after their own (each parameter's `SwiftType`, then witness tables), passed explicitly.
+- A parameter that the member's `where` or its extension fixes to a type (`init(second: B) where A == Int`,
+  `extension Pair where A == Int`) is no generic argument (observed, accepted 2026-11-22): a static member or
+  initializer takes only the others (`B`'s), and an instance member whose parameters are all fixed
+  (`sum() where A == Int, B == Int`) takes not even `Self`'s metadata.
 - Protocol members: `Shop.Shape(protocol).area() -> Double`; the conforming type is `Self`. Call them on an
   `any Shape` value opened with `SwiftValue::open()` (`self: &Opened`); an existential of one protocol opens,
   a class existential (`any Named`, `Named: AnyObject`) too, as its object's dynamic class. A class-bound protocol's
@@ -380,7 +384,7 @@ Bindings name every generic parameter, a generic type's too, which specializes t
   not unloaded); only the types the arguments hold are checked on every call.
 - A generic declaration written by name (`Res.renamed(_:suffix:)`) must bind every parameter.
 - Not bindable: a protocol member's `Self` (call it on `Opened`), `nonisolated(nonsending)` functions, typed throws of
-  an associated type, a static member or initializer of an extension that fixes some of the type's parameters.
+  an associated type. A parameter fixed to a type (`where A == Int`) is not bound: bind the others.
 - A member of a generic type that adds a conformance to the type's parameters (`extension Box where T: P`, or
   `func f() where T: P`) takes that conformance's witness table besides what `self` gives (observed, accepted
   2026-11-21): bound, apus finds it from the bound type and passes it; unbound, it is refused (a struct's or enum's

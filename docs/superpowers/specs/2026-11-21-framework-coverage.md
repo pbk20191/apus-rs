@@ -93,10 +93,33 @@
     결과(`CGRect?`)를 `-> CValue<T>`로 받으면 tag를 빼고 읽거나(레지스터) 결과 주소 없이 불러 UB였다. 이제 둘 다 컴파일
     오류다. Foundation 3512 → 3670/4902. `apus::swift::CValue<T>`처럼 경로를 붙인 결과 타입은 거부되던 것도 고쳤다.
 
+- 타입 파라미터를 고정하는 `where`(2026-11-22):
+  - swiftc로 확인했다(`-enable-library-evolution -emit-ir`). 고정된 파라미터는 generic 인자에서 빠진다. `where`가
+    extension에 붙든 멤버에 붙든 같다.
+    - `Two<A, B>.init(b:) where A == Int`는 `B`만 받는다. `init(a:) where B == [A]`는 `A`만 받는다.
+    - `One<V>.init() where V == Bool`은 아무것도 받지 않는다. 인스턴스 멤버 `get() where V == Bool`은 `Self` metadata도
+      받지 않는다.
+    - 일부만 고정된 인스턴스 멤버(`both() where A == Int, B: P`)는 전처럼 `Self` metadata를 받고, 그 뒤에 `B.P`를 받는다.
+  - 문서화된 규칙은 아니어서 owner가 승인했다(2026-11-22).
+  - 생성자 심볼은 `…tc` + 요구사항 + `l`/`rl` + `u` + `fC`다(`…ycSbRszlufC`). corpus로 swiftc와 비교한다.
+  - 버그 수정:
+    - 멤버의 `where`로 모두 고정된 인스턴스 멤버에 `Self` metadata를 하나 더 넘겼다.
+    - 묶지 않은 static 멤버의 오류 메시지는 고정된 파라미터까지 넘기라고 안내했다. 안내대로 넘기면 UB였다.
+  - rewrite 수정: graph에서 다시 쓸 때 타입 자신의 제약도 쓴다(`Form(struct)<Content: SwiftUI.View>`).
+    - 타입에 제약이 있으면 멤버의 signature 끝이 `l` 대신 `rl`이 된다.
+    - 제약을 빠뜨리면 class-bound 파라미터를 몰랐다. `ResultsObserver<Element: PersistentModel>.element(at:) -> Element?`가
+      주소로 받는 결과로 잘못 판단되었다(UB). 이제 거부한다.
+  - 결과:
+    - SwiftUI 1688 → 1752/2956. mangling 차이는 109 → 36개다.
+    - Foundation 3670 → 3699/4902.
+    - SwiftData 431/505. 타입 제약을 쓰기 전에는 432였다. 그 차이는 `element(at:)`처럼 class-bound 파라미터를 몰라
+      잘못 허용되던 것이고, 이제 거부한다.
+    - MusicKit 885/974, WeatherKit 347/382, AppIntents 881/3771.
+
 ## 남은 큰 항목
 
-- 생성자에 붙은 `where`가 타입 파라미터를 고정하는 경우(`init(…) where Message == EmptyView`). 넘기는 generic 인자가
-  달라지므로 지금처럼 거부한다. SwiftUI에서 많다.
+- SwiftUI의 `@MainActor` closure 파라미터(`Button.init(action:label:)`): 심볼이 `ScMYc`를 빼고 mangle된다. 아직 보지
+  않았다.
 - Foundation "export 안 됨" 660개 분석(2026-11-21, `.swiftinterface`와 `.tbd`로 확인):
   - 217개: importer가 클라이언트마다 만드는 C 타입 멤버(`NS_OPTIONS`/`NS_ENUM`의 `init(rawValue:)`, struct의 memberwise
     `init`, typed string의 `init(_: String)`). 심볼이 원래 없다. Rust에서는 objc2 값을 직접 만든다. coverage는 이제

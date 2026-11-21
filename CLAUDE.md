@@ -33,7 +33,10 @@ Judge every change by two questions, in this order:
   conformance an extension or a member adds to a generic type's parameters (`extension Box where T: P`) is one more
   witness table, in canonical requirement order among the member's own generic arguments (after `Self`'s metadata for
   a struct's or enum's instance member; besides `self` for a class's members). An `@objc` enum (`POSIXErrorCode`) is
-  passed and returned as its raw integer, like the C enum Objective-C sees. Apple's
+  passed and returned as its raw integer, like the C enum Objective-C sees. (2026-11-22) A type's parameter that an
+  extension or a member's `where` fixes to a type (`where A == Int`) is no generic argument: a struct's or enum's
+  static member or initializer takes the others only, and an instance member whose parameters are all fixed takes no
+  `Self` metadata. Apple's
   frameworks are compiled this way, so ABI stability fixes it.
 - Anything else (runtime internals, compiler-computed layouts of non-resilient types, private SPI, behavior observed
   but not documented) is **not** built on silently: stop and tell the owner what is unguaranteed and the alternatives,

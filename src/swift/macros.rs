@@ -139,8 +139,8 @@
 /// ```
 ///
 /// - A generic struct's or enum's instance member gets `Self`'s metadata from its receiver; its static members and
-///   initializers take the type's generic arguments after their own. A standard library struct's or enum's instance
-///   member is refused: Swift passes that `self` in registers.
+///   initializers take the type's generic arguments after their own, but those a `where` fixes to a type. A standard
+///   library struct's or enum's instance member is refused: Swift passes that `self` in registers.
 ///
 /// ```compile_fail
 /// apus::swift! {

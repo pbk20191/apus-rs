@@ -96,6 +96,9 @@ public extension Box where T: Shape { func areas() -> Double { 0 } }
 public struct Pair<A, B> { public init() {} ; public func swap() -> Pair<B, A> { Pair<B, A>() } ; public func first(_ a: A) -> B? { nil }
   public struct Inner { public func f(_ a: A) -> B? { nil } } }
 public extension Pair where A == Int, B: Hashable { func keyed() -> [B: Int] { [:] } }
+public extension Pair { init(b: B) where A == Int { self.init() } ; init(a: A) where B == [A] { self.init() }
+  static func tag(_ b: B) -> Int where A == Int { 0 } ; func sum() -> Int where A == Int, B == Int { 0 } }
+public extension Box { init(flag: Bool) where T == Bool { self.init() } }
 public struct Keyed<K: Hashable> { public init() {} ; public func key() -> K? { nil } }
 public extension Keyed where K == String { func name() -> String { "" } }
 public extension Shape { func twice() -> Double { 0 } ; func same(as other: Self) -> Self { other } }

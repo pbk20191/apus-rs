@@ -84,6 +84,8 @@ fn declaration_text(fragments: &[Fragment]) -> String {
 fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol, accessor: Option<&str>) -> Result<String, String> {
     // The enclosing types, each with its kind and generic parameters.
     let mut prefix = module_name.to_string();
+    // The context as a type (a failable initializer's result): without the requirements.
+    let mut self_type = module_name.to_string();
     let mut context_params: Vec<String> = Vec::new();
     // An Objective-C class or C type the module extends (`RunLoop`, `Decimal`) is mangled by its C name, and what the
     // module declares in it as an extension's (`So9NSRunLoopC10FoundationE17SchedulerTimeTypeV`).
@@ -93,17 +95,24 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
         let enclosing = module.find(&context[..=i]).find(|s| graphs::type_kind(&s.kind).is_some()).ok_or_else(|| format!("no type `{}`", context[..=i].join(".")))?;
         let kind = kind_mark(graphs::type_kind(&enclosing.kind).expect("a type"));
         let own: Vec<String> = enclosing.params.iter().map(|(n, _)| n.clone()).filter(|n| !context_params.contains(n)).collect();
-        match imported_name(&enclosing.usr, &enclosing.kind) {
+        let segment = match imported_name(&enclosing.usr, &enclosing.kind) {
             Some(name) => {
-                prefix = name;
+                prefix.clear();
+                self_type.clear();
                 imported_at = Some(i);
+                name
             }
             None if enclosing.usr.starts_with("c:") => return Err(format!("`{}` ({}): write the declaration in full", context[..=i].join("."), enclosing.usr)),
-            None if imported_at.is_some_and(|at| at + 1 == i) => prefix.push_str(&format!(".(extension in {module_name}) {}{kind}", context[i])),
-            None => prefix.push_str(&format!(".{}{kind}", context[i])),
-        }
+            None if imported_at.is_some_and(|at| at + 1 == i) => format!(".(extension in {module_name}) {}{kind}", context[i]),
+            None => format!(".{}{kind}", context[i]),
+        };
+        // The declaration's context carries the type's own requirements (`Form<Content: View>`): a member's signature
+        // that fixes or constrains a parameter is mangled differently when the type is constrained.
+        let own_refs: Vec<&str> = own.iter().map(String::as_str).collect();
+        prefix.push_str(&format!("{segment}{}", generic_clause(&own_refs, &enclosing.constraints, module_name)?));
+        self_type.push_str(&segment);
         if !own.is_empty() {
-            prefix.push_str(&format!("<{}>", own.join(", ")));
+            self_type.push_str(&format!("<{}>", own.join(", ")));
         }
         context_params.extend(own);
     }
@@ -258,7 +267,7 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
     }
     // A failable initializer returns an optional.
     if let Some(after) = body.strip_prefix("init?") {
-        body = format!("init{after} -> {prefix}?");
+        body = format!("init{after} -> {self_type}?");
     }
     if !rest.is_empty() {
         body = format!("{body} where {}", rest.join(", "));
@@ -640,6 +649,16 @@ mod tests {
         assert_eq!(expanded, "(extension in SwiftData) SwiftData.ModelActor(protocol).modelContext: SwiftData.ModelContext(class) { get }");
         let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
         assert_eq!(Some(symbol), super::expected_symbol(text));
+    }
+    /// A member of an extension that fixes its type's parameter (`where Content == FormStyleConfiguration.Content`):
+    /// the type's own requirements are written too, as they change the generic signature (`…RszrlE`, not `…RszlE`).
+    #[test]
+    fn fixed_type_parameters() {
+        let text = "SwiftUI.Form.init(_:)";
+        let expanded = super::expand(text).unwrap().unwrap();
+        assert!(expanded.contains("SwiftUI.Form(struct)<Content: SwiftUI.View>"), "{expanded}");
+        let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(symbol), super::expected_symbol(text), "{expanded}");
     }
     /// Imported Objective-C classes (by their Objective-C name), `@backDeployed` and `@MainActor` attributes.
     #[test]

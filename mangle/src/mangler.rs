@@ -883,6 +883,11 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
                         m.push(&index(decl.generic_params - 1));
                     }
                     m.push("lu");
+                } else if !decl.requirements.is_empty() {
+                    // A `where` clause on the type's parameters only (`init() where V == Bool`: `…ycSbRszlufC`).
+                    m.requirements(&decl.requirements)?;
+                    m.push(contextual_signature_end(decl, in_constrained_extension));
+                    m.push("u");
                 }
                 m.push("fC");
                 return Ok(m.buffer);

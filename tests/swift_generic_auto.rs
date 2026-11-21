@@ -63,6 +63,20 @@ apus::swift! {
     fn string_tray_weight(self: &SwiftValue) -> i64; // refused before the call: String is not Weighed
     #[swift_linked = "Res.Tray(struct)<T>.heaviest() -> Int where T: Comparable", T = "Swift.Int"]
     fn heaviest(self: &SwiftValue) -> i64;
+    #[swift_linked = "Res.Pair(struct)<A, B>.init(second: B) where A == Int", B = "Swift.String"]
+    fn pair_of_string(second: &SwiftValue) -> SwiftValue;
+    #[swift_linked = "Res.Pair(struct)<A, B>.init(second: B) where A == Int", B = "Swift.Int"]
+    fn pair_of_int(second: &SwiftValue) -> SwiftValue;
+    #[swift_linked = "static Res.Pair(struct)<A, B>.tag(_: B) -> String where A == Int", B = "Swift.String"]
+    fn pair_tag(b: &SwiftValue) -> String;
+    #[swift_linked = "Res.Pair(struct)<A, B>.sum() -> Int where A == Int, B == Int"]
+    fn pair_sum(self: &SwiftValue) -> i64;
+    #[swift_linked = "Res.Pair(struct)<A, B>.text: String { get }"]
+    fn pair_text(self: &SwiftValue) -> String;
+    #[swift_linked = "Res.Flag(struct)<V>.init() where V == Bool"]
+    fn flag() -> SwiftValue;
+    #[swift_linked = "Res.Flag(struct)<V>.text: String { get }"]
+    fn flag_text(self: &SwiftValue) -> String;
     #[swift_linked = "Res.rank<T: Hashable & Comparable>(_: T, _: T) -> Int", T = "Swift.Int"]
     fn rank(a: &SwiftValue, b: &SwiftValue) -> i64;
     #[swift_linked = "Res.joined<S: Sequence>(_: S) -> String where S.Element == String", S = "[Swift.String]"]
@@ -260,6 +274,12 @@ fn specialized_generics() -> Result<(), Failed> {
     check(tray_weight(&ints).unwrap() == 120, "Tray<Int> where T: Weighed")?;
     check(heaviest(&ints).unwrap() == 3, "func heaviest() where T: Comparable")?;
     check(string_tray_weight(&ints).is_err(), "String is not Weighed")?;
+    // A member's `where` that fixes the type's parameters: only the others are generic arguments.
+    let pear = pair_of_string(&SwiftValue::new("pear".to_string())).unwrap();
+    check(pair_text(&pear).unwrap() == "7 pear", "init(second:) where A == Int, B bound")?;
+    check(pair_tag(&SwiftValue::new("fig".to_string())).unwrap() == "Int String fig", "static tag(_:) where A == Int")?;
+    check(pair_sum(&pair_of_int(&SwiftValue::new(5i64)).unwrap()).unwrap() == 12, "sum() where A == Int, B == Int")?;
+    check(flag_text(&flag().unwrap()).unwrap() == "true", "init() where V == Bool: no generic argument")?;
     check(rank(&SwiftValue::new(1i64), &SwiftValue::new(2i64)).unwrap() == -1, "Hashable & Comparable")?;
     let words = SwiftValue::new(vec!["a".to_string(), "b".to_string()]);
     check(joined(&words).unwrap() == "a,b", "S.Element == String")?;

@@ -517,18 +517,13 @@ impl Declaration {
     }
 
     fn bindable(&self) -> Vec<(ast::GenericParam, &str)> {
-        use ast::{GenericParam, Requirement, Subject, Ty};
+        use ast::GenericParam;
         let decl = &self.0;
         if decl.context.last().is_some_and(|(_, kind)| *kind == ast::Kind::Protocol) {
             return Vec::new();
         }
-        // An extension that fixes a parameter (`where T == Int`) leaves nothing to bind for it.
-        let fixed: Vec<GenericParam> = extension_requirements(decl)
-            .filter_map(|r| match r {
-                Requirement::SameType(Subject::Param(param), ty) if !matches!(ty, Ty::Param(_) | Ty::Member(..)) => Some(*param),
-                _ => None,
-            })
-            .collect();
+        // An extension or the member's `where` that fixes a parameter (`where T == Int`) leaves nothing to bind for it.
+        let fixed = fixed_params(decl);
         let own_depth = usize::from(decl.context_params > 0);
         (decl.context_names.iter().enumerate())
             .map(|(index, name)| (GenericParam { depth: 0, index }, name.as_str()))
@@ -559,13 +554,8 @@ impl Declaration {
         if protocol_member {
             return Err(Error("a protocol member's generic parameters cannot be bound: call it on an `Opened` value".into()));
         }
-        // An extension that fixes a parameter (`where T == Int`) leaves nothing to bind for it.
-        let fixed: Vec<GenericParam> = extension_requirements(decl)
-            .filter_map(|r| match r {
-                Requirement::SameType(Subject::Param(param), ty) if !matches!(ty, Ty::Param(_) | Ty::Member(..)) => Some(*param),
-                _ => None,
-            })
-            .collect();
+        // An extension or the member's `where` that fixes a parameter (`where T == Int`) leaves nothing to bind for it.
+        let fixed = fixed_params(decl);
         let own_depth = usize::from(decl.context_params > 0);
         let named = self.bindable();
         if named.is_empty() {
@@ -611,10 +601,8 @@ impl Declaration {
         let bound_name = |param: GenericParam| name_of(&Ty::Param(param));
         // What the call passes: a value type's instance member gets its type's arguments from `Self`'s metadata, a
         // class's members from `self`; a value type's static member or initializer takes them all.
+        // A parameter fixed to a type is no generic argument: a static member or initializer takes the others only.
         let value_static = self.value_context() == ValueContext::GenericArguments;
-        if value_static && !fixed.is_empty() {
-            return Err(Error("a static member or initializer of an extension that fixes some of the type's parameters cannot be bound".into()));
-        }
         let passed = |param: &GenericParam| value_static || param.depth == own_depth;
         let types = bound.iter().filter(|(param, _)| passed(param)).map(|(param, _)| bound_name(*param)).collect::<Result<Vec<_>, _>>()?;
         let requirements: Vec<&Requirement> = decl
@@ -961,10 +949,13 @@ impl Declaration {
     pub fn value_context(&self) -> ValueContext {
         let decl = &self.0;
         let value = matches!(decl.context.last(), Some((_, ast::Kind::Struct | ast::Kind::Enum)));
-        // An extension that fixes every parameter (`where Success == Never, Failure == Never`) makes it concrete.
+        // An extension or a `where` that fixes every parameter (`where Success == Never, Failure == Never`) makes it
+        // concrete: not even `Self`'s metadata is passed.
+        let member = decl.requirements.iter().filter(|_| decl.context_params > 0);
         let fixed: std::collections::HashSet<ast::GenericParam> = extension_requirements(decl)
+            .chain(member)
             .filter_map(|r| match r {
-                ast::Requirement::SameType(ast::Subject::Param(param), _) => Some(*param),
+                ast::Requirement::SameType(ast::Subject::Param(param), _) if param.depth == 0 => Some(*param),
                 _ => None,
             })
             .collect();
@@ -1409,6 +1400,21 @@ fn extension_requirements(decl: &ast::Decl) -> impl Iterator<Item = &ast::Requir
     decl.extension.iter().flat_map(|e| e.requirements.iter())
 }
 
+/// The type's parameters an extension or the member's own `where` fixes to a type (`where T == Int`, `B == [A]`):
+/// they drop out of the generic signature, so no generic argument is passed for them (observed, accepted 2026-11-22:
+/// `Two<A, B>.init(b:) where A == Int` takes `B`'s metadata only).
+fn fixed_params(decl: &ast::Decl) -> Vec<ast::GenericParam> {
+    use ast::{Requirement, Subject, Ty};
+    let member = decl.requirements.iter().filter(|_| decl.context_params > 0);
+    extension_requirements(decl)
+        .chain(member)
+        .filter_map(|r| match r {
+            Requirement::SameType(Subject::Param(param), ty) if param.depth == 0 && !matches!(ty, Ty::Param(_) | Ty::Member(..)) => Some(*param),
+            _ => None,
+        })
+        .collect()
+}
+
 /// What a member of a generic struct or enum takes besides its arguments (observed in what swiftc emits, as Apple's
 /// frameworks are compiled; the calling-convention documents do not spell it out).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1472,6 +1478,8 @@ fn witness_requirements(decl: &ast::Decl) -> Result<Vec<(usize, String, Protocol
                 witnesses.push((param.index, mangler::protocol_descriptor(&protocol).map_err(Error)?, layout));
             }
             Requirement::Conforms(Subject::Member(..), _) => return explicit("requirements on associated types".into()),
+            // The type's parameter fixed to a type: no generic argument (see `fixed_params`).
+            Requirement::SameType(Subject::Param(param), _) if fixed_params(decl).contains(&param) => {}
             Requirement::SameType(Subject::Param(_), _) => return explicit("generic parameters fixed to a type".into()),
             Requirement::SameType(Subject::Member(..), _) => {}
             // No witness table: a class-bound parameter's value is a reference (see `check_lowering`).
@@ -1852,6 +1860,22 @@ mod isolation_tests {
         }
         assert!(super::check_callable("static (extension in M where T: P) M.D(struct)<T>.s() -> Int").is_ok());
         assert_eq!(context("M.D(struct)<T>.init(x: Int)"), ValueContext::GenericArguments);
+        // A member's own `where` fixing the type's parameters drops them as an extension's does (observed, accepted
+        // 2026-11-22): `One<V>.init() where V == Bool` takes nothing, `get() where V == Bool` not even `Self`.
+        assert_eq!(context("M.One(struct)<V>.init() where V == Bool"), ValueContext::None);
+        assert_eq!(context("M.One(struct)<V>.get() -> Int where V == Bool"), ValueContext::None);
+        assert_eq!(context("M.Two(struct)<A, B>.both() -> Int where A == Int"), ValueContext::SelfMetadata);
+        assert_eq!(context("M.Two(struct)<A, B>.init(b: B) where A == Int"), ValueContext::GenericArguments);
+        let names = |d: &str| Declaration::parse(d).unwrap().generic_parameter_names();
+        assert_eq!(names("M.Two(struct)<A, B>.init(b: B) where A == Int"), ["B"]);
+        assert_eq!(names("M.Two(struct)<A, B>.init(a: A) where B == [A]"), ["A"]);
+        // A static member or initializer takes only the parameters left free, an extension's alike (`Two.init(b:)`
+        // takes `B`'s metadata; `init(p:) where B == String, A: Hashable` takes `A`, `A.Hashable`).
+        let bind = |d: &str, b: &[(&str, &str)]| Declaration::parse(d).unwrap().bind(b).map(|plan| (plan.types, plan.witnesses.len()));
+        assert_eq!(bind("M.Two(struct)<A, B>.init(b: B) where A == Int", &[("B", "Swift.String")]).unwrap(), (vec!["SS".into()], 0));
+        assert_eq!(bind("static M.Two(struct)<A, B>.tag(_: B) -> Int where A == Int", &[("B", "Swift.String")]).unwrap(), (vec!["SS".into()], 0));
+        assert_eq!(bind("(extension in M where A == Int) M.Two(struct)<A, B>.init(b: B)", &[("B", "Swift.String")]).unwrap(), (vec!["SS".into()], 0));
+        assert_eq!(bind("M.Two(struct)<A, B>.init(p: A) where B == String, A: Hashable", &[("A", "Swift.Int")]).unwrap(), (vec!["Si".into()], 1));
         for plain in ["M.S(struct).v: Int { get }", "M.C(class)<T>.f()", "M.f<T>(_: T)", "M.P(protocol).f()"] {
             assert_eq!(context(plain), ValueContext::None, "{plain}");
         }

@@ -1059,8 +1059,8 @@ impl<'a> Parser<'a> {
                 None => return Err("`init` belongs to a type: `Module.Type(kind).init(…)`".into()),
                 _ if is_static => return Err("an initializer is not `static`".into()),
                 _ if !matches!(signature, Signature::Function { .. }) => return Err("expected `init(…)`".into()),
-                _ if generic_params == 0 && !requirements.is_empty() => {
-                    return Err("a `where` clause on an initializer needs generic parameters of its own".into())
+                _ if generic_params == 0 && context_params == 0 && !requirements.is_empty() => {
+                    return Err("a `where` clause on an initializer needs generic parameters".into())
                 }
                 _ => {}
             }

@@ -740,9 +740,11 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
                 generic = front;
             }
             apus_mangle::ValueContext::GenericArguments if rust_args.len() == formal && concrete.is_none() => {
+                // Only the parameters no `where` fixes to a type are generic arguments.
+                let free = parsed.generic_parameter_names().join(", ");
                 return item_compile_error(&format!(
-                    "`{declaration}` belongs to a generic struct or enum: after its arguments, pass the type's generic arguments (each parameter's `SwiftType`, then witness tables)"
-                ))
+                    "`{declaration}` belongs to a generic struct or enum: after its arguments, pass its generic arguments (the `SwiftType` of {free}, then witness tables)"
+                ));
             }
             _ => {}
         }

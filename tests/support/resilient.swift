@@ -219,6 +219,21 @@ extension Holder where T: Weighed {
 extension Tray where T: Weighed { public func weight() -> Int { item.weight * count } }
 extension Tray { public func heaviest() -> Int where T: Comparable { count } }
 public func intTray(count: Int) -> Tray<Int> { Tray(item: 4, count: count) }
+// A member's `where` that fixes the type's parameters: they are no generic arguments (`init(second:)` takes `B`'s
+// metadata only, `sum()` not even `Self`'s).
+public struct Pair<A, B> {
+    public var first: A
+    public var second: B
+    public init(second: B) where A == Int { first = 7; self.second = second }
+    public static func tag(_ b: B) -> String where A == Int { "\(A.self) \(B.self) \(b)" }
+    public func sum() -> Int where A == Int, B == Int { first + second }
+    public var text: String { "\(first) \(second)" }
+}
+public struct Flag<V> {
+    public var value: V
+    public init() where V == Bool { value = true }
+    public var text: String { "\(value)" }
+}
 public func rank<T: Hashable & Comparable>(_ a: T, _ b: T) -> Int { a < b ? -1 : (a == b ? 0 : 1) }
 public func joined<S: Sequence>(_ s: S) -> String where S.Element == String { s.joined(separator: ",") }
 public func described<S: Sequence>(_ s: S) -> String where S.Element: CustomStringConvertible { s.map(\.description).joined(separator: "+") }

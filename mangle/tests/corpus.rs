@@ -116,6 +116,12 @@ const DECLARATIONS: &[&str] = &[
     "Probe.Pair(struct)<A, B>.first(_: A) -> B?",
     "Probe.Pair(struct)<A, B>.Inner(struct).f(_: A) -> B?",
     "Probe.Keyed(struct)<K: Hashable>.key() -> K?",
+    // a member's `where` fixing its type's parameters
+    "Probe.Pair(struct)<A, B>.init(b: B) where A == Int",
+    "Probe.Pair(struct)<A, B>.init(a: A) where B == [A]",
+    "static Probe.Pair(struct)<A, B>.tag(_: B) -> Int where A == Int",
+    "Probe.Pair(struct)<A, B>.sum() -> Int where A == Int, B == Int",
+    "Probe.Box(struct)<T>.init(flag: Bool) where T == Bool",
     // protocol extensions
     "(extension in Probe) Probe.Shape(protocol).twice() -> Double",
     "(extension in Probe) Probe.Shape(protocol).same(as: Self) -> Self",
