@@ -1214,7 +1214,12 @@ mod coverage {
                     }
                     let bound = !parsed.generic_parameter_names().is_empty();
                     let checked = if bound { parsed.check_bound_callable() } else { parsed.check_callable() };
-                    checked.map_err(|e| reason("refused", &e.to_string()))?;
+                    checked.map_err(|e| {
+                        if std::env::var_os("APUS_COVERAGE_DETAIL").is_some() {
+                            println!("REFUSED {declaration}\n  {e}");
+                        }
+                        reason("refused", &e.to_string())
+                    })?;
                     let call = apus_mangle::call_symbol(&declaration).map_err(|e| reason("mangle", &e.to_string()))?;
                     let thunk = apus_mangle::dispatch_thunk(&declaration).ok().flatten();
                     let suffix = if parsed.is_async() { "Tu" } else { "" };

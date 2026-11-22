@@ -181,6 +181,11 @@
   본다. SwiftUI의 `Text`/`Image`/`View`는 `SwiftUICore`에 있다(mangle은 `@_originallyDefinedIn`으로 SwiftUI).
   SwiftUI 1887 → 1919. `Label<Text, Image>` 꼴 92개 중 나머지 대부분은 이제 "export 안 됨"(inlinable)으로 분류된다.
 
+- "class-bound generic 값은 파라미터나 결과 자체로만" 거부 143개(2026-11-22, `APUS_COVERAGE_DETAIL`이 이제 `REFUSED`도
+  출력한다): SwiftUI 135개는 closure 안(그중 128개가 `TableColumn.init`의 `(RowValue) -> Content`, `RowValue: NSObject`),
+  SwiftData 7개는 optional(`ModelActor.subscript` 등), 1개는 closure. closure/optional 안의 lowering은 관찰된 것이라
+  소유자 결정이 필요하다.
+
 ## 남은 큰 항목
 
 - StoreKit mangling 차이 20개(`SKError`: clang이 만든 error struct).
