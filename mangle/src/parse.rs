@@ -350,6 +350,13 @@ impl<'a> Parser<'a> {
             return Ok(Ty::Tuple(elements));
         }
         if self.eat_keyword("any") {
+            // `any Any`, `any AnyObject`: the same types written explicitly.
+            if self.eat_keyword("Any") {
+                return Ok(Ty::Any);
+            }
+            if self.eat_keyword("AnyObject") {
+                return Ok(Ty::AnyObject);
+            }
             return Ok(Ty::Existential(self.unmarked(Self::protocol)?));
         }
         if self.eat_keyword("some") {

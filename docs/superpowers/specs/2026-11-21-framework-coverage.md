@@ -131,9 +131,29 @@
     - WeatherKit 347 → 353/382
     - StoreKit 629 → 630/658
 
+- Foundation mangling 차이 106개 정리(2026-11-22):
+  - `__shared`: graph 선언 조각에는 없고 USR에만 있다(`h`). 쓴 선언의 심볼과 USR이 `h`만 다르면, 하나씩 붙여 보아
+    USR에 가까워지는 파라미터에만 `__shared`를 쓴다(빌린다). 최종 심볼은 여전히 USR과 비교한다.
+    `URL.init(string:)`, `CharacterSet.init(charactersIn:)` 등 32개.
+  - 다른 모듈이 extension으로 선언한 타입(`String.Encoding`, `String.LocalizationValue`): USR이 바깥 타입 USR 뒤에
+    `10FoundationE`로 이어지면 `Swift.String(struct).(extension in Foundation) Encoding(struct)`로 쓴다. `0`으로
+    시작하는 식별자(`05UnitsE0`, 단어 치환)는 모듈이 아니다.
+  - `any Any.Type`: `any Any`/`any AnyObject`를 `Any`/`AnyObject`로 읽는다(전에는 `Foundation.Any` 프로토콜로
+    읽었다). corpus `mt10`.
+  - 제약 있는 extension 안의 타입(`extension Measurement where UnitType: Dimension { struct AttributedStyle }`):
+    graph의 그 타입 `swiftExtension`에서 바깥 타입이 이미 선언한 요구사항을 빼고 context와 시그니처의 타입에 표시한다.
+    swiftc spike로 확인: 그런 타입의 init/static은 `T`와 그 extension의 witness table, 인스턴스 멤버는 `Self`
+    metadata를 받는다(이미 승인된 규칙대로). `where T == Int`인 extension 안의 타입은 아무것도 받지 않는다.
+  - 버그: path의 extension이 `T == Int`로 고정한 타입(`Holder<T>.(extension in M where T == Int) Fixed`)의 멤버를
+    apus는 `T`를 요구하고 `Self` metadata/`T` metadata를 넘기려 했다(손으로 쓴 선언에서만 닿았다). 이제
+    2026-11-22 규칙대로 고정된 파라미터로 센다.
+  - 남은 5개: `Predicate`/`Expression`의 `init(from:)`(parameter pack), `NSHashTableCallBacks` 등 C 함수 포인터 struct
+    3개(objc2의 몫). `Measurement…ByteCount`는 path에 제약 extension이 두 개라 parse에서 거부된다.
+  - 결과: Foundation 3733 → 3816/4905, SwiftData 431 → 438, AppIntents 881 → 892(차이 615 → 534).
+
 ## 남은 큰 항목
 
-- Foundation mangling 차이 106개, AppIntents 615개.
+- AppIntents mangling 차이 534개.
 - Foundation "export 안 됨" 660개 분석(2026-11-21, `.swiftinterface`와 `.tbd`로 확인):
   - 217개: importer가 클라이언트마다 만드는 C 타입 멤버(`NS_OPTIONS`/`NS_ENUM`의 `init(rawValue:)`, struct의 memberwise
     `init`, typed string의 `init(_: String)`). 심볼이 원래 없다. Rust에서는 objc2 값을 직접 만든다. coverage는 이제

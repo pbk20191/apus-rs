@@ -951,9 +951,7 @@ impl Declaration {
         let value = matches!(decl.context.last(), Some((_, ast::Kind::Struct | ast::Kind::Enum)));
         // An extension or a `where` that fixes every parameter (`where Success == Never, Failure == Never`) makes it
         // concrete: not even `Self`'s metadata is passed.
-        let member = decl.requirements.iter().filter(|_| decl.context_params > 0);
-        let fixed: std::collections::HashSet<ast::GenericParam> = extension_requirements(decl)
-            .chain(member)
+        let fixed: std::collections::HashSet<ast::GenericParam> = fixing_requirements(decl)
             .filter_map(|r| match r {
                 ast::Requirement::SameType(ast::Subject::Param(param), _) if param.depth == 0 => Some(*param),
                 _ => None,
@@ -1400,14 +1398,20 @@ fn extension_requirements(decl: &ast::Decl) -> impl Iterator<Item = &ast::Requir
     decl.extension.iter().flat_map(|e| e.requirements.iter())
 }
 
+/// The requirements that can fix the type's parameters: its own extension's, that of the extension an enclosing
+/// type is declared in (`extension Holder where T == Int { struct Fixed }`), and, for a member of a generic type,
+/// its own `where`'s.
+fn fixing_requirements(decl: &ast::Decl) -> impl Iterator<Item = &ast::Requirement> {
+    let member = decl.requirements.iter().filter(|_| decl.context_params > 0);
+    extension_requirements(decl).chain(decl.context_extension.iter().flat_map(|e| e.requirements.iter())).chain(member)
+}
+
 /// The type's parameters an extension or the member's own `where` fixes to a type (`where T == Int`, `B == [A]`):
 /// they drop out of the generic signature, so no generic argument is passed for them (observed, accepted 2026-11-22:
 /// `Two<A, B>.init(b:) where A == Int` takes `B`'s metadata only).
 fn fixed_params(decl: &ast::Decl) -> Vec<ast::GenericParam> {
     use ast::{Requirement, Subject, Ty};
-    let member = decl.requirements.iter().filter(|_| decl.context_params > 0);
-    extension_requirements(decl)
-        .chain(member)
+    fixing_requirements(decl)
         .filter_map(|r| match r {
             Requirement::SameType(Subject::Param(param), ty) if param.depth == 0 && !matches!(ty, Ty::Param(_) | Ty::Member(..)) => Some(*param),
             _ => None,
@@ -1876,6 +1880,15 @@ mod isolation_tests {
         assert_eq!(bind("static M.Two(struct)<A, B>.tag(_: B) -> Int where A == Int", &[("B", "Swift.String")]).unwrap(), (vec!["SS".into()], 0));
         assert_eq!(bind("(extension in M where A == Int) M.Two(struct)<A, B>.init(b: B)", &[("B", "Swift.String")]).unwrap(), (vec!["SS".into()], 0));
         assert_eq!(bind("M.Two(struct)<A, B>.init(p: A) where B == String, A: Hashable", &[("A", "Swift.Int")]).unwrap(), (vec!["Si".into()], 1));
+        // A type declared in an extension that fixes its enclosing type's parameter (`extension Holder where T ==
+        // Int { struct Fixed }`) is concrete the same way; one that constrains it takes the conformance.
+        let fixed = "M.Holder(struct)<T>.(extension in M where T == Int) Fixed(struct)";
+        assert_eq!(context(&format!("{fixed}.get() -> Int")), ValueContext::None);
+        assert_eq!(context(&format!("{fixed}.init(x: Int)")), ValueContext::None);
+        assert!(names(&format!("{fixed}.init(x: Int)")).is_empty());
+        let tagged = "M.Holder(struct)<T>.(extension in M where T: Tagged) Mode(struct)";
+        assert_eq!(context(&format!("{tagged}.get() -> Int")), ValueContext::SelfMetadata);
+        assert_eq!(bind(&format!("static {tagged}.make() -> Int"), &[("T", "Swift.Int")]).unwrap(), (vec!["Si".into()], 1));
         for plain in ["M.S(struct).v: Int { get }", "M.C(class)<T>.f()", "M.f<T>(_: T)", "M.P(protocol).f()"] {
             assert_eq!(context(plain), ValueContext::None, "{plain}");
         }

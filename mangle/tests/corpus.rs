@@ -251,6 +251,7 @@ const DECLARATIONS: &[&str] = &[
     "Probe.mt5() -> SBase(class).Type",
     "Probe.mt6<T>(_: T.Type) -> T.Type",
     "Probe.mt8(_: Any.Type) -> Int",
+    "Probe.mt10(_: any Any.Type, _: any AnyObject.Type) -> Int",
     "Probe.mt7(_: any MP.Type) -> Int",
     "Probe.mt9(_: Int.Type?, _: Big(struct).Type) -> Int",
     "static (extension in Probe where Self == PBordered(struct)) Probe.PStyle(protocol).bordered: Self { get }",

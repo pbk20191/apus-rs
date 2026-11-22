@@ -94,6 +94,11 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
     for i in 0..context.len() {
         let enclosing = module.find(&context[..=i]).find(|s| graphs::type_kind(&s.kind).is_some()).ok_or_else(|| format!("no type `{}`", context[..=i].join(".")))?;
         let kind = kind_mark(graphs::type_kind(&enclosing.kind).expect("a type"));
+        // The requirements an enclosing type's extension adds to those of the type it extends.
+        let outer = (i > 0).then(|| module.find(&context[..i]).find(|s| graphs::type_kind(&s.kind).is_some())).flatten();
+        let added = |e: &graphs::Extension| -> Vec<(String, String, String, Option<String>)> {
+            e.constraints.iter().filter(|c| !outer.is_some_and(|o| o.constraints.contains(c))).cloned().collect()
+        };
         let own: Vec<String> = enclosing.params.iter().map(|(n, _)| n.clone()).filter(|n| !context_params.contains(n)).collect();
         let segment = match imported_name(&enclosing.usr, &enclosing.kind) {
             Some(name) => {
@@ -104,6 +109,20 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
             }
             None if enclosing.usr.starts_with("c:") => return Err(format!("`{}` ({}): write the declaration in full", context[..=i].join("."), enclosing.usr)),
             None if imported_at.is_some_and(|at| at + 1 == i) => format!(".(extension in {module_name}) {}{kind}", context[i]),
+            // A type declared in a constrained extension of the one enclosing it (`extension Measurement where
+            // UnitType: Dimension { struct AttributedStyle }`), or in another module's: marked with it.
+            None if i > 0 && enclosing.extension.as_ref().is_some_and(|e| !added(e).is_empty() || e.extended_module != module_name) => {
+                let e = enclosing.extension.as_ref().expect("an extension");
+                let params = context_params_str(&context_params);
+                let requirements: Vec<String> = added(e)
+                    .into_iter()
+                    .map(|(kind, lhs, rhs, usr)| requirement(&kind, &lhs, &rhs, usr.as_deref(), &params, module_name))
+                    .collect::<Result<_, _>>()?;
+                match requirements.is_empty() {
+                    true => format!(".(extension in {module_name}) {}{kind}", context[i]),
+                    false => format!(".(extension in {module_name} where {}) {}{kind}", requirements.join(", "), context[i]),
+                }
+            }
             None => format!(".{}{kind}", context[i]),
         };
         // The declaration's context carries the type's own requirements (`Form<Content: View>`): a member's signature
@@ -282,7 +301,82 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
         body = format!("{body} where {}", rest.join(", "));
     }
     let modifiers = if modifiers.is_empty() { String::new() } else { format!("{} ", modifiers.join(" ")) };
-    Ok(format!("{modifiers}{extension}{prefix}.{body}"))
+    let declaration = |body: &str| format!("{modifiers}{extension}{prefix}.{body}");
+    let body = shared_parameters(&body, usr_symbol(&symbol.usr, accessor).as_deref(), &declaration);
+    Ok(declaration(&body))
+}
+
+/// `body` with `__shared` written on the parameters its symbol marks so (`h`), which the graph's declaration leaves
+/// out: those whose mark alone brings the symbol written closer to `expected`, which differs from it by `h`s only.
+/// The symbol of the result is still compared with the graph's as any other.
+fn shared_parameters(body: &str, expected: Option<&str>, declaration: &dyn Fn(&str) -> String) -> String {
+    let symbol = |body: &str| apus_mangle::Declaration::parse_resolving(&declaration(body), graphs::graphs()).ok()?.symbol().ok();
+    // `expected` is `symbol` with `h`s inserted.
+    let marked = |symbol: &str, expected: &str| {
+        let mut want = expected.chars().peekable();
+        for c in symbol.chars() {
+            while want.peek().is_some_and(|&w| w != c && w == 'h') {
+                want.next();
+            }
+            if want.next() != Some(c) {
+                return false;
+            }
+        }
+        want.all(|w| w == 'h')
+    };
+    let Some(expected) = expected else { return body.to_string() };
+    let Some(plain) = symbol(body) else { return body.to_string() };
+    if plain == expected || !marked(&plain, expected) {
+        return body.to_string();
+    }
+    let starts = parameter_types(body);
+    let shared: Vec<usize> = starts
+        .iter()
+        .copied()
+        .filter(|&at| {
+            let one = format!("{}__shared {}", &body[..at], &body[at..]);
+            symbol(&one).is_some_and(|s| s.len() > plain.len() && marked(&s, expected))
+        })
+        .collect();
+    let mut out = body.to_string();
+    for at in shared.into_iter().rev() {
+        out.insert_str(at, "__shared ");
+    }
+    out
+}
+
+/// Where each parameter's type starts in `body` (`init(a: T, _: U)`): after its label's `: `, unless it already has
+/// an ownership or `inout`.
+fn parameter_types(body: &str) -> Vec<usize> {
+    let mut starts = Vec::new();
+    let (mut angle, mut depth, mut open) = (0usize, 0usize, None);
+    let mut expecting = false;
+    for (at, c) in body.char_indices() {
+        match c {
+            '<' if open.is_none() => angle += 1,
+            '>' if open.is_none() && !body[..at].ends_with('-') => angle = angle.saturating_sub(1),
+            '(' if open.is_none() && angle == 0 => {
+                open = Some(at);
+                expecting = true;
+            }
+            _ if open.is_none() => {}
+            '(' | '[' | '<' => depth += 1,
+            '>' if body[..at].ends_with('-') => {}
+            ')' if depth == 0 => break,
+            ')' | ']' | '>' => depth -= 1,
+            ',' if depth == 0 => expecting = true,
+            ':' if depth == 0 && expecting && body[at..].starts_with(": ") => {
+                expecting = false;
+                let start = at + 2;
+                let rest = &body[start..];
+                if !["inout ", "consuming ", "borrowing ", "__owned ", "__shared ", "sending "].iter().any(|o| rest.starts_with(o)) {
+                    starts.push(start);
+                }
+            }
+            _ => {}
+        }
+    }
+    starts
 }
 
 /// The parameter list without default values (` = …`), which neither the symbol nor the call depends on; apus
@@ -434,7 +528,7 @@ fn type_fragment(fragments: &[Fragment], i: usize, params: &[&str], module: &str
             let mark = if arguments { variadic_mark(f) } else { Some("") };
             let mark = mark.ok_or_else(|| format!("`{}`: a variadic type with other parameters: write the declaration in full", f.spelling))?;
             let name = match (nested, nested_standard_type(fragments, i)) {
-                (true, _) => nested_name(f, &fragments[i - 2])?,
+                (true, _) => nested_name(f, &fragments[i - 2], params, module)?,
                 // The standard library type a nested type is in (`String` of `String.Index`), written whole: bare,
                 // `String` would be read as the nested type's module.
                 (false, Some(kind)) => format!("Swift.{}{kind}", f.spelling),
@@ -599,7 +693,7 @@ fn packs(body: &str) -> String {
 }
 
 /// A type nested in the one before it (`Inner` of `Outer.Inner`): its name and kind.
-fn nested_name(f: &Fragment, outer: &Fragment) -> Result<String, String> {
+fn nested_name(f: &Fragment, outer: &Fragment, params: &[&str], module: &str) -> Result<String, String> {
     let kind = match f.precise.as_deref().and_then(|usr| usr.chars().last()) {
         Some('V') => "(struct)",
         Some('C') => "(class)",
@@ -611,6 +705,37 @@ fn nested_name(f: &Fragment, outer: &Fragment) -> Result<String, String> {
         let module = f.precise.as_deref().and_then(imported_extension_module);
         let module = module.ok_or_else(|| format!("`{}` ({:?}): write the declaration in full", f.spelling, f.precise))?;
         return Ok(format!("(extension in {module}) {}{kind}", f.spelling));
+    }
+    // One another module declares in a Swift type's extension (`String.Encoding`, Foundation's): its USR is the
+    // outer's, then that module and `E` (Mangling.rst's extension context).
+    let extension = (f.precise.as_deref().zip(outer.precise.as_deref()))
+        .and_then(|(usr, outer)| usr.strip_prefix(outer).filter(|_| outer.starts_with("s:")))
+        .and_then(|rest| {
+            // A leading `0` starts an identifier with word substitutions (`05UnitsE0V`), not a module's.
+            let digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+            let len: usize = rest[..digits].parse().ok().filter(|_| !rest.starts_with('0'))?;
+            let module = rest.get(digits..digits + len)?;
+            rest[digits + len..].starts_with('E').then_some(module)
+        });
+    if let Some(module) = extension {
+        return Ok(format!("(extension in {module}) {}{kind}", f.spelling));
+    }
+    // One declared in a constrained extension of the type enclosing it (`Measurement<UnitType>.AttributedStyle`, in
+    // `extension Measurement where UnitType: Dimension`): marked with its requirements, as its context is.
+    let declared = f.precise.as_deref().and_then(|usr| graphs::usr_module(usr)).and_then(|m| graphs::graphs().module(&m));
+    let nested = declared.zip(f.precise.as_deref()).and_then(|(m, usr)| m.by_usr(usr, None).next());
+    if let Some((e, nested)) = nested.and_then(|n| n.extension.as_ref().map(|e| (e, n))) {
+        // The type it is nested in, by its path (the fragment before it may be a generic argument).
+        let path: Vec<&str> = nested.path[..nested.path.len() - 1].iter().map(String::as_str).collect();
+        let outer = declared.and_then(|m| m.find(&path).find(|s| graphs::type_kind(&s.kind).is_some()));
+        let added: Vec<_> = e.constraints.iter().filter(|c| !outer.is_some_and(|o| o.constraints.contains(c))).collect();
+        if !added.is_empty() {
+            let requirements: Vec<String> = added
+                .into_iter()
+                .map(|(kind, lhs, rhs, usr)| requirement(kind, lhs, rhs, usr.as_deref(), params, module))
+                .collect::<Result<_, _>>()?;
+            return Ok(format!("(extension in {} where {}) {}{kind}", e.extended_module, requirements.join(", "), f.spelling));
+        }
     }
     Ok(format!("{}{kind}", f.spelling))
 }
@@ -810,6 +935,42 @@ mod tests {
         assert!(expanded.contains("isPresented: SwiftUI.Binding(struct)<Bool>, actions: () -> Actions, message: () -> Message)"), "{expanded}");
         let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
         assert_eq!(Some(mangled), super::usr_symbol(&symbol.usr, None), "{expanded}");
+    }
+
+    /// The graph leaves out `__shared`, which the symbol keeps (`h`): an initializer's parameter written so is
+    /// borrowed, not consumed, and only those its symbol marks are written so.
+    #[test]
+    fn shared_parameters() {
+        let text = "Foundation.URL.init(string:relativeTo:)";
+        let expanded = super::expand(text).unwrap().unwrap();
+        assert!(expanded.contains("init(string: __shared String, relativeTo: __shared Foundation.URL(struct)?)"), "{expanded}");
+        let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(symbol), super::expected_symbol(text), "{expanded}");
+        let text = "Foundation.URL.init(fileURLWithFileSystemRepresentation:isDirectory:relativeTo:)";
+        let expanded = super::expand(text).unwrap().unwrap();
+        assert!(expanded.contains("(fileURLWithFileSystemRepresentation: UnsafePointer<Swift.Int8(struct)>, isDirectory: Bool, relativeTo: __shared"), "{expanded}");
+    }
+
+    /// A type another module declares in a type's extension (`String.Encoding`, Foundation's) is marked with it.
+    #[test]
+    fn nested_types_of_other_modules() {
+        let text = "Foundation.CocoaError.stringEncoding { get }";
+        let expanded = super::expand(text).unwrap().unwrap();
+        assert!(expanded.ends_with("stringEncoding: Swift.String(struct).(extension in Foundation) Encoding(struct)? { get }"), "{expanded}");
+        let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(symbol), super::expected_symbol(text), "{expanded}");
+    }
+
+    /// A type declared in a constrained extension of the one enclosing it (`extension Measurement where UnitType:
+    /// Dimension { struct AttributedStyle }`) is marked with it, in the context and in the signature alike.
+    #[test]
+    fn types_of_constrained_extensions() {
+        let text = "Foundation.Measurement.AttributedStyle.locale(_:)";
+        let expanded = super::expand(text).unwrap().unwrap();
+        let style = "Foundation.Measurement(struct)<UnitType>.(extension in Foundation where UnitType: __C.NSDimension(class)) AttributedStyle(struct)";
+        assert!(expanded.ends_with(&format!("AttributedStyle(struct).locale(_: Foundation.Locale(struct)) -> {style}")), "{expanded}");
+        let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(symbol), super::expected_symbol(text), "{expanded}");
     }
 
     /// A nested type in a signature: its module once, each enclosing type with its kind.
