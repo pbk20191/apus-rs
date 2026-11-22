@@ -299,7 +299,9 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
         body = format!("init{after} -> {self_type}?");
     }
     if !rest.is_empty() {
-        body = format!("{body} where {}", rest.join(", "));
+        // A subscript's goes before its accessor.
+        let at = if accessor.is_some() { body.rfind(" {").unwrap_or(body.len()) } else { body.len() };
+        body.insert_str(at, &format!(" where {}", rest.join(", ")));
     }
     let modifiers = if modifiers.is_empty() { String::new() } else { format!("{} ", modifiers.join(" ")) };
     let declaration = |body: &str| format!("{modifiers}{extension}{prefix}.{body}");
@@ -1049,6 +1051,18 @@ mod tests {
         assert!(expanded.contains("supportedValues: [Value.ValueType], resolvers: @escaping () -> Spec)"), "{expanded}");
         let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
         assert_eq!(Some(mangled), super::usr_symbol(&symbol.usr, None), "{expanded}");
+    }
+
+    /// A generic subscript's `where` clause goes before its accessor (`-> T.Value? where T.Value: Sendable { get }`).
+    #[test]
+    fn subscript_requirements() {
+        let module = crate::graphs::graphs().module("Foundation").unwrap();
+        let path = ["AttributeContainer", "subscript(_:)"];
+        let symbol = module.find(&path).find(|s| s.fragments.iter().any(|f| f.spelling == "Sendable")).unwrap();
+        let expanded = super::rewrite("Foundation", module, &path[..1], symbol, Some("get")).unwrap();
+        assert!(expanded.ends_with("-> T.Value? where T.Value: Swift.Sendable { get }"), "{expanded}");
+        let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(mangled), super::usr_symbol(&symbol.usr, Some("get")), "{expanded}");
     }
 
     /// The graph leaves out `__shared` and `_const`, which the symbol keeps (`h`, `Yt`): an initializer's parameter

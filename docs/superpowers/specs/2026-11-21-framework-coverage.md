@@ -68,6 +68,8 @@
   - 파라미터의 result builder(`@ContentBuilder actions:`)는 컴파일 시점 기능이므로 지운다.
     제네릭 builder(`@ResolverSpecificationBuilder<Value.UnwrappedType> resolvers:`)는 `<…>`까지 지운다(2026-11-23,
     AppIntents 2558 → 2718, SwiftUI 1919 → 1947).
+  - 제네릭 subscript의 `where`는 접근자 앞에 쓴다(`-> T.Value? where T.Value: Sendable { get }`, 2026-11-23,
+    Foundation 3876 → 3901).
   - `@export(implementation)`와 `dynamic`도 지운다. 심볼은 `.tbd`로 검사한다.
 - `Void`가 typealias 분기에 먼저 걸리던 것을 고쳤다.
 - 가져온 C 타입과 Objective-C 클래스의 Swift extension:
