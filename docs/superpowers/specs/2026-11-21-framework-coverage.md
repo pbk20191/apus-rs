@@ -167,9 +167,19 @@
   - SwiftUI에 새로 드러난 차이(거부됨): `CGFloat`가 일부 심볼에서 CoreFoundation으로 mangle됨(2), `Parent == Leaf` 같은
     두 generic 파라미터의 same-type을 대표 파라미터로 바꾸지 않음(2), `ScrollViewReader.content`(1).
 
+- 연관 타입(2026-11-22): by-name rewrite가 `T.Element`, `Self.ID`(USR `…Qa`)를 graph처럼 쓴다. 전체 선언 문법과 mangler는
+  이미 지원했고(값은 generic 값처럼 전달), 새 ABI 규칙은 없다. 같이 고친 것: `swiftGenerics`는 확장 중인 protocol에 대한
+  conformance(`extension DataProtocol`의 `where D: DataProtocol`)를 빠뜨린다. 선언 자신의 `where`에서 읽는다.
+  - 결과: Foundation 3819 → 3876, AppIntents 2419 → 2558, SwiftUI 1823 → 1887, SwiftData 438 → 465(mangling 차이 0),
+    MusicKit 885 → 903, StoreKit 630 → 632.
+  - 남은 것(거부됨): 파라미터가 protocol 여럿을 따를 때 연관 타입을 선언한 protocol(`(of P)`)을 graph가 주지 않는다(23개;
+    표준 라이브러리 protocol은 graph가 없다). 연관 타입이 `where`로 구체 타입이 되는 경우(`Self.NeverResult` → `Never`,
+    `Format.FormatInput` → `Decimal`): Swift는 구체 타입으로 mangle하는데 graph는 이름만 준다. `@preconcurrency`로
+    `Sendable` 요구사항을 빼면 빈 `rl`이 남는다(`AttributeContainer.Builder.callAsFunction`, 1개).
+
 ## 남은 큰 항목
 
-- StoreKit mangling 차이 20개, SwiftData 4개.
+- StoreKit mangling 차이 20개(`SKError`: clang이 만든 error struct).
 - Foundation "export 안 됨" 660개 분석(2026-11-21, `.swiftinterface`와 `.tbd`로 확인):
   - 217개: importer가 클라이언트마다 만드는 C 타입 멤버(`NS_OPTIONS`/`NS_ENUM`의 `init(rawValue:)`, struct의 memberwise
     `init`, typed string의 `init(_: String)`). 심볼이 원래 없다. Rust에서는 objc2 값을 직접 만든다. coverage는 이제

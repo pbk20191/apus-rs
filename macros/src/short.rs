@@ -267,11 +267,17 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
         .chain(member_constraints.iter().copied())
         .map(|(kind, lhs, rhs, usr)| requirement(kind, lhs, rhs, usr.as_deref(), &all_params, module_name))
         .collect::<Result<_, _>>()?;
-    // `swiftGenerics` leaves out a layout requirement (`where Value: AnyObject`): read from the declaration's own
-    // `where` clause.
+    // `swiftGenerics` leaves out a layout requirement (`where Value: AnyObject`) and a conformance to the protocol
+    // extended (`where D: DataProtocol` in `extension DataProtocol`): read from the declaration's own `where` clause.
     for layout in any_object_requirements(fragments) {
         if !rest.contains(&layout) {
             rest.push(layout);
+        }
+    }
+    for (lhs, protocol, usr) in conformances(fragments) {
+        let stated = |c: &(String, String, String, Option<String>)| c.0 == "conformance" && c.1 == lhs && c.3.as_deref() == Some(usr);
+        if !symbol.constraints.iter().any(stated) && !member_constraints.iter().any(|c| stated(c)) {
+            rest.push(requirement("conformance", &lhs, protocol, Some(usr), &all_params, module_name)?);
         }
     }
     let mut body = packs(&strip_defaults(body.trim()));
@@ -587,7 +593,11 @@ fn type_fragment(fragments: &[Fragment], i: usize, params: &[&str], module: &str
             let arguments = fragments.get(i + 1).is_some_and(|n| n.spelling.starts_with('<'));
             let mark = if arguments { variadic_mark(f) } else { Some("") };
             let mark = mark.ok_or_else(|| format!("`{}`: a variadic type with other parameters: write the declaration in full", f.spelling))?;
+            // An associated type (`T.Element`, `Self.ID`): its name (the mangler names its protocol when the
+            // parameter has several, which the declaration must then say: refused for now).
+            let associated = nested && usr.is_some_and(|usr| usr.ends_with("Qa"));
             let name = match (nested, nested_standard_type(fragments, i)) {
+                (true, _) if associated => f.spelling.clone(),
                 (true, _) => nested_name(f, &fragments[i - 2], params, module)?,
                 // The standard library type a nested type is in (`String` of `String.Index`), written whole: bare,
                 // `String` would be read as the nested type's module.
@@ -827,6 +837,23 @@ fn any_object_requirements(fragments: &[Fragment]) -> Vec<String> {
         .collect()
 }
 
+/// The conformances a declaration's own `where` clause states (`D : DataProtocol`): subject, protocol, its USR.
+fn conformances(fragments: &[Fragment]) -> Vec<(String, &str, &str)> {
+    let Some(at) = fragments.iter().position(|f| f.kind == "keyword" && f.spelling == "where") else { return Vec::new() };
+    let mut found = Vec::new();
+    for item in fragments[at + 1..].split(|f| f.kind == "text" && f.spelling.contains(',')) {
+        let Some(colon) = item.iter().position(|f| f.kind == "text" && f.spelling.trim() == ":") else { continue };
+        let protocol = &item[colon + 1..];
+        if let [p] = protocol.iter().filter(|f| f.kind != "text" || !f.spelling.trim().is_empty()).collect::<Vec<_>>()[..] {
+            if let Some(usr) = p.precise.as_deref().filter(|u| p.kind == "typeIdentifier" && u.starts_with("s:") && u.ends_with('P')) {
+                let lhs: String = item[..colon].iter().map(|f| f.spelling.as_str()).collect();
+                found.push((lhs.trim().to_string(), p.spelling.as_str(), usr));
+            }
+        }
+    }
+    found
+}
+
 fn type_name(f: &Fragment, params: &[&str], module: &str) -> Result<String, String> {
     if params.contains(&f.spelling.as_str()) || f.spelling == "Self" {
         return Ok(f.spelling.clone());
@@ -1060,6 +1087,22 @@ mod tests {
         assert!(expanded.contains("Value.ValueType == Foundation.Measurement(struct)<__C.NSUnitTemperature(class)>"), "{expanded}");
         let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
         assert_eq!(Some(mangled), super::usr_symbol(usr, None), "{expanded}");
+    }
+
+    /// An associated type of a generic parameter or `Self` (`T.ParseInput`) is written as the graph does.
+    #[test]
+    fn associated_types() {
+        let text = "Foundation.URL.init(_:strategy:)";
+        let expanded = super::expand(text).unwrap().unwrap();
+        assert!(expanded.contains("(_: T.ParseInput, strategy: T)"), "{expanded}");
+        let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(symbol), super::expected_symbol(text), "{expanded}");
+        // `swiftGenerics` leaves out a conformance to the protocol extended (`where D: DataProtocol`).
+        let text = "Foundation.DataProtocol.firstRange(of:)";
+        let expanded = super::expand(text).unwrap().unwrap();
+        assert!(expanded.contains("D: Foundation.DataProtocol"), "{expanded}");
+        let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(symbol), super::expected_symbol(text), "{expanded}");
     }
 
     /// A nested type in a signature: its module once, each enclosing type with its kind.
