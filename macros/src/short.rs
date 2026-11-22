@@ -235,15 +235,10 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
             }
             // A parameter's result builder (`@ContentBuilder actions:`): a compile-time feature, not part of the type.
             "attribute" if f.spelling == "@" && fragments.get(i + 1).is_some_and(|n| n.kind == "attribute" && n.spelling.ends_with("Builder")) => {
-                i += 1;
-                if fragments.get(i + 1).is_some_and(|n| n.kind == "text" && n.spelling == " ") {
-                    i += 1;
-                }
+                i = skip_builder_arguments(fragments, i + 1);
             }
             "attribute" if f.spelling.starts_with('@') && f.spelling.ends_with("Builder") => {
-                if fragments.get(i + 1).is_some_and(|n| n.kind == "text" && n.spelling == " ") {
-                    i += 1;
-                }
+                i = skip_builder_arguments(fragments, i);
             }
             "typeIdentifier" => {
                 if replaces_outer(fragments, i) {
@@ -448,6 +443,27 @@ fn strip_defaults(body: &str) -> String {
         k += 1;
     }
     out
+}
+
+/// Past a result builder's name at `i`: its generic arguments (`<Value.UnwrappedType>`) and the space after; returns
+/// the last fragment skipped.
+fn skip_builder_arguments(fragments: &[Fragment], mut i: usize) -> usize {
+    if fragments.get(i + 1).is_some_and(|n| n.kind == "text" && n.spelling == "<") {
+        let mut depth = 0;
+        while let Some(f) = fragments.get(i + 1) {
+            i += 1;
+            if f.kind == "text" {
+                depth += f.spelling.matches('<').count() as isize - f.spelling.matches('>').count() as isize;
+                if depth <= 0 {
+                    break;
+                }
+            }
+        }
+    }
+    if fragments.get(i + 1).is_some_and(|n| n.kind == "text" && n.spelling == " ") {
+        i += 1;
+    }
+    i
 }
 
 fn context_params_str(params: &[String]) -> Vec<&str> {
@@ -1022,6 +1038,15 @@ mod tests {
         let symbol = module.find(&path).find(|s| s.fragments.iter().any(|f| f.spelling == "LocalizedStringKey")).unwrap();
         let expanded = super::rewrite("SwiftUI", module, &path[..1], symbol, None).unwrap();
         assert!(expanded.contains("isPresented: SwiftUI.Binding(struct)<Bool>, actions: () -> Actions, message: () -> Message)"), "{expanded}");
+        let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(mangled), super::usr_symbol(&symbol.usr, None), "{expanded}");
+        // A generic builder (`@ResolverSpecificationBuilder<Value.UnwrappedType> resolvers:`): its arguments go too.
+        let module = crate::graphs::graphs().module("AppIntents").unwrap();
+        let usr = "s:10AppIntents15IntentParameterCA2A0A6Entity9ValueTypeRpzAA0A4EnumAFRQrlE5title11description7default07requestF6Dialog0l14DisambiguationM023inputConnectionBehavior15supportedValues9resolversACyxG10Foundation23LocalizedStringResourceV_ASSg09UnwrappedG0QzSgAA0cM0VSgAzA05InputpQ0OYtSayAFGqd__yctcAA21ResolverSpecificationRd__lufc";
+        let symbol = module.by_usr(usr, None).next().unwrap();
+        let path: Vec<&str> = symbol.path.iter().map(String::as_str).collect();
+        let expanded = super::rewrite("AppIntents", module, &path[..path.len() - 1], symbol, None).unwrap();
+        assert!(expanded.contains("supportedValues: [Value.ValueType], resolvers: @escaping () -> Spec)"), "{expanded}");
         let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
         assert_eq!(Some(mangled), super::usr_symbol(&symbol.usr, None), "{expanded}");
     }

@@ -66,6 +66,8 @@
   - 이름으로 쓴 선언의 심볼이 USR과 다르더라도 SDK가 그 심볼을 export하면 받아들인다.
 - 속성 처리:
   - 파라미터의 result builder(`@ContentBuilder actions:`)는 컴파일 시점 기능이므로 지운다.
+    제네릭 builder(`@ResolverSpecificationBuilder<Value.UnwrappedType> resolvers:`)는 `<…>`까지 지운다(2026-11-23,
+    AppIntents 2558 → 2718, SwiftUI 1919 → 1947).
   - `@export(implementation)`와 `dynamic`도 지운다. 심볼은 `.tbd`로 검사한다.
 - `Void`가 typealias 분기에 먼저 걸리던 것을 고쳤다.
 - 가져온 C 타입과 Objective-C 클래스의 Swift extension:
@@ -206,3 +208,5 @@
 - 프로토콜의 associated type(`…Qa`, `Self.Filter`)과 stdlib typealias.
 - export되지 않은 것(`@inlinable` 등): shim이 필요하다.
 - AppIntents: result builder와 string interpolation 같은 컴파일 시점 기능, 그리고 "parse: expected …".
+- 제네릭 builder를 지운 뒤 새로 파싱된 선언 중 SwiftUI `Table.init` 19개와 AppIntents 2개는 심볼이 다르다(거부됨):
+  같은 타입 요구사항(`Value == Columns.TableRowValue`)의 정규화와 여러 프로토콜을 가진 파라미터의 associated type(`(of P)`).
