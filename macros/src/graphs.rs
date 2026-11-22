@@ -142,6 +142,11 @@ impl apus_mangle::KindResolver for Graphs {
     }
 }
 
+/// The Swift modules an SDK module re-exports (`SwiftUI`: `SwiftUICore`, which declares `View` and `Text`).
+pub fn reexports(module: &str) -> &'static [String] {
+    &interface(module).reexports
+}
+
 /// What an SDK module's `.swiftinterface` says, read once.
 fn interface(module: &str) -> &'static Moved {
     static MOVED: OnceLock<Mutex<HashMap<String, &'static Moved>>> = OnceLock::new();

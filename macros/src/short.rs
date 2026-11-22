@@ -495,8 +495,9 @@ fn requirement(kind: &str, lhs: &str, rhs: &str, usr: Option<&str>, params: &[&s
 }
 
 /// `named`, with its generic arguments (`UnitTemperature` of `Measurement<UnitTemperature>`), which `swiftGenerics`
-/// names without a USR: each looked up by name in its type's module, then in `module` (a wrong one would make a
-/// symbol other than the USR's, which is refused); one found in neither (the standard library's) is left as written.
+/// names without a USR: each looked up by name in its type's module, then in `module`, each with the modules it
+/// re-exports (a wrong one would make a symbol other than the USR's, which is refused); one found in none (the
+/// standard library's) is left as written.
 fn named_with_arguments(spelling: &str, usr: Option<&str>, params: &[&str], module: &str) -> Result<String, String> {
     // Only the USR's own type's arguments (`Measurement<UnitType>.FormatStyle` names a nested type's USR).
     let Some((head, arguments)) = spelling.strip_suffix('>').and_then(|s| s.split_once('<')) else { return named(spelling, usr, module) };
@@ -524,7 +525,8 @@ fn named_with_arguments(spelling: &str, usr: Option<&str>, params: &[&str], modu
                     continue;
                 }
                 let name: Vec<&str> = argument.split('<').next().unwrap_or(argument).split('.').collect();
-                let found = [owner.as_deref(), Some(module)].into_iter().flatten().find_map(|m| {
+                let candidates = [owner.as_deref(), Some(module)].into_iter().flatten();
+                let found = candidates.flat_map(|m| std::iter::once(m).chain(graphs::reexports(m).iter().map(String::as_str))).find_map(|m| {
                     let declared = graphs::graphs().module(m)?;
                     declared.find(&name).find(|s| graphs::type_kind(&s.kind).is_some()).map(|s| s.usr.clone())
                 });
@@ -1085,6 +1087,14 @@ mod tests {
         let symbol = module.by_usr(usr, None).next().unwrap();
         let expanded = super::rewrite("AppIntents", module, &["EntityProperty"], symbol, None).unwrap();
         assert!(expanded.contains("Value.ValueType == Foundation.Measurement(struct)<__C.NSUnitTemperature(class)>"), "{expanded}");
+        let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(mangled), super::usr_symbol(usr, None), "{expanded}");
+        // Found in a module the declaring one re-exports (`Text`: SwiftUICore's, mangled in SwiftUI).
+        let module = crate::graphs::graphs().module("SwiftUI").unwrap();
+        let usr = "s:7SwiftUI6ButtonVA2A5LabelVyAA4TextVAA5ImageVGRszrlE_06systemF06actionACyAJG10Foundation23LocalizedStringResourceV_SSyyScMYcctcfc";
+        let symbol = module.by_usr(usr, None).next().unwrap();
+        let expanded = super::rewrite("SwiftUI", module, &["Button"], symbol, None).unwrap();
+        assert!(expanded.contains("Label == SwiftUI.Label(struct)<SwiftUI.Text(struct), SwiftUI.Image(struct)>"), "{expanded}");
         let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
         assert_eq!(Some(mangled), super::usr_symbol(usr, None), "{expanded}");
     }

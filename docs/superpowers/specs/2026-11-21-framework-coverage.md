@@ -177,6 +177,10 @@
     `Format.FormatInput` → `Decimal`): Swift는 구체 타입으로 mangle하는데 graph는 이름만 준다. `@preconcurrency`로
     `Sendable` 요구사항을 빼면 빈 `rl`이 남는다(`AttributeContainer.Builder.callAsFunction`, 1개).
 
+- 다시 내보내는 모듈(2026-11-22): 요구사항의 generic 인자를 이름으로 찾을 때 그 모듈이 `@_exported import`하는 모듈도
+  본다. SwiftUI의 `Text`/`Image`/`View`는 `SwiftUICore`에 있다(mangle은 `@_originallyDefinedIn`으로 SwiftUI).
+  SwiftUI 1887 → 1919. `Label<Text, Image>` 꼴 92개 중 나머지 대부분은 이제 "export 안 됨"(inlinable)으로 분류된다.
+
 ## 남은 큰 항목
 
 - StoreKit mangling 차이 20개(`SKError`: clang이 만든 error struct).
