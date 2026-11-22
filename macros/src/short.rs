@@ -302,45 +302,41 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
     }
     let modifiers = if modifiers.is_empty() { String::new() } else { format!("{} ", modifiers.join(" ")) };
     let declaration = |body: &str| format!("{modifiers}{extension}{prefix}.{body}");
-    let body = shared_parameters(&body, usr_symbol(&symbol.usr, accessor).as_deref(), &declaration);
+    let body = parameter_marks(&body, usr_symbol(&symbol.usr, accessor).as_deref(), &declaration);
     Ok(declaration(&body))
 }
 
-/// `body` with `__shared` written on the parameters its symbol marks so (`h`), which the graph's declaration leaves
-/// out: those whose mark alone brings the symbol written closer to `expected`, which differs from it by `h`s only.
-/// The symbol of the result is still compared with the graph's as any other.
-fn shared_parameters(body: &str, expected: Option<&str>, declaration: &dyn Fn(&str) -> String) -> String {
+/// `body` with `_const` and `__shared` written on the parameters its symbol marks so (`Yt`, `h`), which the graph's
+/// declaration leaves out: each where that mark alone brings the symbol written closer to `expected`, which differs
+/// from it by such marks only. The symbol of the result is still compared with the graph's as any other.
+fn parameter_marks(body: &str, expected: Option<&str>, declaration: &dyn Fn(&str) -> String) -> String {
+    // In the order Swift writes them before a parameter's type, with their marks in the symbol.
+    const MARKS: [(&str, &str); 2] = [("_const ", "Yt"), ("__shared ", "h")];
     let symbol = |body: &str| apus_mangle::Declaration::parse_resolving(&declaration(body), graphs::graphs()).ok()?.symbol().ok();
-    // `expected` is `symbol` with `h`s inserted.
-    let marked = |symbol: &str, expected: &str| {
-        let mut want = expected.chars().peekable();
-        for c in symbol.chars() {
-            while want.peek().is_some_and(|&w| w != c && w == 'h') {
-                want.next();
-            }
-            if want.next() != Some(c) {
-                return false;
-            }
+    // `expected` is `symbol` with marks inserted.
+    fn marked(symbol: &[u8], expected: &[u8]) -> bool {
+        match (symbol, expected) {
+            (_, []) => symbol.is_empty(),
+            ([c, rest @ ..], [w, want @ ..]) if c == w && marked(rest, want) => true,
+            _ => MARKS.iter().any(|(_, mark)| expected.strip_prefix(mark.as_bytes()).is_some_and(|want| marked(symbol, want))),
         }
-        want.all(|w| w == 'h')
-    };
+    }
     let Some(expected) = expected else { return body.to_string() };
     let Some(plain) = symbol(body) else { return body.to_string() };
-    if plain == expected || !marked(&plain, expected) {
+    if plain == expected || !marked(plain.as_bytes(), expected.as_bytes()) {
         return body.to_string();
     }
-    let starts = parameter_types(body);
-    let shared: Vec<usize> = starts
-        .iter()
-        .copied()
-        .filter(|&at| {
-            let one = format!("{}__shared {}", &body[..at], &body[at..]);
-            symbol(&one).is_some_and(|s| s.len() > plain.len() && marked(&s, expected))
-        })
-        .collect();
     let mut out = body.to_string();
-    for at in shared.into_iter().rev() {
-        out.insert_str(at, "__shared ");
+    for at in parameter_types(body).into_iter().rev() {
+        let written: String = MARKS
+            .iter()
+            .filter(|(word, _)| {
+                let one = format!("{}{word}{}", &body[..at], &body[at..]);
+                symbol(&one).is_some_and(|s| s.len() > plain.len() && marked(s.as_bytes(), expected.as_bytes()))
+            })
+            .map(|(word, _)| *word)
+            .collect();
+        out.insert_str(at, &written);
     }
     out
 }
@@ -369,7 +365,7 @@ fn parameter_types(body: &str) -> Vec<usize> {
                 expecting = false;
                 let start = at + 2;
                 let rest = &body[start..];
-                if !["inout ", "consuming ", "borrowing ", "__owned ", "__shared ", "sending "].iter().any(|o| rest.starts_with(o)) {
+                if !["_const ", "inout ", "consuming ", "borrowing ", "__owned ", "__shared ", "sending "].iter().any(|o| rest.starts_with(o)) {
                     starts.push(start);
                 }
             }
@@ -937,10 +933,10 @@ mod tests {
         assert_eq!(Some(mangled), super::usr_symbol(&symbol.usr, None), "{expanded}");
     }
 
-    /// The graph leaves out `__shared`, which the symbol keeps (`h`): an initializer's parameter written so is
-    /// borrowed, not consumed, and only those its symbol marks are written so.
+    /// The graph leaves out `__shared` and `_const`, which the symbol keeps (`h`, `Yt`): an initializer's parameter
+    /// written `__shared` is borrowed, not consumed; only the parameters its symbol marks are written so.
     #[test]
-    fn shared_parameters() {
+    fn parameter_marks() {
         let text = "Foundation.URL.init(string:relativeTo:)";
         let expanded = super::expand(text).unwrap().unwrap();
         assert!(expanded.contains("init(string: __shared String, relativeTo: __shared Foundation.URL(struct)?)"), "{expanded}");
@@ -949,6 +945,14 @@ mod tests {
         let text = "Foundation.URL.init(fileURLWithFileSystemRepresentation:isDirectory:relativeTo:)";
         let expanded = super::expand(text).unwrap().unwrap();
         assert!(expanded.contains("(fileURLWithFileSystemRepresentation: UnsafePointer<Swift.Int8(struct)>, isDirectory: Bool, relativeTo: __shared"), "{expanded}");
+        // `_const` (AppIntents' compile-time constants, `Yt`) alike.
+        let module = crate::graphs::graphs().module("AppIntents").unwrap();
+        let usr = "s:10AppIntents14EntityPropertyCA2A0aC09ValueTypeRpzrlE10identifier5titleACyxGSSYt_10Foundation23LocalizedStringResourceVtcfc";
+        let symbol = module.by_usr(usr, None).next().unwrap();
+        let expanded = super::rewrite("AppIntents", module, &["EntityProperty"], symbol, None).unwrap();
+        assert!(expanded.contains("init(identifier: _const String, title: Foundation.LocalizedStringResource(struct))"), "{expanded}");
+        let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(mangled), super::usr_symbol(usr, None), "{expanded}");
     }
 
     /// A type another module declares in a type's extension (`String.Encoding`, Foundation's) is marked with it.

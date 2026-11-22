@@ -151,9 +151,14 @@
     3개(objc2의 몫). `Measurement…ByteCount`는 path에 제약 extension이 두 개라 parse에서 거부된다.
   - 결과: Foundation 3733 → 3816/4905, SwiftData 431 → 438, AppIntents 881 → 892(차이 615 → 534).
 
+- AppIntents mangling 차이 534개(2026-11-22): 533개가 `_const`(`Yt`, 컴파일 타임 상수 파라미터)를 graph가 빠뜨린
+  것이었다. `__shared`와 같은 방법으로 USR에서 되찾는다. `_const`는 호출하는 쪽의 타입 검사 제약일 뿐 전달 방식은
+  같다(parser는 이미 받고 있었다). 단, Rust에서 넘긴 값은 빌드 때 추출되는 AppIntents 메타데이터에 들어가지 않는다.
+  AppIntents 892 → 1425/3771. 남은 차이 1개(`SyncableEntityIdentifier`).
+
 ## 남은 큰 항목
 
-- AppIntents mangling 차이 534개.
+- StoreKit mangling 차이 20개, SwiftData 4개.
 - Foundation "export 안 됨" 660개 분석(2026-11-21, `.swiftinterface`와 `.tbd`로 확인):
   - 217개: importer가 클라이언트마다 만드는 C 타입 멤버(`NS_OPTIONS`/`NS_ENUM`의 `init(rawValue:)`, struct의 memberwise
     `init`, typed string의 `init(_: String)`). 심볼이 원래 없다. Rust에서는 objc2 값을 직접 만든다. coverage는 이제
