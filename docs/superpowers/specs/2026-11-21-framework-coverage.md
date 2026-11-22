@@ -156,6 +156,17 @@
   같다(parser는 이미 받고 있었다). 단, Rust에서 넘긴 값은 빌드 때 추출되는 AppIntents 메타데이터에 들어가지 않는다.
   AppIntents 892 → 1425/3771. 남은 차이 1개(`SyncableEntityIdentifier`).
 
+- AppIntents "unknown type" 1072개(2026-11-22): 990개가 extension `where`의 same-type 요구사항
+  (`Value.ValueType == Measurement<UnitTemperature>`)이었다. `swiftGenerics`는 바깥 타입(`Measurement`)의 USR만 주고
+  generic 인자는 이름으로만 쓴다. 인자를 바깥 타입의 모듈, 그다음 선언 모듈의 graph에서 이름으로 찾는다
+  (`__C.NSUnitTemperature(class)`). 잘못 찾으면 USR과 다른 심볼이 되어 거부된다.
+  - 같이 드러난 것: 연달아 나오는 같은 표준 타입은 `S2b`로 줄여 쓰이지만 `_const`가 붙으면 `SbYtSbYt`로 나뉜다. 표시를
+    되찾을 때 둘 다 풀어 쓴 뒤 비교한다.
+  - 결과: AppIntents 1425 → 2419/3771(mangling 차이 0), SwiftUI 1774 → 1823, Foundation 3816 → 3819, WeatherKit
+    353 → 355.
+  - SwiftUI에 새로 드러난 차이(거부됨): `CGFloat`가 일부 심볼에서 CoreFoundation으로 mangle됨(2), `Parent == Leaf` 같은
+    두 generic 파라미터의 same-type을 대표 파라미터로 바꾸지 않음(2), `ScrollViewReader.content`(1).
+
 ## 남은 큰 항목
 
 - StoreKit mangling 차이 20개, SwiftData 4개.

@@ -312,7 +312,26 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
 fn parameter_marks(body: &str, expected: Option<&str>, declaration: &dyn Fn(&str) -> String) -> String {
     // In the order Swift writes them before a parameter's type, with their marks in the symbol.
     const MARKS: [(&str, &str); 2] = [("_const ", "Yt"), ("__shared ", "h")];
-    let symbol = |body: &str| apus_mangle::Declaration::parse_resolving(&declaration(body), graphs::graphs()).ok()?.symbol().ok();
+    // A repeated standard type is written once with its count (`S2b`, `Bool, Bool`), unless marks part them
+    // (`SbYtSbYt`): compared written out (a wrong guess is caught by the USR, which the symbol must still be).
+    fn repeats(symbol: String) -> String {
+        let mut out = String::new();
+        let mut rest = symbol.as_str();
+        while let Some(at) = rest.find('S') {
+            out.push_str(&rest[..=at]);
+            rest = &rest[at + 1..];
+            let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+            if let (Some(count), Some(kind)) = (rest[..digits].parse::<usize>().ok().filter(|n| *n >= 2), rest[digits..].chars().next().filter(char::is_ascii_alphabetic)) {
+                out.push(kind);
+                out.push_str(&format!("S{kind}").repeat(count - 1));
+                rest = &rest[digits + 1..];
+            }
+        }
+        out + rest
+    }
+    let symbol = |body: &str| Some(repeats(apus_mangle::Declaration::parse_resolving(&declaration(body), graphs::graphs()).ok()?.symbol().ok()?));
+    let expected = expected.map(|e| repeats(e.to_string()));
+    let expected = expected.as_deref();
     // `expected` is `symbol` with marks inserted.
     fn marked(symbol: &[u8], expected: &[u8]) -> bool {
         match (symbol, expected) {
@@ -462,11 +481,56 @@ fn generic_clause(own: &[&str], constraints: &[(String, String, String, Option<S
 }
 
 fn requirement(kind: &str, lhs: &str, rhs: &str, usr: Option<&str>, params: &[&str], module: &str) -> Result<String, String> {
-    let rhs = if params.contains(&root(rhs)) { rhs.to_string() } else { named(rhs, usr, module)? };
+    let rhs = if params.contains(&root(rhs)) { rhs.to_string() } else { named_with_arguments(rhs, usr, params, module)? };
     Ok(match kind {
         "sameType" => format!("{lhs} == {rhs}"),
         _ => format!("{lhs}: {rhs}"),
     })
+}
+
+/// `named`, with its generic arguments (`UnitTemperature` of `Measurement<UnitTemperature>`), which `swiftGenerics`
+/// names without a USR: each looked up by name in its type's module, then in `module` (a wrong one would make a
+/// symbol other than the USR's, which is refused); one found in neither (the standard library's) is left as written.
+fn named_with_arguments(spelling: &str, usr: Option<&str>, params: &[&str], module: &str) -> Result<String, String> {
+    // Only the USR's own type's arguments (`Measurement<UnitType>.FormatStyle` names a nested type's USR).
+    let Some((head, arguments)) = spelling.strip_suffix('>').and_then(|s| s.split_once('<')) else { return named(spelling, usr, module) };
+    let balanced = arguments.chars().try_fold(0, |depth: i32, c| match c {
+        '<' => Some(depth + 1),
+        '>' => depth.checked_sub(1).filter(|d| *d >= 0),
+        _ => Some(depth),
+    });
+    if balanced != Some(0) {
+        return named(spelling, usr, module);
+    }
+    let owner = usr.and_then(graphs::usr_module);
+    let mut written = Vec::new();
+    let mut depth = 0;
+    let mut start = 0;
+    for (i, c) in arguments.char_indices().chain([(arguments.len(), ',')]) {
+        match c {
+            '<' | '[' | '(' => depth += 1,
+            '>' | ']' | ')' => depth -= 1,
+            ',' if depth == 0 => {
+                let argument = arguments[start..i].trim();
+                start = i + 1;
+                if params.contains(&root(argument)) {
+                    written.push(argument.to_string());
+                    continue;
+                }
+                let name: Vec<&str> = argument.split('<').next().unwrap_or(argument).split('.').collect();
+                let found = [owner.as_deref(), Some(module)].into_iter().flatten().find_map(|m| {
+                    let declared = graphs::graphs().module(m)?;
+                    declared.find(&name).find(|s| graphs::type_kind(&s.kind).is_some()).map(|s| s.usr.clone())
+                });
+                written.push(match found {
+                    Some(found) => named_with_arguments(argument, Some(&found), params, module)?,
+                    None => argument.to_string(),
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(format!("{}<{}>", named(head, usr, module)?, written.join(", ")))
 }
 
 /// A type or protocol named by the graph, as apus writes it: the standard library's bare, another's with its module
@@ -953,6 +1017,14 @@ mod tests {
         assert!(expanded.contains("init(identifier: _const String, title: Foundation.LocalizedStringResource(struct))"), "{expanded}");
         let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
         assert_eq!(Some(mangled), super::usr_symbol(usr, None), "{expanded}");
+        // Marked repeated types: `SbYtSbYt`, `S2b` unmarked.
+        let module = crate::graphs::graphs().module("AppIntents").unwrap();
+        let usr = "s:10AppIntents15IntentParameterCAA10Foundation11MeasurementVySo12NSUnitLengthCG9ValueTypeRtzrlE5title11description07defaultI04unit0N15AdjustForLocale23supportsNegativeNumbers07requestI6Dialog23inputConnectionBehaviorACyxGAD23LocalizedStringResourceV_AVSgSdSgYtAcaiKRSrlE0H0Oyx_GYtSbYtSbYtAA0cV0VSgAA05InputxY0OYttcfc";
+        let symbol = module.by_usr(usr, None).next().unwrap();
+        let expanded = super::rewrite("AppIntents", module, &["IntentParameter"], symbol, None).unwrap();
+        assert!(expanded.contains("unitAdjustForLocale: _const Bool, supportsNegativeNumbers: _const Bool"), "{expanded}");
+        let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(mangled), super::usr_symbol(usr, None), "{expanded}");
     }
 
     /// A type another module declares in a type's extension (`String.Encoding`, Foundation's) is marked with it.
@@ -975,6 +1047,19 @@ mod tests {
         assert!(expanded.ends_with(&format!("AttributedStyle(struct).locale(_: Foundation.Locale(struct)) -> {style}")), "{expanded}");
         let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
         assert_eq!(Some(symbol), super::expected_symbol(text), "{expanded}");
+    }
+
+    /// A requirement's generic arguments (`Measurement<UnitTemperature>`), which `swiftGenerics` names without a USR,
+    /// are looked up by name.
+    #[test]
+    fn arguments_of_requirements() {
+        let module = crate::graphs::graphs().module("AppIntents").unwrap();
+        let usr = "s:10AppIntents14EntityPropertyCAA10Foundation11MeasurementVySo17NSUnitTemperatureCG9ValueTypeRtzrlE5titleACyxGAD23LocalizedStringResourceV_tcfc";
+        let symbol = module.by_usr(usr, None).next().unwrap();
+        let expanded = super::rewrite("AppIntents", module, &["EntityProperty"], symbol, None).unwrap();
+        assert!(expanded.contains("Value.ValueType == Foundation.Measurement(struct)<__C.NSUnitTemperature(class)>"), "{expanded}");
+        let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(mangled), super::usr_symbol(usr, None), "{expanded}");
     }
 
     /// A nested type in a signature: its module once, each enclosing type with its kind.

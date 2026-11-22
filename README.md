@@ -319,7 +319,9 @@ graph is emitted by `apus-build` (and found through `APUS_SYMBOL_GRAPHS`).
   (`Swift.String(struct).(extension in Foundation) Encoding(struct)`,
   `Foundation.Measurement(struct)<UnitType>.(extension in Foundation where UnitType: __C.NSDimension(class))
   AttributedStyle(struct)`). The graph leaves out `__shared` and `_const`, which the symbol keeps: the parameters the
-  symbol marks so are written with them (`__shared`: borrowed, an initializer's too). A name with several declarations or none, or one apus cannot
+  symbol marks so are written with them (`__shared`: borrowed, an initializer's too). A requirement's generic arguments, which the graph names
+  without their USRs (`Value.ValueType == Measurement<UnitTemperature>`), are looked up by name in the graphs of
+  their type's module and of the declaring module. A name with several declarations or none, or one apus cannot
   write (a protocol's associated type, a standard library typealias), is a compile error: write that one in full. An
   `@objc` enum of a Swift module (`POSIXErrorCode`, `MachErrorCode`) is written in its module
   (`_DarwinFoundation1.POSIXErrorCode(enum)`; `Darwin.POSIXErrorCode(enum)` too) and mangled by that module's ABI
