@@ -528,7 +528,7 @@ impl ErasedReceiver for SwiftValue {
 }
 
 /// Whether `receiver` has the declaration's type `name` (mangled, or for `Named` the qualified name); the type's
-/// metadata is looked up once.
+/// metadata is looked up once (for `Named`, the first type found to have that name is kept).
 #[doc(hidden)]
 pub fn __check_receiver<R: ErasedReceiver + ?Sized>(
     receiver: &R,
@@ -553,9 +553,15 @@ pub fn __check_receiver<R: ErasedReceiver + ?Sized>(
         }
         ReceiverKind::Named => {
             let Some(ty) = receiver.erased_type() else { return mismatch };
+            // `expected` keeps the first type that passed (concrete metadata is unique): the same one again is not
+            // compared by name, whose reading allocates.
+            if expected.get() == Some(&Some(ty)) {
+                return Ok(());
+            }
             if without_generic_arguments(&ty.name()) != name {
                 return mismatch;
             }
+            let _ = expected.set(Some(ty));
         }
     }
     Ok(())
@@ -627,13 +633,15 @@ pub struct DeclaredResult {
     pub receiver_self: bool,
     /// The result's type, read at run time: a generic struct's parameter, from the receiver's metadata.
     pub ty: Option<SwiftType>,
+    /// The call site's cache of `name`'s metadata, looked up once (a Swift image is not unloaded).
+    pub resolved: Option<&'static OnceLock<Option<SwiftType>>>,
 }
 
 impl DeclaredResult {
-    pub const UNKNOWN: DeclaredResult = DeclaredResult { name: None, opaque: None, receiver_self: false, ty: None };
+    pub const UNKNOWN: DeclaredResult = DeclaredResult { name: None, opaque: None, receiver_self: false, ty: None, resolved: None };
 
     pub const fn named(name: Option<&'static str>) -> DeclaredResult {
-        DeclaredResult { name, opaque: None, receiver_self: false, ty: None }
+        DeclaredResult { name, opaque: None, receiver_self: false, ty: None, resolved: None }
     }
 
     /// The same, with the result's type known at run time.
@@ -789,7 +797,11 @@ fn declared_type(result_type: DeclaredResult) -> Result<SwiftType, CallError> {
     let name = result_type.name.ok_or(CallError::InvalidArgument(
         "an opaque result needs its Swift type: declare the function with #[swift = \"…\"], or use call_returning / call_direct",
     ))?;
-    SwiftType::from_mangled_name(name).ok_or(CallError::Unavailable(name))
+    let ty = match result_type.resolved {
+        Some(resolved) => *resolved.get_or_init(|| SwiftType::from_mangled_name(name)),
+        None => SwiftType::from_mangled_name(name),
+    };
+    ty.ok_or(CallError::Unavailable(name))
 }
 
 /// A value returned by address: a large or resilient struct (every struct of an Apple framework), or a value

@@ -845,11 +845,13 @@ macro_rules! __swift_result_type {
     (literal $symbol:literal) => { $crate::swift::DeclaredResult::UNKNOWN };
     (declared $declaration:literal) => {{
         static OPAQUE: $crate::swift::OpaqueResult = $crate::swift::OpaqueResult::new($crate::__opaque_descriptor!($declaration));
+        static RESOLVED: ::std::sync::OnceLock<::core::option::Option<$crate::swift::SwiftType>> = ::std::sync::OnceLock::new();
         $crate::swift::DeclaredResult {
             name: $crate::result_type!($declaration),
             opaque: ::core::option::Option::Some(&OPAQUE),
             receiver_self: $crate::__returns_self!($declaration),
             ty: ::core::option::Option::None,
+            resolved: ::core::option::Option::Some(&RESOLVED),
         }
     }};
 }
