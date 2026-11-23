@@ -314,9 +314,9 @@ module's is extracted once (`swift-symbolgraph-extract`, cached under the tempor
 takes about nine seconds) with a compact copy beside it, written the first time without the copies of protocol
 extension members the graph shows on each conforming type (95% of SwiftUI's), the graph itself then deleted: an index
 read by each build and the symbols, each read when looked up (the seven frameworks the coverage test reads: 39 MB).
-The modules a `swift!` block names, and those a module re-exports when a type is looked up there, are loaded together
-on libdispatch's global queue: a first build naming SwiftUI, StoreKit, SwiftData and MusicKit takes about 9 s rather
-than 16. A program's own module's graph is emitted by `apus-build` (and found through
+The modules a `swift!` block names and those they re-export (SwiftUI's `Text` is SwiftUICore's) are loaded together on
+libdispatch's global queue: a first build naming SwiftUI, StoreKit, SwiftData and MusicKit takes 7 to 8 s rather than
+16. A program's own module's graph is emitted by `apus-build` (and found through
 `APUS_SYMBOL_GRAPHS`).
 
 **Build time.** Reading a framework's graph the first time takes an unoptimized proc macro several seconds

@@ -237,7 +237,8 @@ pub fn __swift_items(input: TokenStream) -> TokenStream {
     // is extracted while the others are, rather than when its first declaration expands.
     let mut names = Vec::new();
     declared_modules(items, &mut names);
-    graphs::graphs().prefetch(names.iter().map(String::as_str));
+    let reexported: Vec<String> = names.iter().flat_map(|m| graphs::reexports(m).iter().cloned()).collect();
+    graphs::graphs().prefetch(names.iter().chain(&reexported).map(String::as_str));
     let mut out: Vec<TokenTree> = Vec::new();
     let mut emit = |item: &mut Vec<TokenTree>| {
         if item.is_empty() {
