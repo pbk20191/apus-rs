@@ -1146,6 +1146,33 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         scalar(ty) || (typed_values.contains(name) && ty.replace(' ', "").starts_with('&') && !ty.replace(' ', "").starts_with("&mut"))
     });
     let typed_result = typed_result;
+    // A bound generic call (`[wrapped [(a StackArg)…]] concrete [names] [protocols] [types] [witnesses] [superclasses]
+    // [same types] [] [result?] [checks]`): its arguments scalar, stack values or by address, no receiver, no
+    // typed-throws slot, no closures.
+    let concrete_only = {
+        let (wrapped, rest) = match tokens.as_slice() {
+            [TokenTree::Ident(w), TokenTree::Group(entries), rest @ ..] if w.to_string() == "wrapped" => (Some(entries), rest),
+            rest => (None, rest),
+        };
+        let stack_only = wrapped.is_none_or(|entries| {
+            entries.stream().into_iter().all(|e| matches!(e, TokenTree::Group(g) if g.stream().into_iter().nth(1).is_some_and(|w| w.to_string() == "StackArg")))
+        });
+        stack_only
+            && rest.len() == 10
+            && matches!(&rest[0], TokenTree::Ident(c) if c.to_string() == "concrete")
+            && matches!(&rest[7], TokenTree::Group(error) if error.stream().is_empty())
+    };
+    let stack = |t: &str| matches!(t.replace(' ', "").as_str(), "&i64" | "&f64" | "&bool");
+    if kind == "sync"
+        && concrete_only
+        && rust_receiver(tail).is_none()
+        && rust_argument_types(tail).iter().all(|t| scalar(t) || stack(t))
+        && in_registers(&rust_return(tail))
+    {
+        let mut body: Vec<TokenTree> = vec![TokenTree::Ident(binding.clone()), TokenTree::Ident(how.clone())];
+        body.push(TokenTree::Ident(proc_macro::Ident::new("scalargeneric", proc_macro::Span::call_site())));
+        return route_body(path, body, tail, unchecked, generic);
+    }
     let scalar_path = kind == "sync" && scalar_shape && receiver_ok && arguments_ok && (in_registers(&rust_return(tail)) || typed_result);
     if scalar_path {
         let mut body: Vec<TokenTree> = vec![TokenTree::Ident(binding.clone()), TokenTree::Ident(how.clone())];
