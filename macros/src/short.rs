@@ -62,6 +62,18 @@ pub fn expand(text: &str) -> Result<Option<String>, String> {
     // Not in the module itself: in one it re-exports (SwiftUI's `Text`, declared in SwiftUICore), whose name the
     // declaration then gives (its symbol is mangled with the module it was first defined in all the same).
     let (module_name, module, found) = declaring_module(short.module, module, &path, callable);
+    // The modules its types are declared in, loaded together rather than as each is come to.
+    if let [symbol] = found.as_slice() {
+        let usrs = symbol.fragments.iter().filter_map(|f| f.precise.as_deref());
+        let usrs = usrs.chain(symbol.constraints.iter().filter_map(|c| c.3.as_deref()));
+        let mut modules: Vec<String> = Vec::new();
+        for module in usrs.filter_map(graphs::usr_module) {
+            if module != module_name && !modules.contains(&module) {
+                modules.push(module);
+            }
+        }
+        graphs::graphs().prefetch(modules.iter().map(String::as_str));
+    }
     let symbol = match found.as_slice() {
         [one] => *one,
         [] => return Err(format!("`{text}`: {} has no `{}`", short.module, path.join("."))),

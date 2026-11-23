@@ -237,8 +237,13 @@ pub fn __swift_items(input: TokenStream) -> TokenStream {
     // is extracted while the others are, rather than when its first declaration expands.
     let mut names = Vec::new();
     declared_modules(items, &mut names);
-    let reexported: Vec<String> = names.iter().flat_map(|m| graphs::reexports(m).iter().cloned()).collect();
-    graphs::graphs().prefetch(names.iter().chain(&reexported).map(String::as_str));
+    let mut all: Vec<String> = Vec::new();
+    for module in names.iter().flat_map(|m| graphs::with_reexports(m)) {
+        if !all.contains(&module) {
+            all.push(module);
+        }
+    }
+    graphs::graphs().prefetch(all.iter().map(String::as_str));
     let mut out: Vec<TokenTree> = Vec::new();
     let mut emit = |item: &mut Vec<TokenTree>| {
         if item.is_empty() {
@@ -300,12 +305,38 @@ fn declared_modules(tokens: &[TokenTree], into: &mut Vec<String>) {
             }
             _ => None,
         };
-        for module in text.as_deref().map(modules_of).unwrap_or_default() {
+        // Its path's module, and any module a type in it names (`Foundation.Date` in a StoreKit declaration).
+        let named = text.as_deref().map(|t| modules_of(t).into_iter().chain(qualifiers(t).into_iter().filter(|m| graphs::is_module(m))));
+        for module in named.into_iter().flatten() {
             if !into.contains(&module) {
                 into.push(module);
             }
         }
     }
+}
+
+/// The names a declaration's text qualifies another with (`Foundation` and `Date` of `Foundation.Date(struct)`): the
+/// candidates for modules, which the caller checks.
+fn qualifiers(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut names = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+        if word(bytes[i]) && (i == 0 || !(word(bytes[i - 1]) || bytes[i - 1] == b'.')) {
+            let start = i;
+            while i < bytes.len() && word(bytes[i]) {
+                i += 1;
+            }
+            let name = &text[start..i];
+            if bytes.get(i) == Some(&b'.') && !names.iter().any(|n| n == name) {
+                names.push(name.to_string());
+            }
+        } else {
+            i += 1;
+        }
+    }
+    names
 }
 
 /// The modules a declaration's text names first: an extension's (`(extension in M …)`) and its path's first segment,
@@ -1293,5 +1324,12 @@ mod prefetch_tests {
         assert_eq!(super::modules_of("nonisolated(nonsending) Probe.f() async"), ["Probe"]);
         assert_eq!(super::modules_of("(extension in Foundation where T: P) Swift.Array(struct)<T>.f()"), ["Foundation", "Swift"]);
         assert!(super::modules_of("f()").is_empty());
+    }
+
+    /// Every name a declaration qualifies another with: the candidates for the modules its types are in.
+    #[test]
+    fn qualifiers_of_declarations() {
+        let text = "StoreKit.Transaction(struct).revocationDate: Foundation.Date? { get }";
+        assert_eq!(super::qualifiers(text), ["StoreKit", "Foundation"]);
     }
 }

@@ -96,6 +96,23 @@ pub struct Graphs {
 
 pub static GRAPHS: OnceLock<Graphs> = OnceLock::new();
 
+/// `APUS_GRAPH_TRACE=<file>`: each module's load (start and end) and each wait for one, appended to the file with the
+/// seconds since the process first traced and the thread, to see which loads a build waits for in turn.
+fn trace(event: std::fmt::Arguments) {
+    use std::io::Write;
+    static FILE: OnceLock<Option<(std::time::Instant, Mutex<std::fs::File>)>> = OnceLock::new();
+    let file = FILE.get_or_init(|| {
+        let path = std::env::var_os("APUS_GRAPH_TRACE")?;
+        let file = std::fs::OpenOptions::new().create(true).append(true).open(path).ok()?;
+        Some((std::time::Instant::now(), Mutex::new(file)))
+    });
+    if let Some((start, file)) = file {
+        let thread = std::thread::current().id();
+        let line = format!("{:8.3} {thread:?} {event}\n", start.elapsed().as_secs_f64());
+        let _ = file.lock().unwrap_or_else(|e| e.into_inner()).write_all(line.as_bytes());
+    }
+}
+
 /// libdispatch (libSystem), for loading graphs concurrently.
 mod dispatch {
     use std::ffi::c_void;
@@ -120,7 +137,13 @@ impl Graphs {
     /// for a module neither has.
     pub fn module(&self, name: &str) -> Option<&'static Module> {
         let cell = Arc::clone(self.modules.lock().unwrap_or_else(|e| e.into_inner()).entry(name.to_string()).or_default());
-        *cell.get_or_init(|| Self::load_module(name))
+        if let Some(loaded) = cell.get() {
+            return *loaded;
+        }
+        let start = std::time::Instant::now();
+        let loaded = *cell.get_or_init(|| Self::load_module(name));
+        trace(format_args!("waited {:.3} s for {name}", start.elapsed().as_secs_f64()));
+        loaded
     }
 
     /// Starts loading `names` (extracting each graph the cache lacks) on libdispatch's global concurrent queue:
@@ -146,6 +169,13 @@ impl Graphs {
     /// each other (SwiftUI and SwiftUICore; SwiftUI even itself) cannot deadlock their loads. What looks at other
     /// modules (a re-exported type, an inherited protocol) does so once a load is done.
     fn load_module(name: &str) -> Option<&'static Module> {
+        trace(format_args!("load {name}"));
+        let loaded = Self::read_module(name);
+        trace(format_args!("loaded {name}{}", if loaded.is_some() { "" } else { " (none)" }));
+        loaded
+    }
+
+    fn read_module(name: &str) -> Option<&'static Module> {
         locate(name)
             .and_then(|(file, cached)| match cached {
                 // A copy that cannot be read, its graph's file deleted: extracted again.
@@ -215,6 +245,36 @@ impl apus_mangle::KindResolver for Graphs {
 /// The Swift modules an SDK module re-exports (`SwiftUI`: `SwiftUICore`, which declares `View` and `Text`).
 pub fn reexports(module: &str) -> &'static [String] {
     &interface(module).reexports
+}
+
+/// `module` and the modules it re-exports, and theirs (read from `.swiftinterface` files, not graphs).
+pub fn with_reexports(module: &str) -> Vec<String> {
+    let mut all = vec![module.to_string()];
+    let mut i = 0;
+    while i < all.len() {
+        for other in reexports(&all[i]) {
+            if !all.contains(other) {
+                all.push(other.clone());
+            }
+        }
+        i += 1;
+    }
+    all
+}
+
+/// Whether `name` is a module a graph can be had for: an SDK Swift module, or one in `APUS_SYMBOL_GRAPHS` (a file
+/// check, no graph read).
+pub fn is_module(name: &str) -> bool {
+    if matches!(name, "Swift" | "_Concurrency" | "__C") || name.is_empty() {
+        return false;
+    }
+    let graphs = std::env::var("APUS_SYMBOL_GRAPHS").unwrap_or_default();
+    if graphs.split(':').filter(|d| !d.is_empty()).any(|d| Path::new(d).join(format!("{name}.symbols.json")).exists()) {
+        return true;
+    }
+    let Some(sdk) = crate::sdk::sdk() else { return false };
+    sdk.join(format!("System/Library/Frameworks/{name}.framework/Modules/{name}.swiftmodule")).exists()
+        || sdk.join(format!("usr/lib/swift/{name}.swiftmodule")).exists()
 }
 
 /// What an SDK module's `.swiftinterface` says, read once.
