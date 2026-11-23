@@ -491,7 +491,9 @@ fn extract(module: &str) -> Option<PathBuf> {
     let version = crate::sdk::sdk_version()?;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     (sdk, version).hash(&mut hasher);
-    let dir = std::env::temp_dir().join("apus-symbolgraphs").join(format!("{:016x}", hasher.finish()));
+    // `APUS_GRAPH_CACHE`: where the cache is kept (a CI job's cached directory), else the temporary directory's.
+    let base = std::env::var_os("APUS_GRAPH_CACHE").map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("apus-symbolgraphs"));
+    let dir = base.join(format!("{:016x}", hasher.finish()));
     let file = dir.join(format!("{module}.symbols.json"));
     // Extracted before: the graph's file, or (once read) its compact copy, the file then deleted.
     if file.exists() || compact_files(&file).0.exists() {

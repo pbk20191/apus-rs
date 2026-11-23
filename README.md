@@ -318,7 +318,28 @@ The modules a `swift!` block names anywhere in its declarations (`Foundation` of
 declaration) and those they re-export (SwiftUI's `Text` is SwiftUICore's) are loaded together on libdispatch's global
 queue, and so are the modules a declaration by name's types are in once its symbol is read: a first build naming
 SwiftUI, StoreKit, SwiftData and MusicKit takes 7 to 9 s rather than 16, the time of SwiftUI's own extraction.
-`APUS_GRAPH_TRACE=<file>` appends when each module's load starts and ends, and each wait for one, to the file. A program's own module's graph is emitted by `apus-build` (and found through
+`APUS_GRAPH_TRACE=<file>` appends when each module's load starts and ends, and each wait for one, to the file.
+
+**On CI.** A runner that starts with an empty temporary directory extracts every framework's graph again on each
+build. Keep the cache in a directory of its own with `APUS_GRAPH_CACHE` and cache that directory, keyed by the Xcode
+version (the cache is per SDK, under a subdirectory named after it, so a stale one is merely unused):
+
+```yaml
+# GitHub Actions
+env:
+  APUS_GRAPH_CACHE: ${{ github.workspace }}/.apus-graphs
+steps:
+  - uses: actions/checkout@v4
+  - id: xcode
+    run: echo "version=$(xcodebuild -version | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+  - uses: actions/cache@v4
+    with:
+      path: .apus-graphs
+      key: apus-graphs-${{ runner.os }}-${{ steps.xcode.outputs.version }}
+  - run: cargo build
+```
+
+The seven frameworks the coverage test reads take 39 MB. A program's own module's graph is emitted by `apus-build` (and found through
 `APUS_SYMBOL_GRAPHS`).
 
 **Build time.** Reading a framework's graph the first time takes an unoptimized proc macro several seconds
