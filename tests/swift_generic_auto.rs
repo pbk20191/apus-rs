@@ -78,6 +78,8 @@ apus::swift! {
     fn kept_alive() -> i64;
     #[swift_linked = "Res.benchMax<T: Comparable>(_: T, _: T) -> T", T = "Swift.Int"]
     fn max_int(a: &i64, b: &i64) -> SwiftValue;
+    #[swift_linked = "Res.echoSome<T: Equatable>(_: T) -> some Equatable", T = "Swift.Int"]
+    fn echo_some_int(t: &i64) -> SwiftValue;
     #[swift_linked = "Res.benchMax<T: Comparable>(_: T, _: T) -> T", T = "Swift.Double"]
     fn max_double(a: &f64, b: &f64) -> SwiftValue;
     #[swift_linked = "Res.laterMax<T: Comparable>(_: T, _: T) async -> T", T = "Swift.Int"]
@@ -393,6 +395,8 @@ fn a_value_that_does_not_conform() -> Result<(), Failed> {
 fn stack_values_for_bound_generics() -> Result<(), Failed> {
     check(max_int(&3, &7).unwrap().get::<i64>() == Some(7), "Int from the stack")?;
     check(max_double(&2.5, &-1.0).unwrap().get::<f64>() == Some(2.5), "Double from the stack")?;
+    // An opaque result of the bound type: its type found with the generic arguments the call passed.
+    check(echo_some_int(&41).unwrap().get::<i64>() == Some(41), "some Equatable, an Int")?;
     #[inline(never)]
     fn made_in_a_frame_since_gone() -> apus::swift::SwiftCall<SwiftValue> {
         let (a, b) = (11i64, 5i64);

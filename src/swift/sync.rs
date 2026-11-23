@@ -128,10 +128,16 @@ impl SwiftFn {
 pub struct Made {
     bridges: [u64; 4],
     count: usize,
+    /// The generic arguments passed, for an opaque result's type.
+    pub(crate) generics: super::func::PassedGenerics,
 }
 
 impl Drop for Made {
+    #[inline]
     fn drop(&mut self) {
+        if self.count == 0 {
+            return;
+        }
         for &bridge in &self.bridges[..self.count] {
             unsafe { super::rt::swift_bridgeObjectRelease(bridge as *mut c_void) };
         }
@@ -226,6 +232,17 @@ impl ScalarArg for &SwiftValue {
     }
 }
 
+/// A generic parameter's value from the stack (`&i64` bound to `Int`): its own address, the call being made now.
+impl<T: super::value::IntoSwift + Copy> ScalarArg for super::func::StackArg<'_, T> {
+    #[inline]
+    fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, _floats: &mut usize, _made: &mut Made) -> bool {
+        let Some(slot) = regs.gpr.get_mut(*ints) else { return false };
+        *slot = self.0 as *const T as u64;
+        *ints += 1;
+        true
+    }
+}
+
 /// A Swift string borrowed for a call made right away: its two words (a consumed one takes the general path).
 impl ScalarArg for &super::SwiftString {
     #[inline]
@@ -286,6 +303,7 @@ scalar_args! {
     A B C D E F;
     A B C D E F G;
     A B C D E F G H;
+    A B C D E F G H I;
 }
 
 impl SwiftFn {
@@ -310,7 +328,7 @@ impl SwiftFn {
         }
         // A result by address (a resilient struct's: `SwiftValue`) gets its storage, as the general path's does.
         let (mut slot, indirect) = R::result_slot(result_type)?;
-        slot.resolve(&[])?;
+        slot.resolve(made.generics.as_slice())?;
         let mut ret = RetRegs::new();
         let kind = if indirect { KIND_INDIRECT } else if R::float() { KIND_FLOATS } else { KIND_INTEGERS };
         unsafe {
@@ -439,7 +457,7 @@ impl<R: SwiftRet> SwiftSyncCall<R> {
         if let Some(why) = self.lowering.error {
             return Err(CallError::InvalidArgument(why));
         }
-        self.slot.resolve(&self.lowering.generic_args)?;
+        self.slot.resolve(self.lowering.generic_args.as_slice())?;
         let mut ret = RetRegs::new();
         // A sync call runs right here: on the main actor if this is a main task's poll.
         let main_task = super::task::current().is_some_and(|task| task.main);

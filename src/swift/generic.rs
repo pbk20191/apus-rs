@@ -263,6 +263,39 @@ fn not_conforming(ty: SwiftType, protocol: &SwiftProtocol) -> Refused {
     }
 }
 
+impl ConcreteArgs {
+    /// The arguments, or why the call is refused (as their lowering reports it on the general path).
+    #[doc(hidden)]
+    #[inline]
+    pub fn resolved(self) -> Result<&'static Resolved, CallError> {
+        match self.0 {
+            Ok(resolved) => Ok(resolved),
+            Err(Refused::Missing(name)) => Err(CallError::Unavailable(name)),
+            Err(Refused::NotConforming { ty, protocol }) => Err(CallError::NotConforming { ty, protocol }),
+            Err(Refused::Invalid(why)) => Err(CallError::InvalidArgument(why)),
+        }
+    }
+}
+
+/// The generic arguments after the formal ones on the scalar path (metadata, then witness tables), kept for an
+/// opaque result's type; a typed-throws error slot takes the general path.
+impl super::sync::ScalarArg for &'static Resolved {
+    #[inline]
+    fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, _floats: &mut usize, made: &mut super::sync::Made) -> bool {
+        if self.error_slot.is_some() {
+            return false;
+        }
+        let words = self.metadata.iter().map(|ty| ty.as_ptr()).chain(self.witnesses.iter().map(|w| w.0));
+        for word in words {
+            let Some(slot) = regs.gpr.get_mut(*ints) else { return false };
+            *slot = word as u64;
+            *ints += 1;
+            made.generics.push(word);
+        }
+        true
+    }
+}
+
 impl SwiftArg for ConcreteArgs {
     fn lower(&self, into: &mut ArgLowering) {
         match &self.0 {

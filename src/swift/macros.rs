@@ -699,6 +699,27 @@ macro_rules! __swift_item {
             FUNCTION.__call_scalar(this, ($($arg,)*), false $(|| $crate::__swift_throws!($throws))?, $crate::__swift_result_type!($how $spec))
         }
     };
+    // `scalargeneric`: a sync call with bound generic parameters (`concrete …`, no typed-throws slot, no closures),
+    // its arguments scalar or stack values: made with no call record, the generic arguments after the formal ones.
+    (runtime $how:ident scalargeneric [$(#[$doc:meta])*] [$vis:vis $($unsafety:ident)?] $name:ident [] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
+        $(#[$doc])*
+        $vis $($unsafety)? fn $name($($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
+            static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::__dispatched($crate::__swift_symbol!($how $spec), $crate::__swift_thunk!($how $spec));
+            $crate::__swift_scalar_generic!(FUNCTION [$($arg),*] [$($throws)?] [$($generic)*] $crate::__swift_result_type!($how $spec))
+        }
+    };
+    (linked $how:ident scalargeneric [$(#[$doc:meta])*] [$vis:vis $($unsafety:ident)?] $name:ident [] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
+        $(#[$doc])*
+        $vis $($unsafety)? fn $name($($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
+            extern "C" {
+                #[link_name = $crate::__swift_symbol!($how $spec)]
+                static ENTRY: u8;
+            }
+            static FUNCTION: $crate::swift::SwiftFn =
+                unsafe { $crate::swift::SwiftFn::__linked(&raw const ENTRY as *const ::core::ffi::c_void, $crate::__swift_thunk!($how $spec)) };
+            $crate::__swift_scalar_generic!(FUNCTION [$($arg),*] [$($throws)?] [$($generic)*] $crate::__swift_result_type!($how $spec))
+        }
+    };
     (runtime $how:ident sync [$(#[$doc:meta])*] [$vis:vis $($unsafety:ident)?] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
         $vis $($unsafety)? fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
@@ -959,6 +980,38 @@ macro_rules! __swift_async_pointer {
 macro_rules! __swift_ret {
     () => { () };
     ($ret:ty) => { $ret };
+}
+
+/// The scalar path's bound generic call: stack values wrapped, the generic arguments found (once per call site, with
+/// the checks of the arguments' types), then the call.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __swift_scalar_generic {
+    ($function:ident [$($arg:ident),*] [$($throws:ident)?] [wrapped [$(($wa:ident StackArg))*] $($rest:tt)*] $declared:expr) => {{
+        $(let $wa = $crate::swift::StackArg($wa);)*
+        $crate::__swift_scalar_generic!($function [$($arg),*] [$($throws)?] [$($rest)*] $declared)
+    }};
+    ($function:ident [$($arg:ident),*] [$($throws:ident)?] [concrete [$($n:literal)*] [$($p:literal)*] [$($t:literal)*] [$(([$($ws:tt)*] $wp:literal $wl:ident))*] [$(($sa:literal $sb:literal))*] [$(([$($ss:tt)*] $se:literal))*] [] [$($result:literal)?] [$(($ca:ident $cf:ident $ct:literal))*]] $declared:expr) => {{
+        static NAMES: [$crate::swift::Named; <[&str]>::len(&[$($n),*])] = [$(($n, ::std::sync::OnceLock::new())),*];
+        static PROTOCOLS: [$crate::swift::SwiftProtocol; <[&str]>::len(&[$($p),*])] = [$($crate::swift::SwiftProtocol::new($p)),*];
+        static RESOLVED: $crate::swift::ResolvedOnce = $crate::swift::ResolvedOnce::new();
+        let resolved = $crate::swift::__concrete_args(
+            &RESOLVED,
+            &NAMES,
+            &PROTOCOLS,
+            &[$($t),*],
+            &[$(($crate::__swift_bound_subject!($($ws)*), $wp, $crate::swift::ProtocolLayout::$wl)),*],
+            &[$(($sa, $sb)),*],
+            &[$(($crate::__swift_bound_subject!($($ss)*), $se)),*],
+            ::core::option::Option::None,
+            &[$(($ct, $crate::swift::$cf(&$ca))),*],
+        )
+        .resolved()?;
+        #[allow(unused_mut)]
+        let mut declared = $declared;
+        $(declared.name = ::core::option::Option::Some($result);)?
+        $function.__call_scalar(::core::ptr::null_mut(), ($($arg,)* resolved,), false $(|| $crate::__swift_throws!($throws))?, declared)
+    }};
 }
 
 /// The scalar path's receiver check: as the general path's (`receiver this Instance|Exactly|Named "name"`), returning

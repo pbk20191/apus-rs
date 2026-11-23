@@ -240,6 +240,7 @@ public func keptAlive() -> Int { Kept.alive }
 public func makeOneKept() -> Kept { Kept() }
 @inline(never) public func nameOf(_ animal: Animal) -> String { animal.name }
 public func stringLength(_ s: String) -> Int { s.utf8.count }
+public func echoSome<T: Equatable>(_ t: T) -> some Equatable { t }
 public func laterMax<T: Comparable>(_ a: T, _ b: T) async -> T { await Task.yield(); return Swift.max(a, b) }
 nonisolated(unsafe) var keptStringValue = ""
 @inline(never) public func keepString(_ s: consuming String) { keptStringValue = s }

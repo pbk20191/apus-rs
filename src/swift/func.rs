@@ -210,6 +210,50 @@ impl SwiftAsyncFn {
     }
 }
 
+/// A call's generic arguments (metadata, witness tables), kept for an opaque result's type: a few inline, as calls
+/// pass, more on the heap (a call would otherwise allocate for them every time).
+#[doc(hidden)]
+#[derive(Default)]
+pub struct PassedGenerics {
+    inline: [usize; 8],
+    count: usize,
+    spilled: Vec<*const c_void>,
+}
+
+impl PassedGenerics {
+    #[inline]
+    pub(crate) fn push(&mut self, argument: *const c_void) {
+        if self.spilled.is_empty() && self.count < self.inline.len() {
+            self.inline[self.count] = argument as usize;
+            self.count += 1;
+            return;
+        }
+        if self.spilled.is_empty() {
+            self.spilled.extend(self.inline[..self.count].iter().map(|&a| a as *const c_void));
+        }
+        self.spilled.push(argument);
+    }
+
+    pub(crate) fn extend(&mut self, arguments: impl IntoIterator<Item = *const c_void>) {
+        arguments.into_iter().for_each(|a| self.push(a));
+    }
+
+    /// In the order passed.
+    #[inline]
+    pub(crate) fn as_slice(&self) -> &[*const c_void] {
+        if self.spilled.is_empty() {
+            // `usize` and a pointer have the same layout.
+            unsafe { std::slice::from_raw_parts(self.inline.as_ptr().cast(), self.count) }
+        } else {
+            &self.spilled
+        }
+    }
+}
+
+// The pointers are type metadata and witness tables, which live for the process.
+unsafe impl Send for PassedGenerics {}
+unsafe impl Sync for PassedGenerics {}
+
 /// Collects a call's arguments into registers.
 #[doc(hidden)]
 pub struct ArgLowering {
@@ -225,7 +269,7 @@ pub struct ArgLowering {
     /// An argument or `self` is a Rust value borrowed for the call (`inout`): only a synchronous call may run it.
     pub(crate) borrows: bool,
     /// The generic arguments passed (metadata, witness tables), in order: what an opaque result type depends on.
-    pub(crate) generic_args: Vec<*const c_void>,
+    pub(crate) generic_args: PassedGenerics,
     /// The call is made before the arguments' borrows end: a borrowed value need not be copied.
     pub(crate) now: bool,
     /// An argument the callee consumes is being lowered (`Consumed`): it takes what is lowered, so a copy.
@@ -245,7 +289,7 @@ impl ArgLowering {
             typed_error: None,
             failure: None,
             borrows: false,
-            generic_args: Vec::new(),
+            generic_args: PassedGenerics::default(),
             now: false,
             consuming: false,
         }
@@ -994,5 +1038,17 @@ impl Drop for SwiftObject {
 impl std::fmt::Debug for SwiftObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "SwiftObject({:p})", self.as_ptr())
+    }
+}
+
+#[cfg(test)]
+mod passed_generics_tests {
+    /// Past the inline ones, the arguments move to the heap, still in the order passed.
+    #[test]
+    fn many_generic_arguments_keep_their_order() {
+        let mut passed = super::PassedGenerics::default();
+        let arguments: Vec<*const std::ffi::c_void> = (1..=11usize).map(|i| i as *const std::ffi::c_void).collect();
+        passed.extend(arguments.iter().copied());
+        assert_eq!(passed.as_slice(), arguments.as_slice());
     }
 }

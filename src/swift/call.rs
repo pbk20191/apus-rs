@@ -290,7 +290,7 @@ pub(crate) struct CallShared {
     /// Locked only when the call starts (pending hand-overs) and while it is configured.
     owned: Lock<Vec<Owned>>,
     /// The generic arguments passed, for an opaque result's type (see `IndirectSlot::resolve`).
-    generic_args: Vec<*const c_void>,
+    generic_args: super::func::PassedGenerics,
     /// The first integer register holds the result's address.
     indirect_result: bool,
     /// Drops a finished result nobody will read (monomorphized for the call's result type).
@@ -661,7 +661,7 @@ impl<R: SwiftRet> Future for SwiftCall<R> {
             }
             let slot = call.indirect.get_mut();
             if slot.pending() {
-                if let Err(error) = slot.resolve(&call.generic_args) {
+                if let Err(error) = slot.resolve(call.generic_args.as_slice()) {
                     return Poll::Ready(Err(error));
                 }
                 if call.indirect_result {
