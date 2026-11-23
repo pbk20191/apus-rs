@@ -237,6 +237,8 @@ public final class Kept {
 }
 public func makeKept() -> [Kept] { [Kept()] }
 public func keptAlive() -> Int { Kept.alive }
+public func makeOneKept() -> Kept { Kept() }
+@inline(never) public func consumeKept(_ k: consuming Kept) -> Int { _ = consume k; return 1 }
 public struct Flag<V> {
     public var value: V
     public init() where V == Bool { value = true }
@@ -268,3 +270,7 @@ public struct BenchPoint { public var x: Double; public var y: Double; public in
 @inline(never) public func benchLoopPoint(_ n: Int) -> Double { var s = 0.0; for i in 0..<n { s += benchPoint(Double(i)).y }; return s }
 @inline(never) public func benchLoopMax(_ n: Int) -> Int { var s = 0; for i in 0..<n { s &+= benchMax(i, s) }; return s }
 @inline(never) public func benchLoopAddAsync(_ n: Int) async -> Int { var s = 0; for i in 0..<n { s = await benchAddAsync(s, i) }; return s }
+public class BenchBox { public var n: Int; public init(n: Int) { self.n = n } }
+public func benchMakeBox(_ n: Int) -> BenchBox { BenchBox(n: n) }
+@inline(never) public func benchBoxed(_ b: BenchBox) -> Int { b.n }
+@inline(never) public func benchLoopBoxed(_ n: Int) -> Int { let b = BenchBox(n: 1); var s = 0; for _ in 0..<n { s &+= benchBoxed(b) }; return s }

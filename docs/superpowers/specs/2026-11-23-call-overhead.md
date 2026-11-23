@@ -47,6 +47,10 @@
   - 이 경로는 호출 기록 없이 레지스터만 채워 trampoline을 부른다(`SwiftFn::__call_scalar`).
   - 인자를 레지스터에 넣는 방식(부호·0 확장)은 일반 경로와 같고, 새 ABI 가정은 없다.
   - `Int, Int -> Int`: 19.6 → 7.5 ns. trampoline만은 3.9 ns다.
+  - 빌린 클래스 인스턴스(`&SwiftObject`)도 이 경로로 간다. 바로 실행되는 호출에서는 Rust의 빌림이 객체를 살려 두므로 retain하지 않는다.
+  - consume되는 인자가 있으면 proc macro가 일반 경로로 보낸다(+1을 넘겨야 하므로). 테스트 `consumed_arguments_are_copies`가 이를 지킨다. 이 조건을 빼면 테스트가 실패한다.
+  - `class instance -> Int`: 6.9 ns(Swift 4.2 ns).
+  - 결과는 레지스터로 오는 `String`, `SwiftObject`, `Option<…>`도 이 경로로 받는다.
 
 ## 남은 비용
 

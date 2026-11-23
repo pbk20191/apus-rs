@@ -121,8 +121,8 @@ impl SwiftFn {
     }
 }
 
-/// Arguments that go in registers and need nothing kept alive, handed over or checked: integers, `bool`, `f64`, as
-/// [`SwiftArg`](super::func::SwiftArg) lowers them.
+/// Arguments that go in registers and need nothing kept alive, handed over or checked: integers, `bool`, `f64`, and
+/// borrowed class instances, as [`SwiftArg`](super::func::SwiftArg) lowers them.
 #[doc(hidden)]
 pub trait ScalarArgs {
     /// Fills the argument registers; `false` if there are more than the registers hold.
@@ -156,6 +156,18 @@ impl ScalarArg for f64 {
         let Some(slot) = regs.fpr.get_mut(*floats) else { return false };
         *slot = self;
         *floats += 1;
+        true
+    }
+}
+
+/// A class instance borrowed for a call made right away: its reference, which the caller's borrow keeps alive (a
+/// consumed one never takes this path: `swift!` sends it through the general one, which hands over +1).
+impl ScalarArg for &SwiftObject {
+    #[inline]
+    fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, _floats: &mut usize) -> bool {
+        let Some(slot) = regs.gpr.get_mut(*ints) else { return false };
+        *slot = self.as_ptr() as u64;
+        *ints += 1;
         true
     }
 }

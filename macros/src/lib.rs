@@ -868,14 +868,25 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         (other, None) => other.to_string(),
         (other, _) => other.to_string(),
     };
-    // A sync call of integers, `bool` and `f64` with a result in registers, no receiver and nothing generic, checked
-    // or wrapped: made with no call record (`SwiftFn::__call_scalar`).
-    let scalar = |t: &str| matches!(t, "i64" | "i32" | "isize" | "u64" | "u32" | "usize" | "bool" | "f64");
+    // A sync call of integers, `bool`, `f64` and borrowed class instances with a result in registers, no receiver and
+    // nothing generic, consumed, checked or wrapped: made with no call record (`SwiftFn::__call_scalar`).
+    let bare = |t: &str| t.replace(' ', "").rsplit("::").next().unwrap_or_default().to_string();
+    let scalar = |t: &str| {
+        let t = t.replace(' ', "");
+        matches!(t.as_str(), "i64" | "i32" | "isize" | "u64" | "u32" | "usize" | "bool" | "f64")
+            || t.strip_prefix('&').is_some_and(|object| !object.starts_with("mut") && bare(object) == "SwiftObject")
+    };
+    let in_registers = |t: &str| {
+        let t = t.replace(' ', "");
+        matches!(t.as_str(), "" | "()" | "i64" | "i32" | "u64" | "bool" | "f64" | "String" | "Option<i64>" | "Option<String>")
+            || bare(&t) == "SwiftObject"
+            || t.strip_prefix("Option<").and_then(|t| t.strip_suffix('>')).is_some_and(|t| bare(t) == "SwiftObject")
+    };
     let kind = if kind == "sync"
         && generic.is_empty()
         && rust_receiver(tail).is_none()
         && rust_argument_types(tail).iter().all(|t| scalar(t))
-        && matches!(rust_return(tail).as_str(), "" | "()" | "i64" | "i32" | "u64" | "bool" | "f64")
+        && in_registers(&rust_return(tail))
     {
         "scalar".to_string()
     } else {

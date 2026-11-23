@@ -71,6 +71,10 @@ apus::swift! {
     fn make_kept() -> DirectValue;
     #[swift_linked = "Res.keptAlive() -> Int"]
     fn kept_alive() -> i64;
+    #[swift_linked = "Res.makeOneKept() -> Kept(class)"]
+    fn make_one_kept() -> SwiftObject;
+    #[swift_linked = "Res.consumeKept(_: consuming Kept(class)) -> Int"]
+    fn consume_kept(k: &SwiftObject) -> i64;
     #[swift_linked = "Res.Pair(struct)<A, B>.init(second: B) where A == Int", B = "Swift.Int"]
     fn pair_of_int(second: &SwiftValue) -> SwiftValue;
     #[swift_linked = "static Res.Pair(struct)<A, B>.tag(_: B) -> String where A == Int", B = "Swift.String"]
@@ -355,7 +359,14 @@ fn consumed_arguments_are_copies() -> Result<(), Failed> {
     drop(pair_of_kept(&kept).unwrap());
     check(kept_alive().unwrap() == 1, "the caller's array still holds its Kept")?;
     drop(kept);
-    check(kept_alive().unwrap() == 0, "gone with the caller's array")
+    check(kept_alive().unwrap() == 0, "gone with the caller's array")?;
+    // A class instance too, though a borrowed one is passed as it is: the callee takes its own reference.
+    let one = make_one_kept().unwrap();
+    consume_kept(&one).unwrap();
+    consume_kept(&one).unwrap();
+    check(kept_alive().unwrap() == 1, "the caller's Kept outlives two consuming calls")?;
+    drop(one);
+    check(kept_alive().unwrap() == 0, "gone with the caller's reference")
 }
 
 fn main() {

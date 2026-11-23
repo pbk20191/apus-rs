@@ -1,7 +1,7 @@
 //! Per-call cost of Swift calls from Rust through `swift!`, against the same calls made from Swift (a loop in the
 //! callee's module: native Swift's best case). `cargo bench --features test-probe --bench calls`; results in
 //! docs/superpowers/specs/2026-11-23-call-overhead.md.
-use apus::swift::{spawn, SwiftValue};
+use apus::swift::{spawn, SwiftObject, SwiftValue};
 use std::future::Future;
 use std::hint::black_box;
 use std::pin::pin;
@@ -18,6 +18,12 @@ apus::swift! {
     fn point(x: f64) -> SwiftValue;
     #[swift_linked = "Res.benchMax<T: Comparable>(_: T, _: T) -> T", T = "Swift.Int"]
     fn max_int(a: &SwiftValue, b: &SwiftValue) -> SwiftValue;
+    #[swift_linked = "Res.benchMakeBox(_: Int) -> BenchBox(class)"]
+    fn make_box(n: i64) -> SwiftObject;
+    #[swift_linked = "Res.benchBoxed(_: BenchBox(class)) -> Int"]
+    fn boxed(b: &SwiftObject) -> i64;
+    #[swift_linked = "Res.benchLoopBoxed(_: Int) -> Int"]
+    fn loop_boxed(n: i64) -> i64;
     #[swift_linked = "Res.benchAddAsync(_: Int, _: Int) async -> Int"]
     async fn add_async(a: i64, b: i64) -> i64;
 
@@ -129,6 +135,15 @@ fn main() {
     });
     let swift = ns_per_call(N, |n| _ = black_box(loop_length(n as i64).unwrap()));
     report("String -> Int", rust, swift);
+
+    let object = make_box(1).unwrap();
+    let rust = ns_per_call(N, |n| {
+        for _ in 0..n {
+            black_box(boxed(black_box(&object)).unwrap());
+        }
+    });
+    let swift = ns_per_call(N, |n| _ = black_box(loop_boxed(n as i64).unwrap()));
+    report("class instance -> Int", rust, swift);
 
     let rust = ns_per_call(N, |n| {
         for i in 0..n {
