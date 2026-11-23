@@ -97,6 +97,28 @@ pub fn substituted_protocol(substitution: &str) -> Option<&'static str> {
     NAMES.into_iter().find(|name| standard_protocol(name).or_else(|| concurrency_protocol(name)) == Some(substitution))
 }
 
+/// The primary associated types of the Swift and _Concurrency modules' protocols (`protocol Collection<Element>`),
+/// as their `.swiftinterface` declares them, each with the protocol declaring it (a symbol names that one:
+/// `Collection`'s `Element` is `Sequence`'s).
+pub fn primary_associated_types(name: &str) -> Option<&'static [(&'static str, &'static str)]> {
+    Some(match name {
+        "Sequence" | "Collection" | "BidirectionalCollection" | "RandomAccessCollection" | "MutableCollection"
+        | "RangeReplaceableCollection" => &[("Element", "Sequence")],
+        "IteratorProtocol" => &[("Element", "IteratorProtocol")],
+        "SetAlgebra" => &[("Element", "SetAlgebra")],
+        "AsyncSequence" => &[("Element", "AsyncSequence"), ("Failure", "AsyncSequence")],
+        "AsyncIteratorProtocol" => &[("Element", "AsyncIteratorProtocol"), ("Failure", "AsyncIteratorProtocol")],
+        "Identifiable" => &[("ID", "Identifiable")],
+        "RangeExpression" => &[("Bound", "RangeExpression")],
+        "RawRepresentable" => &[("RawValue", "RawRepresentable")],
+        "Strideable" => &[("Stride", "Strideable")],
+        "SIMD" => &[("Scalar", "SIMDStorage")],
+        "InstantProtocol" => &[("Duration", "InstantProtocol")],
+        "Clock" => &[("Duration", "Clock")],
+        _ => return None,
+    })
+}
+
 /// `Sc<letter>` protocols of the _Concurrency module.
 pub fn concurrency_protocol(name: &str) -> Option<&'static str> {
     Some(match name {

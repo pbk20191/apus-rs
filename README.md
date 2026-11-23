@@ -457,7 +457,11 @@ let bigger = enlarged(&square)?;
 ```
 
 A `some P` parameter is an anonymous generic parameter (pass its type metadata and witness table like any other).
-One `some P` per result, without primary associated types (`some Collection<Int>`).
+One `some P` per result. Its protocol may take its primary associated types: a result's (`-> some Collection<Int>`)
+leave its symbol, as Swift mangles them; a parameter's (`_: some Collection<Int>`) are requirements on that anonymous
+parameter (`T.Element == Int`). They are named by the protocol's declaration (the standard library's, or the symbol
+graph's for a framework's), or written by name (`some Holding<Held == Int>`), which a protocol of your own needs.
+`some P<some Q>` is not Swift.
 
 ### SwiftData
 

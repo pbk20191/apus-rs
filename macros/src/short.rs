@@ -151,7 +151,7 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
     let member_constraints: Vec<_> = symbol
         .constraints
         .iter()
-        .filter(|c| !own_params.contains(&root(&c.1)) && !declared(c) && !extension_constraints.contains(c))
+        .filter(|c| !own_params.contains(&root(&c.1)) && !declared(c) && !extension_constraints.contains(c) && !of_opaque(c))
         .collect();
     let mut extension = String::new();
     if let Some(e) = &symbol.extension {
@@ -256,6 +256,7 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
     let mut rest: Vec<String> = symbol
         .constraints
         .iter()
+        .filter(|c| !of_opaque(c))
         .filter(|(kind, lhs, _, _)| {
             own_params.contains(&root(lhs)) && (lhs.contains('.') || !matches!(kind.as_str(), "conformance" | "superclass"))
         })
@@ -276,6 +277,7 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
         }
     }
     let mut body = packs(&strip_defaults(body.trim()));
+    opaque_arguments(&mut body, &symbol.constraints, &all_params);
     // A property: `name: Type { get … }`, with the accessor written.
     if let Some(accessor) = accessor {
         let effects = match body.find(" {") {
@@ -357,6 +359,43 @@ fn nested_paths(fragments: &[Fragment], params: &[&str]) -> Vec<NestedPath> {
     // A longer path first; one already written is followed by `(`.
     paths.sort_by_key(|(plain, _)| std::cmp::Reverse(plain.len()));
     paths
+}
+
+/// `body` with a `some P` the graph's declaration writes without its arguments (`ticks: () -> some
+/// SliderTickContent`, whose requirement `V == (some SliderTickContent).Value` `swiftGenerics` keeps) written with
+/// them by name (`some SwiftUI.SliderTickContent<Value == V>`): where `P` is the only `some P` and the other side a
+/// generic parameter's type. Any other such requirement is left out, and the symbol, which has it, is refused.
+fn opaque_arguments(body: &mut String, constraints: &[(String, String, String, Option<String>)], params: &[&str]) {
+    for (kind, lhs, rhs, _) in constraints {
+        let (opaque, other) = match (lhs.strip_prefix("(some "), rhs.strip_prefix("(some ")) {
+            (Some(opaque), None) => (opaque, rhs),
+            (None, Some(opaque)) => (opaque, lhs),
+            _ => continue,
+        };
+        let Some((protocol, name)) = opaque.split_once(").") else { continue };
+        if kind != "sameType" || protocol.contains('<') || !params.contains(&root(other)) {
+            continue;
+        }
+        // `some P` or `some M.P`, not followed by arguments: the one place to write them.
+        let found: Vec<usize> = body
+            .match_indices("some ")
+            .map(|(at, _)| at + "some ".len())
+            .filter(|&at| {
+                let written = body[at..].split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.')).next().unwrap_or("");
+                (written == protocol || written.ends_with(&format!(".{protocol}"))) && !body[at + written.len()..].starts_with('<')
+            })
+            .collect();
+        if let [at] = found[..] {
+            let end = at + body[at..].find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.')).unwrap_or(body.len() - at);
+            body.insert_str(end, &format!("<{name} == {other}>"));
+        }
+    }
+}
+
+/// A requirement `swiftGenerics` states of a `some P<…>` parameter (`some P<Entity>: P`, `Entity == (some
+/// P<Entity>).Entity`): the parameter's own, which the declaration's `some P<…>` says and the parser writes.
+fn of_opaque((_, lhs, rhs, _): &(String, String, String, Option<String>)) -> bool {
+    lhs.starts_with("some ") || lhs.starts_with("(some ") || rhs.starts_with("some ") || rhs.starts_with("(some ")
 }
 
 /// Adds to `paths` the nested associated types only requirements name (an extension's `where Self.Value.RawValue ==
@@ -1302,6 +1341,32 @@ mod tests {
         assert!(expanded.ends_with("-> T.Value? where T.Value: Swift.Sendable { get }"), "{expanded}");
         let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
         assert_eq!(Some(mangled), super::usr_symbol(&symbol.usr, Some("get")), "{expanded}");
+    }
+
+    /// `some P<…>`: a result's arguments leave the symbol; a parameter's are requirements on the protocol's primary
+    /// associated types, which its graph names (`protocol EntitySnippetContent<Entity>`).
+    #[test]
+    fn opaque_arguments() {
+        let text = "AppIntents.EntitySnippetContentBuilder.buildExpression(_:)";
+        let expanded = super::expand(text).unwrap().unwrap();
+        assert!(expanded.contains("(_: some AppIntents.EntitySnippetContent<Entity>) -> some AppIntents.EntitySnippetContent<Entity>"), "{expanded}");
+        let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(symbol), super::expected_symbol(text), "{expanded}");
+        // Two protocols: the symbol names the one declaring `Element`, `Sequence` (`Collection` inherits it).
+        let module = crate::graphs::graphs().module("Foundation").unwrap();
+        let path = ["Data", "replaceSubrange(_:with:)"];
+        let symbol = module.find(&path).find(|s| s.usr.contains("15ContiguousBytesRzSlRz")).unwrap();
+        let expanded = super::rewrite("Foundation", module, &path[..1], symbol, None).unwrap();
+        let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(mangled), super::usr_symbol(&symbol.usr, None), "{expanded}");
+        // Arguments the graph's text leaves out, kept as a requirement: written back by name.
+        let module = crate::graphs::graphs().module("SwiftUI").unwrap();
+        let symbol = module.symbols().find(|s| s.usr.contains("ticks16onEditingChanged") && s.usr.ends_with("TickContentRd_1_SB6StrideRpd__r1_lufc") && s.usr.contains("neutralValue")).unwrap();
+        let path: Vec<&str> = symbol.path.iter().map(String::as_str).collect();
+        let expanded = super::rewrite("SwiftUI", module, &path[..path.len() - 1], symbol, None).unwrap();
+        assert!(expanded.contains("ticks: () -> some SwiftUI.SliderTickContent<Value == V>"), "{expanded}");
+        let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(mangled), super::usr_symbol(&symbol.usr, None), "{expanded}");
     }
 
     /// The graph leaves out `__shared` and `_const`, which the symbol keeps (`h`, `Yt`): an initializer's parameter

@@ -83,6 +83,13 @@
     같은 심볼이 나오는 조합을 고른다(이름 4개까지). fragment에 없는 경로(extension의 `where Self.Value.RawValue == Int`)는
     기반 타입에 요구된 프로토콜이 하나일 때 그것을 쓴다. 불일치 94 → 69, Foundation 3922, AppIntents 2913, SwiftUI 1961.
     프로토콜을 정할 수 없는 11개는 거부된다.
+  - `some P<…>`(2026-11-23, owner 결정 1·2번): 결과의 인자는 심볼에 없다(swiftc 스파이크: `some Collection<Int>`도
+    `…QryF`). 파라미터의 인자는 익명 제네릭 파라미터의 primary associated type 요구사항(`T.Element == Int`)이 된다.
+    이름은 표준 라이브러리 표(선언한 프로토콜 포함: `Collection`의 `Element`는 `Sequence`의 것)나 SDK graph의 프로토콜
+    선언에서 읽고, `some P<Name == T>`로 직접 쓸 수도 있다. graph 텍스트에서 인자가 빠지고 `swiftGenerics`에만
+    `V == (some SliderTickContent).Value`로 남은 것은 rewrite가 `some SliderTickContent<Value == V>`로 되살린다.
+    `some P<some Q>`는 swiftc가 거부하므로 대상이 아니다. Foundation 3922 → 3944, AppIntents 2913 → 2949,
+    SwiftUI 1961 → 2037, SwiftData 465 → 466.
   - `rethrows`(2026-11-23, owner 승인): `throws`와 심볼(`K`)과 IR이 같고, swiftc가 `rethrows` 함수를 thunk 없이 `throws`
     함수 값으로 넘기는 것을 확인했다. `throws`로 파싱한다. Foundation 3910 → 3920, AppIntents 2908 → 2909.
   - `@export(implementation)`와 `dynamic`도 지운다. 심볼은 `.tbd`로 검사한다.

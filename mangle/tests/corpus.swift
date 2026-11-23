@@ -285,3 +285,10 @@ public func cb1<T: Owning & Hashable>(_ x: T, _ y: [T]) -> T { x }
 // `rethrows`: mangled and called as `throws` (owner-accepted 2026-11-23).
 public func rt1(_ f: (Int) throws -> Bool) rethrows -> Int { try f(1) ? 1 : 0 }
 public func rt2(_ f: () async throws -> Int) async rethrows -> Int { try await f() }
+// `some P<X>`: a result's arguments leave its symbol; a parameter's are a requirement on its primary associated type.
+public protocol Holding<Held> { associatedtype Held }
+public struct Holder: Holding { public typealias Held = Int; public init() {} }
+public func someHeld() -> some Holding<Int> { Holder() }
+public func someInts() -> some Collection<Int> { [1] }
+public func takeInts(_ c: some Collection<Int>) {}
+public func takeHeld(_ h: some Holding<String>, _ s: some Sequence<Int>) {}

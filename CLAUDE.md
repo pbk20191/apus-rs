@@ -92,8 +92,8 @@ README.md documents every user-facing rule; keep it in step with behavior change
   public runtime registration. Blocks SwiftUI `View`, delegates, `Codable`, `@Observable`/`@Model` types.
 - A protocol extension's member that adds a conformance to `Self` (`extension P where Self: Q`): refused (`Self` is
   not bound; it would take that witness table besides the opened value's).
-- Parameter packs, a declaration inside several generic enclosing types, non-ASCII names: not mangled yet. `some P` results with primary associated types (`some Collection<Int>`), and more than one per result,
-  are refused.
+- Parameter packs, a declaration inside several generic enclosing types, non-ASCII names: not mangled yet. More than
+  one `some P` per result (`(some P, some Q)`: how such a tuple is returned is not documented) is refused.
 - Compile-time features (macros, property wrappers, result builders) and `@inlinable`/`@_alwaysEmitIntoClient` APIs
   without a symbol cannot be called; they need a Swift shim.
 - Small non-resilient values in registers (layout computed by the compiler) and making `indirect` enum cases are

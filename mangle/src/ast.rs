@@ -85,15 +85,25 @@ pub enum Ty {
     /// A closure type: `@escaping @Sendable @MainActor (A, B) async throws -> R`.
     Function(Box<FunctionTy>),
     /// `some P & Q` as the declaration's result: its opaque result type (`Qr`). As a parameter it is an anonymous
-    /// generic parameter instead (the parser rewrites it).
-    Opaque(Vec<Protocol>),
+    /// generic parameter instead (the parser rewrites it). With its protocol's primary associated types
+    /// (`some Collection<Int>`), which a result's symbol leaves out and a parameter's makes requirements.
+    Opaque(Vec<Protocol>, Vec<PrimaryArg>),
+}
+
+/// An argument of `some P<…>`: the type a primary associated type of the `protocol`-th protocol is, named (`Element
+/// == Int`) or in the protocol's order (`Int`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PrimaryArg {
+    pub protocol: usize,
+    pub name: Option<String>,
+    pub ty: Ty,
 }
 
 impl Ty {
     /// How many `some P` this type holds.
     pub fn opaque_count(&self) -> usize {
         match self {
-            Ty::Opaque(_) => 1,
+            Ty::Opaque(..) => 1,
             Ty::Optional(wrapped) | Ty::Metatype(wrapped) => wrapped.opaque_count(),
             Ty::Pack(elements) => elements.iter().map(Ty::opaque_count).sum(),
             Ty::Tuple(elements) => elements.iter().map(|(_, e)| e.opaque_count()).sum(),

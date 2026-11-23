@@ -140,6 +140,31 @@ impl apus_mangle::KindResolver for Graphs {
         let moved = interface(module);
         moved.types.get(name).cloned().or_else(|| moved.abi_name.clone())
     }
+
+    /// From the protocol's declaration (`protocol TabContent<TabValue>`), in `module`'s graph or those of the modules
+    /// it re-exports (SwiftUI's `TabContent` is SwiftUICore's).
+    fn primary_associated_types(&self, module: &str, name: &str) -> Option<Vec<String>> {
+        let path = [name];
+        let declared = |module: &str| -> Option<Vec<String>> {
+            let symbol = self.module(module)?.find(&path).find(|s| s.kind == "swift.protocol")?;
+            let at = symbol.fragments.iter().position(|f| f.kind == "identifier" && f.spelling == name)?;
+            let mut names = Vec::new();
+            let mut fragments = symbol.fragments[at + 1..].iter();
+            if !fragments.next().is_some_and(|f| f.kind == "text" && f.spelling.starts_with('<')) {
+                return Some(names); // none: `some P<…>` is refused
+            }
+            for f in fragments {
+                match f.kind.as_str() {
+                    "typeIdentifier" => names.push(f.spelling.clone()),
+                    "text" if f.spelling.trim_start().starts_with('>') => break,
+                    "text" if f.spelling.trim() == "," => {}
+                    _ => return None,
+                }
+            }
+            Some(names)
+        };
+        declared(module).or_else(|| interface(module).reexports.iter().filter(|m| *m != module).find_map(|m| declared(m)))
+    }
 }
 
 /// The Swift modules an SDK module re-exports (`SwiftUI`: `SwiftUICore`, which declares `View` and `Text`).

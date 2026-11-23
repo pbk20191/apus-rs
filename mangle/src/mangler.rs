@@ -359,7 +359,7 @@ impl Mangler {
                 Ok(())
             }
             // The declaration's own opaque result type (only results keep `some P`: see the parser).
-            Ty::Opaque(_) => {
+            Ty::Opaque(..) => {
                 self.push("Qr");
                 Ok(())
             }
@@ -683,7 +683,7 @@ fn canonical(ty: &Ty, same_types: &SameTypes) -> Ty {
             ..(**function).clone()
         })),
         Ty::Existential(protocol) if same_types.strip_concurrency && is_sendable(protocol) => Ty::Any,
-        Ty::Any | Ty::AnyObject | Ty::Existential(_) | Ty::Opaque(_) => ty.clone(),
+        Ty::Any | Ty::AnyObject | Ty::Existential(_) | Ty::Opaque(..) => ty.clone(),
     }
 }
 
@@ -943,7 +943,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
 
 fn is_concrete(ty: &Ty) -> bool {
     match ty {
-        Ty::Param(_) | Ty::Member(..) | Ty::Opaque(_) => false,
+        Ty::Param(_) | Ty::Member(..) | Ty::Opaque(..) => false,
         Ty::Optional(wrapped) | Ty::Metatype(wrapped) => is_concrete(wrapped),
         Ty::Pack(elements) => elements.iter().all(is_concrete),
         Ty::Tuple(elements) => elements.iter().all(|(_, element)| is_concrete(element)),

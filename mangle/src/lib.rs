@@ -216,6 +216,10 @@ pub trait KindResolver: Sync {
     fn objc_enum(&self, _module: &str, _name: &str) -> bool {
         false
     }
+    /// The primary associated types of protocol `name` of `module` (`TabContent<TabValue>`), in order.
+    fn primary_associated_types(&self, _module: &str, _name: &str) -> Option<Vec<String>> {
+        None
+    }
 }
 
 /// See [`KindResolver::original_module`].
@@ -460,7 +464,7 @@ fn check_lowering(decl: &ast::Decl) -> Result<(), String> {
             }
             Ty::Nominal { args, .. } => args.iter().try_for_each(|arg| walk(arg, inner(At::Argument), class_bound)),
             Ty::Pack(elements) => elements.iter().try_for_each(|element| walk(element, inner(At::Argument), class_bound)),
-            Ty::Param(_) | Ty::Member(..) | Ty::Any | Ty::AnyObject | Ty::Existential(_) | Ty::Opaque(_) => Ok(()),
+            Ty::Param(_) | Ty::Member(..) | Ty::Any | Ty::AnyObject | Ty::Existential(_) | Ty::Opaque(..) => Ok(()),
         }
     }
     let check = |ty: &Ty| walk(ty, At::Top, &class_bound);
@@ -725,7 +729,7 @@ impl Declaration {
                 Ty::Pack(elements) => elements.iter().try_for_each(|e| placed(e, false)),
                 Ty::Tuple(elements) => elements.iter().try_for_each(|(_, e)| placed(e, false)),
                 Ty::Function(function) => function.params.iter().chain([&function.result]).try_for_each(|t| placed(t, false)),
-                Ty::Any | Ty::AnyObject | Ty::Existential(_) | Ty::Opaque(_) => Ok(()),
+                Ty::Any | Ty::AnyObject | Ty::Existential(_) | Ty::Opaque(..) => Ok(()),
             }
         }
         fn nominal_argument(ty: &Ty) -> Result<(), Error> {
@@ -1298,7 +1302,7 @@ fn closure_shape(function: &ast::FunctionTy) -> Result<String, String> {
         use ast::Ty;
         fn mentions_param(ty: &Ty) -> bool {
             match ty {
-                Ty::Param(_) | Ty::Member(..) | Ty::Opaque(_) => true,
+                Ty::Param(_) | Ty::Member(..) | Ty::Opaque(..) => true,
                 Ty::Optional(wrapped) | Ty::Metatype(wrapped) => mentions_param(wrapped),
                 Ty::Pack(elements) => elements.iter().any(mentions_param),
                 Ty::Tuple(elements) => elements.iter().any(|(_, element)| mentions_param(element)),

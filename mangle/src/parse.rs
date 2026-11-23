@@ -362,7 +362,8 @@ impl<'a> Parser<'a> {
             return Ok(Ty::Existential(self.unmarked(Self::protocol)?));
         }
         if self.eat_keyword("some") {
-            return Ok(Ty::Opaque(self.unmarked(Self::protocol_list)?));
+            let (protocols, args) = self.unmarked(Self::opaque_protocols)?;
+            return Ok(Ty::Opaque(protocols, args));
         }
         if self.eat_keyword("AnyObject") {
             return Ok(Ty::AnyObject);
@@ -585,13 +586,42 @@ impl<'a> Parser<'a> {
         Ok(parsed)
     }
 
-    /// `P & Q`
-    fn protocol_list(&mut self) -> Parsed<Vec<Protocol>> {
-        let mut protocols = vec![self.protocol()?];
-        while self.eat("&") {
+    /// `P & Q<…>` after `some`: one protocol may take its primary associated types, in order (`Collection<Int>`) or
+    /// named (`Holding<Held == Int>`).
+    fn opaque_protocols(&mut self) -> Parsed<(Vec<Protocol>, Vec<PrimaryArg>)> {
+        let mut protocols = Vec::new();
+        let mut args = Vec::new();
+        loop {
             protocols.push(self.protocol()?);
+            if self.rest().starts_with('<') {
+                if !args.is_empty() {
+                    return Err(self.error("one protocol of a `some` type may take arguments"));
+                }
+                self.position += 1;
+                loop {
+                    let checkpoint = self.position;
+                    let name = match self.identifier() {
+                        Ok(name) if self.eat("==") => Some(name),
+                        _ => {
+                            self.position = checkpoint;
+                            None
+                        }
+                    };
+                    let ty = self.ty()?;
+                    if ty.opaque_count() > 0 {
+                        return Err(self.error("`some` in a `some` type's arguments is not Swift"));
+                    }
+                    args.push(PrimaryArg { protocol: protocols.len() - 1, name, ty });
+                    if !self.eat(",") {
+                        break;
+                    }
+                }
+                self.expect(">")?;
+            }
+            if !self.eat("&") {
+                return Ok((protocols, args));
+            }
         }
-        Ok(protocols)
     }
 
     /// The requirements of a `where` clause, up to its end.
@@ -600,16 +630,7 @@ impl<'a> Parser<'a> {
             let subject = self.subject()?;
             if self.eat("==") {
                 let ty = self.ty()?;
-                // Canonical form anchors a same-type requirement on the shorter, then earlier type (compareDependentTypes:
-                // `U.C` before `T.A.B`).
-                let key = |param: GenericParam, name: &str| (name.matches('.').count(), param);
-                into.push(match (subject, ty) {
-                    (Subject::Member(param, name), Ty::Param(other)) => Requirement::SameType(Subject::Param(other), Ty::Member(param, name)),
-                    (Subject::Member(param, name), Ty::Member(other, other_name)) if key(other, &other_name) < key(param, &name) => {
-                        Requirement::SameType(Subject::Member(other, other_name), Ty::Member(param, name))
-                    }
-                    (subject, ty) => Requirement::SameType(subject, ty),
-                });
+                into.push(same_type(subject, ty));
             } else {
                 self.expect(":")?;
                 for constraint in self.constraint_list()? {
@@ -1076,8 +1097,20 @@ impl<'a> Parser<'a> {
         let mut generic_params = generic_params;
         let mut signature = signature;
         if let Signature::Function { params, .. } | Signature::Subscript { params, .. } = &mut signature {
+            let resolver = self.resolver;
+            let primary = |p: &Protocol| -> Option<Vec<(String, Protocol)>> {
+                match p.module.as_str() {
+                    "Swift" | "_Concurrency" => names::primary_associated_types(&p.name).map(|names| {
+                        let declaring = |name: &str| Protocol { module: p.module.clone(), name: name.to_string(), class_bound: false };
+                        names.iter().map(|(name, by)| (name.to_string(), declaring(by))).collect()
+                    }),
+                    // Declared by the protocol itself, as far as its graph tells (an inherited one differs in the
+                    // symbol, which is then refused).
+                    module => Some(resolver?.primary_associated_types(module, &p.name)?.into_iter().map(|name| (name, p.clone())).collect()),
+                }
+            };
             for param in params.iter_mut() {
-                param.ty = anonymous_generics(&param.ty, own_depth, &mut generic_params, &mut requirements);
+                param.ty = anonymous_generics(&param.ty, own_depth, &mut generic_params, &mut requirements, &primary, &mut self.associated)?;
             }
         }
         let opaque_results = match &signature {
@@ -1177,34 +1210,73 @@ fn swift_generic(name: &str, args: Vec<Ty>) -> Ty {
     Ty::Nominal { module: "Swift".into(), path: vec![(name.into(), Kind::Struct)], args, split: Vec::new(), extension: None }
 }
 
-/// `ty` with each `some P` replaced by a new generic parameter at `depth`, conforming to its protocols.
-fn anonymous_generics(ty: &Ty, depth: usize, count: &mut usize, requirements: &mut Vec<Requirement>) -> Ty {
-    let mut again = |ty: &Ty| anonymous_generics(ty, depth, count, requirements);
-    match ty {
-        Ty::Opaque(protocols) => {
+/// A same-type requirement in canonical form, anchored on the shorter, then earlier type (compareDependentTypes:
+/// `U.C` before `T.A.B`, `T` before `U.A`).
+fn same_type(subject: Subject, ty: Ty) -> Requirement {
+    let key = |param: GenericParam, name: &str| (name.matches('.').count(), param);
+    match (subject, ty) {
+        (Subject::Member(param, name), Ty::Param(other)) => Requirement::SameType(Subject::Param(other), Ty::Member(param, name)),
+        (Subject::Member(param, name), Ty::Member(other, other_name)) if key(other, &other_name) < key(param, &name) => {
+            Requirement::SameType(Subject::Member(other, other_name), Ty::Member(param, name))
+        }
+        (subject, ty) => Requirement::SameType(subject, ty),
+    }
+}
+
+/// What a `some P<…>` parameter's arguments need: the primary associated types of a protocol, in order, each with
+/// the protocol declaring it.
+type PrimaryNames<'a> = &'a dyn Fn(&Protocol) -> Option<Vec<(String, Protocol)>>;
+
+/// `ty` with each `some P` replaced by a new generic parameter at `depth`, conforming to its protocols; its
+/// arguments (`some Collection<Int>`) become requirements on its primary associated types (`T.Element == Int`),
+/// each declared by its protocol (`associated`).
+fn anonymous_generics(
+    ty: &Ty,
+    depth: usize,
+    count: &mut usize,
+    requirements: &mut Vec<Requirement>,
+    primary: PrimaryNames,
+    associated: &mut Vec<((GenericParam, String), Protocol)>,
+) -> Parsed<Ty> {
+    let mut again = |ty: &Ty| anonymous_generics(ty, depth, count, requirements, primary, associated);
+    Ok(match ty {
+        Ty::Opaque(protocols, args) => {
             let param = GenericParam { depth, index: *count };
             *count += 1;
             requirements.extend(protocols.iter().map(|p| Requirement::Conforms(Subject::Param(param), p.clone())));
+            for (i, arg) in args.iter().enumerate() {
+                let protocol = &protocols[arg.protocol];
+                let (name, declaring) = match &arg.name {
+                    Some(name) => (name.clone(), protocol.clone()),
+                    None => primary(protocol).and_then(|names| names.get(i).cloned()).ok_or_else(|| {
+                        format!("`{}`'s primary associated types are not known: name them, `{0}<Name == T>`", protocol.name)
+                    })?,
+                };
+                if !associated.iter().any(|(key, _)| *key == (param, name.clone())) {
+                    associated.push(((param, name.clone()), declaring));
+                }
+                requirements.push(same_type(Subject::Member(param, name), arg.ty.clone()));
+            }
             Ty::Param(param)
         }
-        Ty::Optional(wrapped) => Ty::Optional(Box::new(again(wrapped))),
-        Ty::Metatype(instance) => Ty::Metatype(Box::new(again(instance))),
-        Ty::Pack(elements) => Ty::Pack(elements.iter().map(&mut again).collect()),
-        Ty::Tuple(elements) => Ty::Tuple(elements.iter().map(|(label, e)| (label.clone(), again(e))).collect()),
+        Ty::Optional(wrapped) => Ty::Optional(Box::new(again(wrapped)?)),
+        Ty::Metatype(instance) => Ty::Metatype(Box::new(again(instance)?)),
+        Ty::Pack(elements) => Ty::Pack(elements.iter().map(&mut again).collect::<Parsed<_>>()?),
+        Ty::Tuple(elements) => Ty::Tuple(elements.iter().map(|(label, e)| Ok((label.clone(), again(e)?))).collect::<Parsed<_>>()?),
         Ty::Nominal { module, path, args, split, extension } => Ty::Nominal {
             module: module.clone(),
             path: path.clone(),
-            args: args.iter().map(again).collect(),
+            args: args.iter().map(&mut again).collect::<Parsed<_>>()?,
             split: split.clone(),
             extension: extension.clone(),
         },
         Ty::Function(f) => Ty::Function(Box::new(FunctionTy {
-            params: f.params.iter().map(&mut again).collect(),
-            result: again(&f.result),
+            params: f.params.iter().map(&mut again).collect::<Parsed<_>>()?,
+            result: again(&f.result)?,
             ..(**f).clone()
         })),
         other => other.clone(),
-    }
+    })
 }
 
 /// The characters of an ASCII operator name.
