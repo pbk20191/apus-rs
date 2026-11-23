@@ -10,6 +10,14 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::time::Instant;
 
 apus::swift! {
+    class BenchBox = "Res.BenchBox(class)";
+    impl BenchBox {
+        #[swift_linked = "Res.BenchBox(class).n: Int { get }"]
+        fn n(&self) -> i64;
+    }
+}
+
+apus::swift! {
     #[swift_linked = "Res.benchAdd(_: Int, _: Int) -> Int"]
     fn add(a: i64, b: i64) -> i64;
     #[swift_linked = "Res.benchLength(_: String) -> Int"]
@@ -167,6 +175,14 @@ fn main() {
         }
     });
     report("  (a property of it: self)", rust, swift);
+
+    let wrapped = BenchBox::try_from(make_box(1).unwrap()).unwrap();
+    let rust = ns_per_call(N, |n| {
+        for _ in 0..n {
+            black_box(black_box(&wrapped).n().unwrap());
+        }
+    });
+    report("  (the same, as a typed wrapper)", rust, swift);
 
     let rust = ns_per_call(N, |n| {
         for i in 0..n {

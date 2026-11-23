@@ -49,6 +49,8 @@ pub trait Erased: SwiftReceiver + SwiftRet + Clone + super::func::ErasedReceiver
     fn lower_erased(&self, into: &mut ArgLowering);
     /// A copy of the initialized value of type `ty` at `value`.
     unsafe fn copy_from(value: *const c_void, ty: SwiftType) -> Self;
+    /// What a borrowed receiver passes as `self`: the object's reference, or the value's address.
+    fn receiver(&self) -> *mut c_void;
 }
 
 impl Erased for SwiftObject {
@@ -62,6 +64,9 @@ impl Erased for SwiftObject {
         // A class-typed value is one reference (TypeLayout.rst): a copy is one more retain.
         SwiftObject::from_raw(rt::swift_unknownObjectRetain(*(value as *const *mut c_void)))
     }
+    fn receiver(&self) -> *mut c_void {
+        self.as_ptr()
+    }
 }
 
 impl Erased for SwiftValue {
@@ -73,6 +78,18 @@ impl Erased for SwiftValue {
     }
     unsafe fn copy_from(value: *const c_void, ty: SwiftType) -> Self {
         SwiftValue::copy_of(value, ty)
+    }
+    fn receiver(&self) -> *mut c_void {
+        self.as_ptr()
+    }
+}
+
+/// A wrapper as a borrowed receiver of the scalar path: what it holds, its type known (checked when wrapped, and
+/// against the declaration's when compiling, or by cast for another class's wrapper).
+impl<W: SwiftWrapper> super::sync::ScalarReceiver for &W {
+    #[inline]
+    fn receiver(self) -> *mut c_void {
+        self.erased().receiver()
     }
 }
 

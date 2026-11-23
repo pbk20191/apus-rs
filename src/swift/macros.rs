@@ -653,16 +653,24 @@ macro_rules! __swift_item {
     };
     // `scalar`: a sync call of integers, `bool` and `f64` with a result in registers, no receiver and nothing generic
     // (the proc macro checks): made with no call record.
-    (runtime $how:ident scalar [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$(receiver $rthis:ident $rhow:ident $rname:literal)?] $spec:literal) => {
+    (runtime $how:ident scalar [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$(receiver $rthis:ident $rhow:ident $rname:literal)? $(typed [$($entry:tt)*])?] $spec:literal) => {
         $(#[$doc])*
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
             static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::__dispatched($crate::__swift_symbol!($how $spec), $crate::__swift_thunk!($how $spec));
             $crate::__swift_scalar_receiver_check!($($rthis $rhow $rname)?);
+            $(
+                // A typed wrapper receiver (and result): checked as on the general path, at compile time unless a
+                // class's wrapper stands for another class.
+                #[allow(unused_mut)]
+                let mut checked: ::core::result::Result<(), $crate::swift::CallError> = ::core::result::Result::Ok(());
+                $($crate::__swift_typed!(checked $entry);)*
+                checked?;
+            )?
             let this = $crate::__swift_scalar_self!($($this)?);
             FUNCTION.__call_scalar(this, ($($arg,)*), false $(|| $crate::__swift_throws!($throws))?, $crate::__swift_result_type!($how $spec))
         }
     };
-    (linked $how:ident scalar [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$(receiver $rthis:ident $rhow:ident $rname:literal)?] $spec:literal) => {
+    (linked $how:ident scalar [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$(receiver $rthis:ident $rhow:ident $rname:literal)? $(typed [$($entry:tt)*])?] $spec:literal) => {
         $(#[$doc])*
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
             extern "C" {
@@ -672,6 +680,14 @@ macro_rules! __swift_item {
             static FUNCTION: $crate::swift::SwiftFn =
                 unsafe { $crate::swift::SwiftFn::__linked(&raw const ENTRY as *const ::core::ffi::c_void, $crate::__swift_thunk!($how $spec)) };
             $crate::__swift_scalar_receiver_check!($($rthis $rhow $rname)?);
+            $(
+                // A typed wrapper receiver (and result): checked as on the general path, at compile time unless a
+                // class's wrapper stands for another class.
+                #[allow(unused_mut)]
+                let mut checked: ::core::result::Result<(), $crate::swift::CallError> = ::core::result::Result::Ok(());
+                $($crate::__swift_typed!(checked $entry);)*
+                checked?;
+            )?
             let this = $crate::__swift_scalar_self!($($this)?);
             FUNCTION.__call_scalar(this, ($($arg,)*), false $(|| $crate::__swift_throws!($throws))?, $crate::__swift_result_type!($how $spec))
         }

@@ -1064,22 +1064,42 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     };
     // A receiver too: a borrowed `&SwiftObject` or `&SwiftValue` that the member does not consume, whose check is all
     // the generic tokens hold (`receiver this Instance "…"`).
+    // Or a typed wrapper (`&Self`), whose entries (`typed [(value self …) (result …)]`) are all the generic tokens
+    // hold: checked as on the general path; its result is the wrapper's type.
+    let tokens: Vec<TokenTree> = generic.clone().into_iter().collect();
+    let receiver_name = rust_receiver_name(tail).map(|i| i.to_string());
+    let typed_only = tokens.len() == 2
+        && matches!(&tokens[0], TokenTree::Ident(i) if i.to_string() == "typed")
+        && matches!(&tokens[1], TokenTree::Group(entries) if entries.stream().into_iter().all(|entry| match entry {
+            TokenTree::Group(entry) => {
+                let parts: Vec<TokenTree> = entry.stream().into_iter().collect();
+                match (parts.first(), parts.get(1)) {
+                    (Some(TokenTree::Ident(role)), _) if role.to_string() == "result" => true,
+                    (Some(TokenTree::Ident(role)), Some(TokenTree::Ident(who))) if role.to_string() == "value" => {
+                        receiver_name.as_deref() == Some(who.to_string().as_str())
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }));
+    let typed_result = typed_only && tokens[1].to_string().contains("result");
     let receiver_ok = match rust_receiver(tail) {
         None => generic.is_empty(),
         Some(ty) => {
             let ty = ty.replace(' ', "");
-            let borrowed = ty.strip_prefix('&').is_some_and(|t| !t.starts_with("mut") && matches!(bare(t).as_str(), "SwiftObject" | "SwiftValue"));
             let consumes = declared.as_ref().is_none_or(|(_, parsed)| parsed.consumes_self());
-            let tokens: Vec<TokenTree> = generic.clone().into_iter().collect();
+            let erased = ty.strip_prefix('&').is_some_and(|t| !t.starts_with("mut") && matches!(bare(t).as_str(), "SwiftObject" | "SwiftValue"));
             let check_only = tokens.is_empty()
                 || (tokens.len() == 4 && matches!(&tokens[0], TokenTree::Ident(i) if i.to_string() == "receiver"));
-            borrowed && !consumes && check_only
+            let wrapper = ty.starts_with('&') && !ty.starts_with("&mut") && typed_only;
+            !consumes && ((erased && check_only) || wrapper)
         }
     };
     let kind = if kind == "sync"
         && receiver_ok
         && rust_argument_types(tail).iter().all(|t| scalar(t))
-        && in_registers(&rust_return(tail))
+        && (in_registers(&rust_return(tail)) || typed_result)
     {
         "scalar".to_string()
     } else {
