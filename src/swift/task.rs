@@ -49,6 +49,7 @@ pub(crate) fn notified(t: &Task) -> bool {
 }
 
 /// The task being polled on this thread, if any.
+#[inline]
 pub(crate) fn current() -> Option<&'static Task> {
     let p = CURRENT.get();
     (!p.is_null()).then(|| unsafe { &*p })

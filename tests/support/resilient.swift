@@ -246,3 +246,17 @@ public func maybeNamed(_ name: String) -> (any Named)? { name.isEmpty ? nil : Do
 public func labelOfMaybe(_ x: (any Named)?) -> String { x?.label ?? "nobody" }
 // Opened from Rust: a class-bound protocol's requirements and extension methods take `self` as the reference itself.
 extension Named { public func shout() -> String { label + "!" } }
+
+// Benchmarks (benches/calls.rs): each target, and a loop calling it from Swift (the same module: native Swift's best
+// case, which knows `BenchPoint`'s layout).
+public struct BenchPoint { public var x: Double; public var y: Double; public init(x: Double, y: Double) { self.x = x; self.y = y } }
+@inline(never) public func benchAdd(_ a: Int, _ b: Int) -> Int { a &+ b }
+@inline(never) public func benchLength(_ s: String) -> Int { s.utf8.count }
+@inline(never) public func benchPoint(_ x: Double) -> BenchPoint { BenchPoint(x: x, y: x) }
+@inline(never) public func benchMax<T: Comparable>(_ a: T, _ b: T) -> T { Swift.max(a, b) }
+@inline(never) public func benchAddAsync(_ a: Int, _ b: Int) async -> Int { a &+ b }
+@inline(never) public func benchLoopAdd(_ n: Int) -> Int { var s = 0; for i in 0..<n { s = benchAdd(s, i) }; return s }
+@inline(never) public func benchLoopLength(_ n: Int) -> Int { var s = 0; for _ in 0..<n { s &+= benchLength("hello, apus") }; return s }
+@inline(never) public func benchLoopPoint(_ n: Int) -> Double { var s = 0.0; for i in 0..<n { s += benchPoint(Double(i)).y }; return s }
+@inline(never) public func benchLoopMax(_ n: Int) -> Int { var s = 0; for i in 0..<n { s &+= benchMax(i, s) }; return s }
+@inline(never) public func benchLoopAddAsync(_ n: Int) async -> Int { var s = 0; for i in 0..<n { s = await benchAddAsync(s, i) }; return s }

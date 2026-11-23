@@ -121,6 +121,7 @@ pub(crate) enum Owned {
 }
 
 /// The call is starting: pending hand-overs become the callee's.
+#[inline]
 pub(crate) fn start_all(owned: &mut Vec<Owned>) {
     if owned.iter().any(|o| matches!(o, Owned::Pending(_))) {
         let all: Vec<Owned> = owned.drain(..).collect();
@@ -208,6 +209,7 @@ pub struct IndirectSlot {
 }
 
 impl IndirectSlot {
+    #[inline]
     pub(crate) fn inline() -> IndirectSlot {
         IndirectSlot { inline: [0; 4], boxed: None, direct: false, opaque: None, receiver_self: false, words: None }
     }
@@ -236,6 +238,7 @@ impl IndirectSlot {
     }
 
     /// Allocates a `some P` result's storage for its actual type, given the call's generic arguments.
+    #[inline]
     pub(crate) fn resolve(&mut self, generic_args: &[*const c_void]) -> Result<(), CallError> {
         if let (Some(opaque), None) = (self.opaque, &self.boxed) {
             self.boxed = Some(UninitValue::new(opaque.metadata(generic_args)?));
@@ -251,6 +254,7 @@ impl IndirectSlot {
         Ok(())
     }
 
+    #[inline]
     pub(crate) fn address(&mut self) -> *mut c_void {
         assert!(!self.pending(), "apus: an opaque result's storage is allocated before the call runs");
         match (&self.boxed, &mut self.words) {

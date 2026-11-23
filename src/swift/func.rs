@@ -55,6 +55,7 @@ impl ClassMethod {
 
     /// Where the call goes: the thunk (`…Tj`, with `suffix`: `Tu` for an async function pointer), the vtable, or
     /// `own` (the member's own symbol's address, 0 if missing). Looked up once: a Swift image is not unloaded.
+    #[inline]
     pub(crate) fn resolve(&self, suffix: &str, own: impl FnOnce() -> usize) -> Option<Target> {
         if !self.thunk.is_empty() {
             let thunk = lookup(&format!("{}{suffix}", self.thunk));
@@ -80,6 +81,7 @@ pub(crate) enum Target {
 
 impl Target {
     /// The entry point for a call whose `self` is `this` (an object, or a class's metadata for a static member).
+    #[inline]
     pub(crate) fn entry(self, this: *mut c_void) -> Result<*const c_void, CallError> {
         let Target::VTable { method, class, class_side } = self else {
             let Target::Entry(entry) = self else { unreachable!() };
@@ -150,6 +152,7 @@ impl SwiftAsyncFn {
         SwiftAsyncFn { symbol: "<pointer>", method, fixed: pointer, looked_up: OnceLock::new() }
     }
 
+    #[inline]
     fn resolve(&self) -> Option<Target> {
         *self.looked_up.get_or_init(|| {
             self.method.resolve("Tu", || match self.fixed.is_null() {
@@ -226,6 +229,7 @@ pub struct ArgLowering {
 
 impl ArgLowering {
     /// `indirect_result`: the first integer register is reserved for the result address.
+    #[inline]
     pub(crate) fn new(indirect_result: bool) -> ArgLowering {
         ArgLowering {
             regs: CallRegs { gpr: [0; 8], fpr: [0.0; 8], self_: std::ptr::null_mut(), isolation: -1 },

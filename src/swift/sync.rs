@@ -54,6 +54,7 @@ impl SwiftFn {
         SwiftFn { symbol: "<address>", method, fixed: address, looked_up: OnceLock::new() }
     }
 
+    #[inline]
     fn resolve(&self) -> Option<Target> {
         *self.looked_up.get_or_init(|| {
             self.method.resolve("", || match self.fixed.is_null() {
@@ -67,6 +68,7 @@ impl SwiftFn {
         self.resolve().is_some()
     }
 
+    #[inline]
     fn prepare<R>(&self, args: impl SwiftArgs, slot: IndirectSlot, indirect: bool) -> SwiftSyncCall<R> {
         let mut lowering = ArgLowering::new(false);
         args.lower(&mut lowering);
@@ -81,6 +83,7 @@ impl SwiftFn {
 
     /// [`call`](Self::call) for a function declared with its Swift result type (what `swift!` generates).
     #[doc(hidden)]
+    #[inline]
     pub fn call_declared<R: SwiftRet>(&self, args: impl SwiftArgs, result_type: super::func::DeclaredResult) -> SwiftSyncCall<R> {
         match R::result_slot(result_type) {
             Ok((slot, indirect)) => self.prepare(args, slot, indirect),
@@ -188,6 +191,7 @@ impl<R> SwiftSyncCall<R> {
 
 impl<R: SwiftRet> SwiftSyncCall<R> {
     /// Runs the call on the current thread.
+    #[inline]
     pub fn invoke(mut self) -> Result<R, CallError> {
         if let Some(error) = self.invalid.take() {
             return Err(error);
