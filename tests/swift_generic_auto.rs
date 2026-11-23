@@ -85,9 +85,9 @@ apus::swift! {
     fn joined_ints(s: &SwiftValue) -> String; // refused before the call: [Int]'s Element is not String
     #[swift_linked = "Res.described<S: Sequence>(_: S) -> String where S.Element: CustomStringConvertible", S = "[Swift.Int]"]
     fn described(s: &SwiftValue) -> String;
-    #[swift_linked = "Res.flattened<S: Sequence>(_: S) -> String where S.Element: Sequence, S.Element.Element == String", S = "[[Swift.String]]"]
+    #[swift_linked = "Res.flattened<S: Sequence>(_: S) -> String where S.Element: Sequence, S.Element.Element(of Sequence) == String", S = "[[Swift.String]]"]
     fn flattened(s: &SwiftValue) -> String;
-    #[swift_linked = "Res.flattened<S: Sequence>(_: S) -> String where S.Element: Sequence, S.Element.Element == String", S = "[[Swift.Int]]"]
+    #[swift_linked = "Res.flattened<S: Sequence>(_: S) -> String where S.Element: Sequence, S.Element.Element(of Sequence) == String", S = "[[Swift.Int]]"]
     fn flattened_ints(s: &SwiftValue) -> String; // refused before the call: [[Int]]'s Element.Element is not String
     #[swift_linked = "Res.renamed<T: Animal(class)>(_: T, suffix: String) -> T", T = "Probe.Minted(class)"]
     fn renamed_minted(x: &SwiftObject, suffix: &str) -> SwiftObject; // refused before the call: Minted is no Animal

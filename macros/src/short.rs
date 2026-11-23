@@ -303,57 +303,136 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
         let at = if accessor.is_some() { body.rfind(" {").unwrap_or(body.len()) } else { body.len() };
         body.insert_str(at, &format!(" where {}", rest.join(", ")));
     }
-    let (body, extension) = (nested_protocols(&body, fragments, &all_params), nested_protocols(&extension, fragments, &all_params));
     let modifiers = if modifiers.is_empty() { String::new() } else { format!("{} ", modifiers.join(" ")) };
-    let declaration = |body: &str| format!("{modifiers}{extension}{prefix}.{body}");
-    let body = parameter_marks(&body, usr_symbol(&symbol.usr, accessor).as_deref(), &declaration);
-    Ok(declaration(&body))
+    // A nested associated type's name is written `(of P)` or `(mangled P)` as its symbol names the protocol or not,
+    // which the declaration does not show: the one whose symbol is the USR's (up to four such names).
+    let expected = usr_symbol(&symbol.usr, accessor);
+    let mut paths = nested_paths(fragments, &all_params);
+    let constraints: Vec<_> = symbol.constraints.iter().chain(symbol.extension.iter().flat_map(|e| e.constraints.iter())).collect();
+    stated_paths(&mut paths, &constraints, &all_params, module_name);
+    let names = nested_names(&paths);
+    let mut first = None;
+    for mask in 0..1usize << names.len().min(4) {
+        let mangled: Vec<&String> = names.iter().enumerate().filter(|(i, _)| mask & (1 << i) != 0).map(|(_, n)| n).collect();
+        let extension = write_nested(&extension, &paths, &mangled);
+        let declaration = |body: &str| format!("{modifiers}{extension}{prefix}.{body}");
+        let text = declaration(&parameter_marks(&write_nested(&body, &paths, &mangled), expected.as_deref(), &declaration));
+        if names.is_empty() || apus_mangle::Declaration::parse(&text).ok().and_then(|d| d.symbol().ok()) == expected {
+            return Ok(text);
+        }
+        first.get_or_insert(text);
+    }
+    Ok(first.unwrap_or_default())
 }
 
-/// `text` with the protocol declaring each name of a nested associated type after the first written
-/// (`T.A.B(of P)`), as the declaration's fragments name it by USR: a bound call looks the type up through it, and
-/// the mangler names it where the name's base has several protocols.
-fn nested_protocols(text: &str, fragments: &[Fragment], params: &[&str]) -> String {
+/// The declaration's nested associated types (`T.A.B`), as its fragments name them by USR: each path, and its names
+/// after the first with the protocol declaring each (`B`, `AppIntents._IntentValue`).
+type NestedPath = (String, Vec<(String, String)>);
+
+fn nested_paths(fragments: &[Fragment], params: &[&str]) -> Vec<NestedPath> {
     fn associated(n: Option<&Fragment>) -> Option<&Fragment> {
         n.filter(|n| n.kind == "typeIdentifier" && n.precise.as_deref().is_some_and(|u| u.ends_with("Qa")))
     }
     let dot = |n: Option<&Fragment>| n.is_some_and(|n| n.kind == "text" && n.spelling == ".");
-    let mut paths: Vec<(String, String)> = Vec::new();
+    let mut paths: Vec<NestedPath> = Vec::new();
     for (i, f) in fragments.iter().enumerate() {
         if !(params.contains(&f.spelling.as_str()) || f.spelling == "Self") || (i > 0 && dot(fragments.get(i - 1))) {
             continue;
         }
-        let (mut plain, mut written) = (f.spelling.clone(), f.spelling.clone());
+        let mut plain = f.spelling.clone();
+        let mut names = Vec::new();
         let mut j = i;
-        let mut level = 0;
         while let Some(name) = associated(fragments.get(j + 2)).filter(|_| dot(fragments.get(j + 1))) {
-            level += 1;
             plain = format!("{plain}.{}", name.spelling);
-            written = format!("{written}.{}", name.spelling);
-            if level > 1 {
-                if let Some(protocol) = declaring_protocol(name.precise.as_deref().unwrap_or(""), &name.spelling) {
-                    written = format!("{written}(of {protocol})");
-                }
-            }
+            // A name after the first; one whose protocol is not read stays bare (and the declaration is refused).
+            let protocol = declaring_protocol(name.precise.as_deref().unwrap_or(""), &name.spelling).unwrap_or_default();
+            names.push((name.spelling.clone(), protocol));
             j += 2;
         }
-        if level > 1 && !paths.iter().any(|(p, _)| *p == plain) {
-            paths.push((plain, written));
+        if names.len() > 1 && !paths.iter().any(|(p, _)| *p == plain) {
+            names.remove(0);
+            paths.push((plain, names));
         }
     }
-    // A longer path first; one already written with its protocols is followed by `(`.
+    // A longer path first; one already written is followed by `(`.
     paths.sort_by_key(|(plain, _)| std::cmp::Reverse(plain.len()));
+    paths
+}
+
+/// Adds to `paths` the nested associated types only requirements name (an extension's `where Self.Value.RawValue ==
+/// Int`, which no fragment carries with its USR): each name after the first with the one protocol a requirement
+/// makes its base conform to (`Self.Value: RawRepresentable`), or bare if none or several (refused then). Where the
+/// symbol names it, the USR confirms it; where not, a wrong one finds no associated type descriptor, and the call is
+/// refused before it is made.
+fn stated_paths(paths: &mut Vec<NestedPath>, constraints: &[&(String, String, String, Option<String>)], params: &[&str], module: &str) {
+    let sides = constraints.iter().flat_map(|(_, lhs, rhs, _)| [lhs.as_str(), rhs.as_str()]);
+    for side in sides {
+        let parts: Vec<&str> = side.split('.').collect();
+        let nominal = |s: &str| s.chars().all(|c| c.is_alphanumeric() || c == '_');
+        if parts.len() < 3 || !(params.contains(&parts[0]) || parts[0] == "Self") || !parts.iter().all(|p| nominal(p)) {
+            continue;
+        }
+        if paths.iter().any(|(plain, _)| plain == side) {
+            continue;
+        }
+        let names = (2..parts.len())
+            .map(|k| {
+                let base = parts[..k].join(".");
+                // The symbol's requirements and its extension's repeat each other: each protocol once.
+                let mut protocols: Vec<_> = constraints.iter().filter(|(kind, lhs, _, _)| kind == "conformance" && *lhs == base).map(|(_, _, rhs, usr)| (rhs, usr)).collect();
+                protocols.sort();
+                protocols.dedup();
+                let protocol = match protocols.as_slice() {
+                    [(rhs, usr)] => named(rhs, usr.as_deref(), module).unwrap_or_default(),
+                    _ => String::new(),
+                };
+                (parts[k].to_string(), protocol)
+            })
+            .collect();
+        paths.push((side.to_string(), names));
+    }
+    paths.sort_by_key(|(plain, _)| std::cmp::Reverse(plain.len()));
+}
+
+/// The nested names (`T.A.B`) of `paths`, each once: what `(of P)` or `(mangled P)` is chosen for.
+fn nested_names(paths: &[NestedPath]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for (plain, nested) in paths {
+        let parts: Vec<&str> = plain.split('.').collect();
+        for k in 0..nested.len() {
+            let name = parts[..parts.len() - nested.len() + k + 1].join(".");
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+/// `text` with `paths` written with their protocols: `(mangled P)` for the names in `mangled` (their symbol names
+/// the protocol), `(of P)` for the others.
+fn write_nested(text: &str, paths: &[NestedPath], mangled: &[&String]) -> String {
     let mut text = text.to_string();
-    for (plain, written) in paths {
+    for (plain, nested) in paths {
+        let parts: Vec<&str> = plain.split('.').collect();
+        let mut written = parts[..parts.len() - nested.len()].join(".");
+        for (name, protocol) in nested {
+            written = format!("{written}.{name}");
+            if !protocol.is_empty() {
+                let key = strip_marks(&written);
+                let mark = if mangled.iter().any(|m| **m == key) { "mangled" } else { "of" };
+                written = format!("{written}({mark} {protocol})");
+            }
+        }
         let mut out = String::new();
         let mut rest = text.as_str();
-        while let Some(at) = rest.find(&plain) {
+        while let Some(at) = rest.find(plain.as_str()) {
             let before = if at > 0 { rest[..at].chars().last() } else { out.chars().last() };
             let after = rest[at + plain.len()..].chars().next();
             let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
             out.push_str(&rest[..at]);
             if word(before) || before == Some('.') || word(after) || after == Some('(') {
-                out.push_str(&plain);
+                out.push_str(plain);
             } else {
                 out.push_str(&written);
             }
@@ -363,6 +442,21 @@ fn nested_protocols(text: &str, fragments: &[Fragment], params: &[&str]) -> Stri
         text = out;
     }
     text
+}
+
+/// `T.A.B(of P).C` without its marks: `T.A.B.C`.
+fn strip_marks(path: &str) -> String {
+    let mut out = String::new();
+    let mut depth = 0;
+    for c in path.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            c if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// The protocol that declares an associated type, from the associated type's USR (`s:10AppIntents12_IntentValueP0D4TypeQa`:
@@ -1304,6 +1398,16 @@ mod tests {
         let path: Vec<&str> = symbol.path.iter().map(String::as_str).collect();
         let expanded = super::rewrite("AppIntents", module, &path[..path.len() - 1], symbol, None).unwrap();
         assert!(expanded.contains("where OptionsProvider.DefaultValue.ValueType(of AppIntents._IntentValue) == Foundation.AttributedString(struct)"), "{expanded}");
+        let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(mangled), super::usr_symbol(&symbol.usr, None), "{expanded}");
+        // `(mangled P)` where the symbol names the protocol: `Self.Value` is `RawRepresentable` and (by its own
+        // protocol's requirements, which the declaration does not show) `Hashable`.
+        let module = crate::graphs::graphs().module("Foundation").unwrap();
+        let usr = "s:10Foundation40ObjectiveCConvertibleAttributedStringKeyPAASo8NSNumberC0B6CValueRtzSY5ValueRpzSiAH_03RawI0SYRTzrlE09objectiveH03forAeI_tKFZ";
+        let symbol = module.by_usr(usr, None).next().unwrap();
+        let path: Vec<&str> = symbol.path.iter().map(String::as_str).collect();
+        let expanded = super::rewrite("Foundation", module, &path[..path.len() - 1], symbol, None).unwrap();
+        assert!(expanded.contains("Self.Value.RawValue(mangled RawRepresentable) == Int"), "{expanded}");
         let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
         assert_eq!(Some(mangled), super::usr_symbol(&symbol.usr, None), "{expanded}");
     }

@@ -78,6 +78,11 @@
     AppIntents 2718 → 2908, SwiftUI 1947 → 1958, Foundation 3901 → 3910.
     남은 불일치(거부됨): 기반 타입의 프로토콜을 선언이 다 보여 주지 않는 경우. 상속(`F.FormatInput: BinaryFloatingPoint`이면
     `Strideable`은 빠진다)과 프로토콜 자신의 요구사항(`AttributedStringKey.Value`의 `Hashable`)이다. 약 30개.
+  - 중첩 associated type은 명시적으로 쓴다(2026-11-23, owner 결정 (가)): 두 번째 이름부터 `(of P)`(심볼에 프로토콜이
+    없음) 또는 `(mangled P)`(심볼에 있음)가 필수이고, parser·mangler·바인딩 모두 추측하지 않는다. rewrite는 USR과
+    같은 심볼이 나오는 조합을 고른다(이름 4개까지). fragment에 없는 경로(extension의 `where Self.Value.RawValue == Int`)는
+    기반 타입에 요구된 프로토콜이 하나일 때 그것을 쓴다. 불일치 94 → 69, Foundation 3922, AppIntents 2913, SwiftUI 1961.
+    프로토콜을 정할 수 없는 11개는 거부된다.
   - `rethrows`(2026-11-23, owner 승인): `throws`와 심볼(`K`)과 IR이 같고, swiftc가 `rethrows` 함수를 thunk 없이 `throws`
     함수 값으로 넘기는 것을 확인했다. `throws`로 파싱한다. Foundation 3910 → 3920, AppIntents 2908 → 2909.
   - `@export(implementation)`와 `dynamic`도 지운다. 심볼은 `.tbd`로 검사한다.

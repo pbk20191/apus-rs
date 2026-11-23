@@ -277,6 +277,8 @@ pub struct Decl {
     pub context_requirements: Vec<Requirement>,
     /// `T.Value(of P)`: which protocol declares an associated type.
     pub associated_protocols: Vec<((GenericParam, String), Protocol)>,
+    /// The nested associated types written `(mangled P)` (`T.A.B(mangled P)`): their symbol names that protocol.
+    pub mangled_associated: Vec<(GenericParam, String)>,
     /// The declaration's own requirements (inline constraints and its `where` clause); for an enum case, the enum's.
     pub requirements: Vec<Requirement>,
     pub signature: Signature,

@@ -35,8 +35,8 @@ struct Mangler {
     /// How many protocols the signature requires of each generic parameter, and the protocols written for
     /// associated types (`T.Value(of P)`).
     protocol_counts: HashMap<GenericParam, usize>,
-    /// The protocols (not marker protocols) the declaration requires of each associated type (`T.A: Q`).
-    member_protocols: HashMap<(GenericParam, String), std::collections::HashSet<(String, String)>>,
+    /// Nested associated types written `(mangled P)`: their symbol names that protocol.
+    mangled: std::collections::HashSet<(GenericParam, String)>,
     associated: HashMap<(GenericParam, String), Protocol>,
 }
 
@@ -438,15 +438,8 @@ impl Mangler {
     fn associated_protocol(&mut self, param: GenericParam, name: &str) -> Result<(), String> {
         let several = match name.rsplit_once('.') {
             None => self.protocol_counts.get(&param).copied().unwrap_or(0) >= 2,
-            // A nested one's base (`T.A` of `T.A.B`): the protocols the declaration requires of it, and the one that
-            // declares `B` (written `(of P)`; its own requirement signature's are not known here).
-            Some((base, _)) => {
-                let mut protocols = self.member_protocols.get(&(param, base.to_string())).cloned().unwrap_or_default();
-                if let Some(protocol) = self.associated.get(&(param, name.to_string())) {
-                    protocols.insert((protocol.module.clone(), protocol.name.clone()));
-                }
-                protocols.len() >= 2
-            }
+            // A nested one: as written, `(mangled P)` (which protocols its base has the declaration does not show).
+            Some(_) => self.mangled.contains(&(param, name.to_string())),
         };
         if !several {
             return Ok(());
@@ -725,19 +718,6 @@ pub(crate) fn protocol_descriptor(protocol: &Protocol) -> Result<String, String>
     Ok(m.buffer)
 }
 
-/// The protocols (not marker protocols) the declaration requires of each associated type.
-fn member_protocols(decl: &Decl) -> HashMap<(GenericParam, String), std::collections::HashSet<(String, String)>> {
-    let mut protocols: HashMap<_, std::collections::HashSet<_>> = HashMap::new();
-    for requirement in all_requirements(decl) {
-        if let Requirement::Conforms(Subject::Member(param, name), protocol) = requirement {
-            if !protocol.is_marker() {
-                protocols.entry((*param, name.clone())).or_default().insert((protocol.module.clone(), protocol.name.clone()));
-            }
-        }
-    }
-    protocols
-}
-
 /// Every requirement of the declaration's generic signature: its context's, its extensions', its own.
 fn all_requirements(decl: &Decl) -> impl Iterator<Item = &Requirement> {
     decl.context_requirements
@@ -774,7 +754,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
         buffer: "$s".into(),
         strip_markers: decl.preconcurrency,
         protocol_counts: protocol_counts(decl),
-        member_protocols: member_protocols(decl),
+        mangled: decl.mangled_associated.iter().cloned().collect(),
         associated: decl.associated_protocols.iter().cloned().collect(),
         ..Default::default()
     };

@@ -39,7 +39,8 @@ impl std::error::Error for Error {}
 /// @preconcurrency …   (its symbol leaves out @Sendable, global actors in function types and `Sendable` requirements)
 /// [(extension in Module [where …])] Module.Type(kind)[<T, …>]….init[<U: P>]([label|_]: Type, …) [async] [throws] [-> Type?]
 /// … T.Value(of P) …   (an associated type of a parameter with several protocols names its protocol)
-/// … T.A.B(of P) …   (a nested associated type: a name after the first names the protocol declaring it)
+/// … T.A.B(of P) … T.A.B(mangled P) …   (a nested associated type: a name after the first names the protocol
+///     declaring it, `mangled` where its symbol names it)
 /// … Predicate(struct)<Pack{T}> …   (a variadic generic type's pack argument)
 /// Module.Outer(kind).(extension in Module [where …]) Inner(kind)….member   (a type declared in an extension that is
 ///     part of its context: a constrained one, or one in another module than the extended type's)
@@ -623,12 +624,11 @@ impl Declaration {
             Subject::Param(param) | Subject::Member(param, _) => *param,
         };
         // An associated type, a step for each name of its path (`T.A.B`): the protocol declaring the name, the one
-        // written (`.B(of P)`) or the only one its base is required to conform to.
+        // written (`.B(of P)`, which a nested name always has) or the parameter's only one.
         let associated = |param: GenericParam, member: &str| -> Result<BoundType, Error> {
             let mut path = Vec::new();
             let mut end = 0;
             for (i, name) in member.split('.').enumerate() {
-                let of = &member[..end];
                 end += name.len() + usize::from(i > 0);
                 let prefix = &member[..end];
                 let protocol = match decl.associated_protocols.iter().find(|((p, n), _)| *p == param && n == prefix) {
@@ -636,9 +636,6 @@ impl Declaration {
                     None => {
                         let mut protocols = requirements.iter().filter_map(|r| match r {
                             Requirement::Conforms(Subject::Param(p), protocol) if i == 0 && *p == param && !protocol.is_marker() => Some(protocol),
-                            Requirement::Conforms(Subject::Member(p, n), protocol) if i > 0 && *p == param && n == of && !protocol.is_marker() => {
-                                Some(protocol)
-                            }
                             _ => None,
                         });
                         match (protocols.next(), protocols.next()) {
@@ -1750,13 +1747,16 @@ mod isolation_tests {
         assert_eq!(conforming.witnesses, [(named("Say1M1SVG"), "$sSTMp".into(), ProtocolLayout::Any), (element.clone(), "$s1M1PMp".into(), ProtocolLayout::Either)]);
         let same = bind("M.f<S: Sequence>(_: S) -> Int where S.Element == String", &[("S", "[M.S(struct)]")]).unwrap();
         assert_eq!(same.same_types, [(element, "SS".to_string())]);
-        // A nested one, step by step: the protocol declaring each name, written `(of P)` or the base's only one.
+        // A nested one, step by step: the protocol declaring each name, written `(of P)` (or `(mangled P)`).
         let nested = bind("M.f<S: Sequence>(_: S) -> Int where S.Element.ID(of Identifiable) == String", &[("S", "[M.S(struct)]")]).unwrap();
         let path = vec![step("$sSTMp", "$sSTTL", "$s7ElementSTTl"), step("$ss12IdentifiableMp", "$ss12IdentifiableTL", "$s2IDs12IdentifiableTl")];
         assert_eq!(nested.same_types, [(BoundType::Associated { ty: "Say1M1SVG".into(), path }, "SS".to_string())]);
-        assert!(error("M.f<S: Sequence>(_: S) -> Int where S.Element.ID == String", &[("S", "[M.S(struct)]")]).contains("(of P)"));
-        let required = bind("M.f<S: Sequence>(_: S) -> Int where S.Element: Identifiable, S.Element.ID == String", &[("S", "[M.S(struct)]")]).unwrap();
-        assert_eq!(required.same_types, nested.same_types);
+        let mangled = bind("M.f<S: Sequence>(_: S) -> Int where S.Element.ID(mangled Identifiable) == String", &[("S", "[M.S(struct)]")]).unwrap();
+        assert_eq!(mangled.same_types, nested.same_types);
+        // Never inferred, not even from the base's one protocol.
+        let parse_error = |d: &str| Declaration::parse(d).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(parse_error("M.f<S: Sequence>(_: S) -> Int where S.Element: Identifiable, S.Element.ID == String").contains("(of P)"));
+        assert!(parse_error("M.f<S: Sequence>(_: S, _: S.Element(mangled Sequence))").contains("nested"));
         // A superclass, checked when the call is made; a typed error's type.
         let sup = bind("M.k<T: Animal(class)>(_: T) -> Int", &[("T", "M.Dog(class)")]).unwrap();
         assert_eq!(sup.superclasses, [("1M3DogC".to_string(), "1M6AnimalC".to_string())]);

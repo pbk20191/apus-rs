@@ -21,6 +21,8 @@ pub struct Parser<'a> {
     generics: Vec<(String, GenericParam)>,
     /// `T.Value(of P)`: the protocol that declares an associated type.
     associated: Vec<((GenericParam, String), Protocol)>,
+    /// Nested associated types written `(mangled P)`.
+    mangled_associated: Vec<(GenericParam, String)>,
     /// The constrained extensions a type in the signature may name, with the types they extend: the one an
     /// enclosing type is declared in, and the declaration's own (for a type declared beside it).
     known_extensions: Vec<(String, Vec<(String, Kind)>, ContextExtension)>,
@@ -522,29 +524,47 @@ impl<'a> Parser<'a> {
         Ok(Subject::Param(param))
     }
 
-    /// An associated type's path after `T.` (`A`, or `A.B` for a nested one), each name with its `(of P)`.
+    /// An associated type's path after `T.` (`A`, or `A.B` for a nested one), each name with its `(of P)`; a name
+    /// after the first must have one, or `(mangled P)`.
     fn member_path(&mut self, param: GenericParam) -> Parsed<String> {
         let mut path = self.identifier()?;
-        self.associated_protocol(param, &path)?;
+        self.associated_protocol(param, &path, false)?;
         while !self.at_metatype_suffix() && self.eat_path_dot() {
             path.push('.');
             path.push_str(&self.identifier()?);
-            self.associated_protocol(param, &path)?;
+            self.associated_protocol(param, &path, true)?;
         }
         Ok(path)
     }
 
     /// `(of P)` after an associated type's name: the protocol that declares it, which its symbol names when the
-    /// parameter has several protocols.
-    fn associated_protocol(&mut self, param: GenericParam, name: &str) -> Parsed<()> {
-        if !self.rest().starts_with("(of ") {
+    /// parameter has several protocols. A nested one's (`T.A.B`) is written always, as `(of P)` when its symbol
+    /// leaves it out and `(mangled P)` when it names it: which protocols its base has, and so which, the declaration
+    /// does not show (one may inherit another, its own protocol may require more).
+    fn associated_protocol(&mut self, param: GenericParam, name: &str, nested: bool) -> Parsed<()> {
+        let mangled = self.rest().starts_with("(mangled ");
+        if !mangled && !self.rest().starts_with("(of ") {
+            if nested {
+                return Err(self.error(&format!("a nested associated type names the protocol declaring it, `.{}(of P)` or `(mangled P)` if its symbol names it", name.rsplit('.').next().unwrap_or(name))));
+            }
             return Ok(());
         }
+        if mangled && !nested {
+            return Err(self.error("`(mangled P)` is for a nested associated type's name (`T.A.B`): write `(of P)`"));
+        }
         self.position += 1;
-        self.eat_keyword("of");
+        if !self.eat_keyword("of") {
+            self.eat_keyword("mangled");
+        }
         let protocol = self.protocol()?;
         self.expect(")")?;
         let key = (param, name.to_string());
+        if mangled != self.mangled_associated.contains(&key) && self.associated.iter().any(|(known, _)| *known == key) {
+            return Err(format!("`{name}` is written both `(of P)` and `(mangled P)`"));
+        }
+        if mangled && !self.mangled_associated.contains(&key) {
+            self.mangled_associated.push(key.clone());
+        }
         match self.associated.iter().find(|(known, _)| *known == key) {
             Some((_, known)) if *known != protocol => Err(format!("`{name}` is declared by one protocol")),
             Some(_) => Ok(()),
@@ -1123,6 +1143,7 @@ impl<'a> Parser<'a> {
             generic_params,
             context_requirements,
             associated_protocols: std::mem::take(&mut self.associated),
+            mangled_associated: std::mem::take(&mut self.mangled_associated),
             requirements,
             signature,
         })
@@ -1201,6 +1222,7 @@ pub fn parse_resolving<'a>(text: &'a str, resolver: Option<&'a dyn crate::KindRe
         home: String::new(),
         generics: Vec::new(),
         associated: Vec::new(),
+        mangled_associated: Vec::new(),
         known_extensions: Vec::new(),
         resolver,
     }

@@ -227,13 +227,15 @@ static (extension in _Concurrency where Success == Never, Failure == Never)
 - An associated type of a parameter that has several protocols (marker protocols such as `Sendable` aside) names
   the protocol that declares it, as its symbol does: `T.Value(of Opening)` in
   `M.f<T: Opening & Hashable>(_: T, _: T.Value(of Opening))`; without it the declaration is refused.
-- A nested associated type (`T.A.B`) is written as a path, and a name after the first takes `(of P)`, the protocol
-  that declares it, unless the declaration requires one protocol of its base (`where S.Element: Sequence,
-  S.Element.Element == String`). A bound call finds it a step at a time, through each protocol's conformance. Its
-  symbol names that protocol where the base has several (the declaration's and the one `(of P)` names); protocols the
-  base gets from its own protocol's requirements, and one a written protocol inherits, are not known: such a symbol
-  differs, and is refused (by the SDK's exports, or the linker for a module of your own). Declarations by name write
-  `(of P)` themselves.
+- A nested associated type (`T.A.B`) is written as a path whose names after the first each name the protocol
+  declaring them, explicitly, as the symbol has it: `(of P)` where the symbol leaves the protocol out, `(mangled P)`
+  where it names it (`where S.Element: Sequence, S.Element.Element(of Sequence) == String`). Neither is inferred:
+  whether the symbol names it depends on protocols the declaration does not show (one may inherit another, the
+  base's own protocol may require more), and a wrong one is refused (by the SDK's exports, or the linker for a module
+  of your own). A bound call finds the type a step at a time, through each protocol's conformance. Declarations by
+  name write these themselves, as the USR has them. Rather than spell such a chain, a program may expose a
+  specialized function from its own Swift module (`func flattenedStrings(_ rows: [[String]]) -> String`) and call
+  that.
 - `@preconcurrency` declarations: their symbols leave out `@Sendable`, global actors in function types and `Sendable`
   requirements.
 - A member type of a generic type takes each level's arguments where Swift writes them:
