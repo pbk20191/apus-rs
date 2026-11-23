@@ -121,7 +121,12 @@ let text = greet("Kim", 2).await?;          // a SwiftCall<String>: `.child()` a
   passed by address) is the receiver. With a declaration (`#[swift]`, `#[swift_linked]`) its type is checked when
   the call is made, before Swift runs (`CallError::InvalidArgument` if it is another's): an object must be an
   instance of the class or a subclass, a value of exactly the struct or enum, or for a generic one of the same type
-  whatever its generic arguments. A generic class's and a protocol's members are not checked. A class's own members dispatch to an override as Swift calls
+  whatever its generic arguments (a call site keeps the class it last accepted, which it does not check again). A
+  generic class's and a protocol's members are not checked. A typed wrapper's member (`impl Todo { fn title(&self) }`)
+  is not checked when called: the wrapper was when made (by cast when it stands for another class). Declared
+  `unsafe fn` (`async unsafe fn`), a member is not checked either, its caller vouching for the receiver
+  (`unsafe { name(&object) }`); a receiver of another type is then undefined behavior. A property's read takes about
+  10 ns checked, 5.5 ns as a typed wrapper's or unchecked (`benches/calls.rs`). A class's own members dispatch to an override as Swift calls
   them (`#[swift]` and `#[swift_linked]`): through their dispatch thunks (`…Tj`) where the module has them (a
   library-evolution class, every Apple framework's, exports a non-final member only that way), else through the
   class's vtable, found by `swift_lookUpClassMethod` from the member's method descriptor (`…Tq`) for the receiver's

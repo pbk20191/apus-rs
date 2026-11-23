@@ -65,6 +65,11 @@ apus::swift! {
     fn heaviest(self: &SwiftValue) -> i64;
     #[swift_linked = "Res.Pair(struct)<A, B>.init(second: B) where A == Int", B = "Swift.String"]
     fn pair_of_string(second: &SwiftValue) -> SwiftValue;
+    /// `unsafe fn`: the receiver is not checked; the caller says it is an Animal.
+    #[swift_linked = "Res.Animal(class).name: String { get }"]
+    unsafe fn animal_name_unchecked(self: &SwiftObject) -> String;
+    #[swift_linked = "Res.Meter(struct).subscript(scale: Double) -> Double { get async throws }"]
+    async unsafe fn meter_scaled_unchecked(self: &SwiftValue, scale: f64) throws -> f64;
     #[swift_linked = "Res.Pair(struct)<A, B>.init(second: B) where A == Int", B = "[Res.Kept(class)]"]
     fn pair_of_kept(second: &SwiftValue) -> SwiftValue;
     #[swift_linked = "Res.makeKept() -> [Kept(class)]"]
@@ -261,7 +266,11 @@ fn receivers_are_checked() -> Result<(), Failed> {
     check(meter_value(&meter(2.5).unwrap()).unwrap() == 2.5, "a Meter")?;
     check(invalid(meter_value(&make_boom(1).unwrap()).map(|_| ())), "a Boom is not a Meter")?;
     check(count(&pear_tray(3).unwrap()).unwrap() == 3, "a Tray<String>")?;
-    check(invalid(count(&meter(1.0).unwrap()).map(|_| ())), "a Meter is not a Tray")
+    check(invalid(count(&meter(1.0).unwrap()).map(|_| ())), "a Meter is not a Tray")?;
+    // Declared `unsafe fn`: not checked, the caller having said what the receiver is.
+    check(unsafe { animal_name_unchecked(&dog("rex").unwrap()) }.unwrap() == "rex", "unchecked: a Dog")?;
+    let later = unsafe { meter_scaled_unchecked(&meter(1.5).unwrap(), 2.0) };
+    check(matches!(block(spawn(async move { later.await })).unwrap(), Ok(v) if v == 3.0), "unchecked, async")
 }
 
 /// Any Sequence, through its conformance: an Array of objects, element by element, then the end.

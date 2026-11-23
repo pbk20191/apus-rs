@@ -540,6 +540,13 @@ macro_rules! __swift_wrapper_value {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __swift_fn {
+    // `unsafe fn`: the receiver is not checked (the caller says what it is); marked in the bindings for `__swift_route!`.
+    ([$binding:ident $how:ident $spec:literal [$($bind:tt)*]] [$(#[$doc:meta])*] $vis:vis unsafe fn $($rest:tt)*) => {
+        $crate::__swift_fn! { [$binding $how $spec [unchecked $($bind)*]] [$(#[$doc])*] $vis fn $($rest)* }
+    };
+    ([$binding:ident $how:ident $spec:literal [$($bind:tt)*]] [$(#[$doc:meta])*] $vis:vis async unsafe fn $($rest:tt)*) => {
+        $crate::__swift_fn! { [$binding $how $spec [unchecked $($bind)*]] [$(#[$doc])*] $vis async fn $($rest)* }
+    };
     ([$binding:ident $how:ident $spec:literal $bind:tt] [$(#[$doc:meta])*]
      $vis:vis async fn $name:ident (&mut self $(, $arg:ident : $ty:ty)* $(,)?) $($throws:ident)? $(-> $ret:ty)? ; $($rest:tt)*) => {
         $crate::__swift_route! { $crate::__swift_item ; $binding $how async $bind [$(#[$doc])*] [$vis] $name [self : &mut Self] [$($arg : $ty),*] [$($throws)?] [$($ret)?] $spec }
@@ -597,9 +604,9 @@ macro_rules! __swift_fn {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __swift_item {
-    (runtime $how:ident async [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
+    (runtime $how:ident async [$(#[$doc:meta])*] [$vis:vis $($unsafety:ident)?] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
-        $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
+        $vis $($unsafety)? fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
             static FUNCTION: $crate::swift::SwiftAsyncFn = $crate::swift::SwiftAsyncFn::__dispatched($crate::__swift_symbol!($how $spec), $crate::__swift_thunk!($how $spec));
             let call = $crate::__swift_call!(FUNCTION [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::__bind($this, call, $crate::__swift_consumes_self!($how $spec));)?
@@ -607,9 +614,9 @@ macro_rules! __swift_item {
             call
         }
     };
-    (runtime $how:ident nonsending [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
+    (runtime $how:ident nonsending [$(#[$doc:meta])*] [$vis:vis $($unsafety:ident)?] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
-        $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
+        $vis $($unsafety)? fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
             static FUNCTION: $crate::swift::SwiftAsyncFn = $crate::swift::SwiftAsyncFn::__dispatched($crate::__swift_symbol!($how $spec), $crate::__swift_thunk!($how $spec));
             // The caller's isolation is the hidden first argument; closures are checked like any call's.
             let isolation = $crate::swift::Isolation::current();
@@ -619,9 +626,9 @@ macro_rules! __swift_item {
             call
         }
     };
-    (linked $how:ident async [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
+    (linked $how:ident async [$(#[$doc:meta])*] [$vis:vis $($unsafety:ident)?] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
-        $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
+        $vis $($unsafety)? fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
             extern "C" {
                 #[link_name = $crate::__swift_async_pointer!($how $spec)]
                 static POINTER: $crate::swift::AsyncFunctionPointer;
@@ -634,9 +641,9 @@ macro_rules! __swift_item {
             call
         }
     };
-    (linked $how:ident nonsending [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
+    (linked $how:ident nonsending [$(#[$doc:meta])*] [$vis:vis $($unsafety:ident)?] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
-        $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
+        $vis $($unsafety)? fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
             extern "C" {
                 #[link_name = $crate::__swift_async_pointer!($how $spec)]
                 static POINTER: $crate::swift::AsyncFunctionPointer;
@@ -653,9 +660,9 @@ macro_rules! __swift_item {
     };
     // `scalar`: a sync call of integers, `bool` and `f64` with a result in registers, no receiver and nothing generic
     // (the proc macro checks): made with no call record.
-    (runtime $how:ident scalar [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$(receiver $rthis:ident $rhow:ident $rname:literal)? $(typed [$($entry:tt)*])?] $spec:literal) => {
+    (runtime $how:ident scalar [$(#[$doc:meta])*] [$vis:vis $($unsafety:ident)?] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$(receiver $rthis:ident $rhow:ident $rname:literal)? $(typed [$($entry:tt)*])?] $spec:literal) => {
         $(#[$doc])*
-        $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
+        $vis $($unsafety)? fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
             static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::__dispatched($crate::__swift_symbol!($how $spec), $crate::__swift_thunk!($how $spec));
             $crate::__swift_scalar_receiver_check!($($rthis $rhow $rname)?);
             $(
@@ -670,9 +677,9 @@ macro_rules! __swift_item {
             FUNCTION.__call_scalar(this, ($($arg,)*), false $(|| $crate::__swift_throws!($throws))?, $crate::__swift_result_type!($how $spec))
         }
     };
-    (linked $how:ident scalar [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$(receiver $rthis:ident $rhow:ident $rname:literal)? $(typed [$($entry:tt)*])?] $spec:literal) => {
+    (linked $how:ident scalar [$(#[$doc:meta])*] [$vis:vis $($unsafety:ident)?] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$(receiver $rthis:ident $rhow:ident $rname:literal)? $(typed [$($entry:tt)*])?] $spec:literal) => {
         $(#[$doc])*
-        $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
+        $vis $($unsafety)? fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
             extern "C" {
                 #[link_name = $crate::__swift_symbol!($how $spec)]
                 static ENTRY: u8;
@@ -692,9 +699,9 @@ macro_rules! __swift_item {
             FUNCTION.__call_scalar(this, ($($arg,)*), false $(|| $crate::__swift_throws!($throws))?, $crate::__swift_result_type!($how $spec))
         }
     };
-    (runtime $how:ident sync [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
+    (runtime $how:ident sync [$(#[$doc:meta])*] [$vis:vis $($unsafety:ident)?] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
-        $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
+        $vis $($unsafety)? fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
             static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::__dispatched($crate::__swift_symbol!($how $spec), $crate::__swift_thunk!($how $spec));
             let now = FUNCTION.__now();
             let call = $crate::__swift_call!(now [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
@@ -703,9 +710,9 @@ macro_rules! __swift_item {
             call.invoke()
         }
     };
-    (linked $how:ident sync [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
+    (linked $how:ident sync [$(#[$doc:meta])*] [$vis:vis $($unsafety:ident)?] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
-        $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
+        $vis $($unsafety)? fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
             extern "C" {
                 #[link_name = $crate::__swift_symbol!($how $spec)]
                 static ENTRY: u8;
@@ -720,9 +727,9 @@ macro_rules! __swift_item {
             call.invoke()
         }
     };
-    (runtime $how:ident hop $target:ident [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
+    (runtime $how:ident hop $target:ident [$(#[$doc:meta])*] [$vis:vis $($unsafety:ident)?] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
-        $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
+        $vis $($unsafety)? fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
             static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::__dispatched($crate::__swift_symbol!($how $spec), $crate::__swift_thunk!($how $spec));
             let call = $crate::__swift_call!(FUNCTION [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::__bind_sync($this, call, $crate::__swift_consumes_self!($how $spec));)?
@@ -730,9 +737,9 @@ macro_rules! __swift_item {
             call.hop($crate::swift::HopTo::$target)
         }
     };
-    (linked $how:ident hop $target:ident [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
+    (linked $how:ident hop $target:ident [$(#[$doc:meta])*] [$vis:vis $($unsafety:ident)?] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
-        $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
+        $vis $($unsafety)? fn $name($($this: $receiver,)? $($arg: $ty),*) -> $crate::swift::SwiftCall<$crate::__swift_ret!($($ret)?)> {
             extern "C" {
                 #[link_name = $crate::__swift_symbol!($how $spec)]
                 static ENTRY: u8;

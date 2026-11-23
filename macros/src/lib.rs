@@ -393,9 +393,15 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     let [TokenTree::Ident(binding), TokenTree::Ident(how), TokenTree::Ident(asyncness), TokenTree::Group(bindings), tail @ ..] = rest else {
         return item_compile_error("__swift_route: expected `binding how async|sync [bindings] …`");
     };
+    // `unchecked` first: declared `unsafe fn`, whose receiver is not checked (the caller says what it is).
+    let mut binding_tokens = flatten(bindings.stream());
+    let unchecked = matches!(binding_tokens.first(), Some(TokenTree::Ident(i)) if i.to_string() == "unchecked");
+    if unchecked {
+        binding_tokens.remove(0);
+    }
     // `T = "Module.Type(kind)"` after the declaration: generic parameters bound to concrete types.
     let mut bound: Vec<(String, String)> = Vec::new();
-    for item in flatten(bindings.stream()).split(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')) {
+    for item in binding_tokens.split(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')) {
         match item {
             [] => {}
             [TokenTree::Ident(name), TokenTree::Punct(eq), ty] if eq.as_char() == '=' && string_literal(ty).is_some() => {
@@ -957,7 +963,7 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     }
     // A type-erased receiver (`SwiftObject`, `SwiftValue`) is checked against the declaration's type when the call is
     // made: `receiver this instance|exactly|named "name"`, outermost.
-    if let (Some((_, parsed)), Some(ty), Some(this)) = (&declared, &receiver, rust_receiver_name(tail)) {
+    if let (false, Some((_, parsed)), Some(ty), Some(this)) = (unchecked, &declared, &receiver, rust_receiver_name(tail)) {
         let erased = matches!(ty.rsplit([':', ' ', '&']).next(), Some("SwiftObject" | "SwiftValue"));
         let check = concrete.as_ref().map_or_else(|| parsed.receiver_check(), |plan| plan.receiver.clone());
         if let (true, Some(check)) = (erased, check) {
@@ -1109,7 +1115,29 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     let mut body: Vec<TokenTree> = vec![TokenTree::Ident(binding.clone()), TokenTree::Ident(how.clone())];
     body.extend(kind.parse::<TokenStream>().expect("kind tokens"));
     let (spec, before) = tail.split_last().expect("a declaration");
-    body.extend(before.iter().cloned());
+    // Declared `unsafe fn`: so generated, its docs saying what the caller vouches for.
+    let mut groups = 0;
+    for token in before {
+        match token {
+            TokenTree::Group(group) if unchecked && group.delimiter() == Delimiter::Bracket && groups < 2 => {
+                let mut stream = group.stream();
+                stream.extend(if groups == 0 {
+                    "#[doc = \"\n\n# Safety\n\nThe receiver must be of the declaration's type: declared `unsafe fn`, it is not checked.\"]"
+                        .parse::<TokenStream>()
+                        .expect("doc tokens")
+                } else {
+                    "unsafe".parse::<TokenStream>().expect("unsafe")
+                });
+                groups += 1;
+                body.push(TokenTree::Group(Group::new(Delimiter::Bracket, stream)));
+            }
+            TokenTree::Group(group) if group.delimiter() == Delimiter::Bracket => {
+                groups += 1;
+                body.push(token.clone());
+            }
+            _ => body.push(token.clone()),
+        }
+    }
     body.push(TokenTree::Group(Group::new(Delimiter::Bracket, generic)));
     body.push(spec.clone());
     let mut out: Vec<TokenTree> = path.to_vec();

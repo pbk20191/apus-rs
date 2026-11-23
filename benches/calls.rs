@@ -36,6 +36,8 @@ apus::swift! {
     fn boxed(b: &SwiftObject) -> i64;
     #[swift_linked = "Res.BenchBox(class).n: Int { get }"]
     fn box_n(self: &SwiftObject) -> i64;
+    #[swift_linked = "Res.BenchBox(class).n: Int { get }"]
+    unsafe fn box_n_unchecked(self: &SwiftObject) -> i64;
     #[swift_linked = "Res.benchLoopBoxed(_: Int) -> Int"]
     fn loop_boxed(n: i64) -> i64;
     #[swift_linked = "Res.benchMax<T: Comparable>(_: T, _: T) -> T", T = "Swift.Int"]
@@ -175,6 +177,13 @@ fn main() {
         }
     });
     report("  (a property of it: self)", rust, swift);
+
+    let rust = ns_per_call(N, |n| {
+        for _ in 0..n {
+            black_box(unsafe { box_n_unchecked(black_box(&object)) }.unwrap());
+        }
+    });
+    report("  (the same, unsafe fn: unchecked)", rust, swift);
 
     let wrapped = BenchBox::try_from(make_box(1).unwrap()).unwrap();
     let rust = ns_per_call(N, |n| {
