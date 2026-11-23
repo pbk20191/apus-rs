@@ -11,6 +11,7 @@ mod func;
 mod isolation;
 mod generic;
 mod join;
+mod lock;
 mod macros;
 pub(crate) mod rt;
 mod selfcheck;

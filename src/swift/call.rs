@@ -20,6 +20,7 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicPtr, Ordering::SeqCst};
+use super::lock::Lock;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
@@ -287,15 +288,15 @@ pub(crate) struct CallShared {
     /// Whether the callee is `throws`: only then is the error register meaningful.
     throws: bool,
     /// Locked only when the call starts (pending hand-overs) and while it is configured.
-    owned: Mutex<Vec<Owned>>,
+    owned: Lock<Vec<Owned>>,
     /// The generic arguments passed, for an opaque result's type (see `IndirectSlot::resolve`).
     generic_args: Vec<*const c_void>,
     /// The first integer register holds the result's address.
     indirect_result: bool,
     /// Drops a finished result nobody will read (monomorphized for the call's result type).
     discard: unsafe fn(&CallShared),
-    state: Mutex<CallState>,
-    waker: Mutex<Option<Waker>>,
+    state: Lock<CallState>,
+    waker: Lock<Option<Waker>>,
     child: AtomicPtr<c_void>, // +1 child AsyncTask when run as a child
     /// A sync call that hops to another executor (`function` null otherwise); `indirect` is filled when it runs.
     pub(crate) hop: apus_sys::HopCall,
@@ -321,12 +322,12 @@ impl CallShared {
             indirect: UnsafeCell::new(slot),
             typed_error: UnsafeCell::new(typed_error),
             throws: false,
-            owned: Mutex::new(lowering.owned),
+            owned: Lock::new(lowering.owned),
             generic_args: lowering.generic_args,
             indirect_result: indirect,
             discard: discard_as::<R>,
-            state: Mutex::new(CallState::Registered),
-            waker: Mutex::new(None),
+            state: Lock::new(CallState::Registered),
+            waker: Lock::new(None),
             child: AtomicPtr::default(),
             force_child: false,
             next_int,
@@ -375,17 +376,17 @@ pub(crate) fn take_registered(t: &task::Task, same_task: bool) -> Option<Arc<Cal
 
 fn take_registered_from(calls: &Mutex<Vec<Arc<CallShared>>>, same_task: bool, notified: bool) -> Option<Arc<CallShared>> {
     let mut calls = calls.lock().unwrap();
-    calls.retain(|c| matches!(*c.state.lock().unwrap(), CallState::Registered));
+    calls.retain(|c| matches!(*c.state.lock(), CallState::Registered));
     if same_task && !(calls.len() == 1 && !calls[0].force_child && !notified) {
         return None;
     }
     // Check and transition under the call's own lock: a future dropped meanwhile (Abandoned) is skipped.
     while let Some(call) = calls.pop() {
-        let mut state = call.state.lock().unwrap();
+        let mut state = call.state.lock();
         if matches!(*state, CallState::Registered) {
             *state = CallState::Running;
             drop(state);
-            start_all(&mut call.owned.lock().unwrap());
+            start_all(&mut call.owned.lock());
             return Some(call);
         }
     }
@@ -465,7 +466,7 @@ extern "C" fn rs_set_child(record: *const c_void, child: *mut c_void) {
 #[export_name = apus_sys::boundary_name!(rs_call_done)]
 extern "C" fn rs_call_done(record: *const c_void) {
     let call = unsafe { Arc::from_raw(record as *const CallShared) };
-    let mut state = call.state.lock().unwrap();
+    let mut state = call.state.lock();
     if matches!(*state, CallState::Abandoned) {
         drop(state);
         unsafe { (call.discard)(&call) }; // nobody will read it
@@ -473,7 +474,7 @@ extern "C" fn rs_call_done(record: *const c_void) {
     }
     *state = CallState::Done;
     drop(state);
-    let waker = call.waker.lock().unwrap().take();
+    let waker = call.waker.lock().take();
     if let Some(w) = waker {
         w.wake();
     }
@@ -520,11 +521,11 @@ impl<R> SwiftCall<R> {
     }
 
     pub(crate) fn owned_count(&mut self) -> usize {
-        self.configure().owned.get_mut().unwrap().len()
+        self.configure().owned.get_mut().len()
     }
 
     pub(crate) fn hand_over_owned(&mut self, start: usize) {
-        super::func::hand_over(self.configure().owned.get_mut().unwrap(), start);
+        super::func::hand_over(self.configure().owned.get_mut(), start);
     }
 
     fn configure(&mut self) -> &mut CallShared {
@@ -542,7 +543,7 @@ impl<R> SwiftCall<R> {
     pub fn on(mut self, object: &super::SwiftObject) -> Self {
         let call = self.configure();
         call.regs.get_mut().self_ = object.as_ptr();
-        call.owned.get_mut().unwrap().push(Owned::Object(unsafe { rt::swift_unknownObjectRetain(object.as_ptr()) }));
+        call.owned.get_mut().push(Owned::Object(unsafe { rt::swift_unknownObjectRetain(object.as_ptr()) }));
         self
     }
 
@@ -567,7 +568,7 @@ impl<R> SwiftCall<R> {
         regs.gpr[call.next_int + 1] = opened.witness().0 as u64;
         call.generic_args.extend([opened.ty().as_ptr(), opened.witness().0]);
         call.next_int += 2;
-        call.owned.get_mut().unwrap().push(Owned::Value(copy));
+        call.owned.get_mut().push(Owned::Value(copy));
         self
     }
 
@@ -593,7 +594,7 @@ impl<R> SwiftCall<R> {
         let copy = value.clone();
         let call = self.configure();
         call.regs.get_mut().self_ = copy.as_ptr();
-        call.owned.get_mut().unwrap().push(Owned::Value(copy));
+        call.owned.get_mut().push(Owned::Value(copy));
         self
     }
 
@@ -601,7 +602,7 @@ impl<R> SwiftCall<R> {
     pub(crate) fn on_inout(mut self, address: *mut c_void, keep_alive: Arc<dyn std::any::Any + Send + Sync>) -> Self {
         let call = self.configure();
         call.regs.get_mut().self_ = address;
-        call.owned.get_mut().unwrap().push(Owned::Shared(keep_alive));
+        call.owned.get_mut().push(Owned::Shared(keep_alive));
         self
     }
 
@@ -637,15 +638,15 @@ impl<R: SwiftRet> Future for SwiftCall<R> {
             return Poll::Ready(Err(error));
         }
         {
-            let mut state = self.shared.state.lock().unwrap();
+            let mut state = self.shared.state.lock();
             if matches!(*state, CallState::Done) {
                 *state = CallState::Taken;
                 drop(state);
                 return Poll::Ready(unsafe { self.shared.take_result::<R>() });
             }
         }
-        *self.shared.waker.lock().unwrap() = Some(cx.waker().clone());
-        if self.registered && !matches!(*self.shared.state.lock().unwrap(), CallState::Registered) {
+        *self.shared.waker.lock() = Some(cx.waker().clone());
+        if self.registered && !matches!(*self.shared.state.lock(), CallState::Registered) {
             return Poll::Pending; // running: the waker above hears when it is done
         }
         let Some(t) = task::current() else { return Poll::Ready(Err(CallError::NoCurrentTask)) };
@@ -683,7 +684,7 @@ impl<R: SwiftRet> Future for SwiftCall<R> {
 
 impl<R> Drop for SwiftCall<R> {
     fn drop(&mut self) {
-        let mut state = self.shared.state.lock().unwrap();
+        let mut state = self.shared.state.lock();
         match *state {
             CallState::Running => {
                 *state = CallState::Abandoned;
@@ -728,7 +729,7 @@ mod tests {
     }
 
     fn revive(call: &CallShared) {
-        *call.state.lock().unwrap() = CallState::Registered; // …so tests put it back
+        *call.state.lock() = CallState::Registered; // …so tests put it back
     }
 
     /// spawn_child calls rs_set_child after creating the child, and the child may already have finished
