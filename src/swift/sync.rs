@@ -186,6 +186,29 @@ impl ScalarArg for &super::SwiftString {
     }
 }
 
+/// A receiver borrowed for a call made right away, passed as it is in the `self` register: a class instance's
+/// reference, or the address of a value passed by address. Neither is retained or copied: the caller's borrow keeps
+/// it, and a borrowed `self` the callee may neither change nor keep (`mutating` and `consuming` members take the
+/// general path, which `swift!` sends them on).
+#[doc(hidden)]
+pub trait ScalarReceiver {
+    fn receiver(self) -> *mut c_void;
+}
+
+impl ScalarReceiver for &SwiftObject {
+    #[inline]
+    fn receiver(self) -> *mut c_void {
+        self.as_ptr()
+    }
+}
+
+impl ScalarReceiver for &SwiftValue {
+    #[inline]
+    fn receiver(self) -> *mut c_void {
+        self.as_ptr()
+    }
+}
+
 macro_rules! scalar_args {
     ($($($a:ident)*;)*) => {$(
         impl<$($a: ScalarArg),*> ScalarArgs for ($($a,)*) {
@@ -217,9 +240,16 @@ impl SwiftFn {
     /// such a call (the same lowering as the general path, which keeps what other arguments need).
     #[doc(hidden)]
     #[inline]
-    pub fn __call_scalar<R: SwiftRet>(&'static self, args: impl ScalarArgs, throws: bool, result_type: super::func::DeclaredResult) -> Result<R, CallError> {
-        let function = self.resolve().ok_or(CallError::Unavailable(self.symbol))?.entry(std::ptr::null_mut())?;
-        let mut regs = apus_sys::CallRegs { gpr: [0; 8], fpr: [0.0; 8], self_: std::ptr::null_mut(), isolation: -1 };
+    pub fn __call_scalar<R: SwiftRet>(
+        &'static self,
+        this: *mut c_void,
+        args: impl ScalarArgs,
+        throws: bool,
+        result_type: super::func::DeclaredResult,
+    ) -> Result<R, CallError> {
+        // `this`: the receiver, borrowed (null without one); a class's member is looked up in its vtable through it.
+        let function = self.resolve().ok_or(CallError::Unavailable(self.symbol))?.entry(this)?;
+        let mut regs = apus_sys::CallRegs { gpr: [0; 8], fpr: [0.0; 8], self_: this, isolation: -1 };
         if !args.put(&mut regs) {
             return Err(CallError::InvalidArgument("too many arguments for the argument registers"));
         }

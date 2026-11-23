@@ -1062,9 +1062,22 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             || matches!(bare(&t).as_str(), "SwiftObject" | "SwiftString" | "SwiftValue" | "DirectValue")
             || t.strip_prefix("Option<").and_then(|t| t.strip_suffix('>')).is_some_and(|t| bare(t) == "SwiftObject")
     };
+    // A receiver too: a borrowed `&SwiftObject` or `&SwiftValue` that the member does not consume, whose check is all
+    // the generic tokens hold (`receiver this Instance "…"`).
+    let receiver_ok = match rust_receiver(tail) {
+        None => generic.is_empty(),
+        Some(ty) => {
+            let ty = ty.replace(' ', "");
+            let borrowed = ty.strip_prefix('&').is_some_and(|t| !t.starts_with("mut") && matches!(bare(t).as_str(), "SwiftObject" | "SwiftValue"));
+            let consumes = declared.as_ref().is_none_or(|(_, parsed)| parsed.consumes_self());
+            let tokens: Vec<TokenTree> = generic.clone().into_iter().collect();
+            let check_only = tokens.is_empty()
+                || (tokens.len() == 4 && matches!(&tokens[0], TokenTree::Ident(i) if i.to_string() == "receiver"));
+            borrowed && !consumes && check_only
+        }
+    };
     let kind = if kind == "sync"
-        && generic.is_empty()
-        && rust_receiver(tail).is_none()
+        && receiver_ok
         && rust_argument_types(tail).iter().all(|t| scalar(t))
         && in_registers(&rust_return(tail))
     {

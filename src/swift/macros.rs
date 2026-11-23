@@ -510,8 +510,9 @@ macro_rules! __swift_typed {
     ($checked:ident (value $who:ident ($($t:tt)*) $mangled:literal $name:literal $class:literal)) => {
         if const { $crate::swift::__expect_wrapper::<$($t)*>($mangled, $name, $class, true) } {
             static EXPECTED: ::std::sync::OnceLock<::core::option::Option<$crate::swift::SwiftType>> = ::std::sync::OnceLock::new();
+            static ACCEPTED: ::std::sync::atomic::AtomicPtr<::core::ffi::c_void> = ::std::sync::atomic::AtomicPtr::new(::core::ptr::null_mut());
             if $checked.is_ok() {
-                $checked = $crate::swift::__check_wrapper::<$($t)*>(&*$who, &EXPECTED, $mangled);
+                $checked = $crate::swift::__check_wrapper::<$($t)*>(&*$who, &EXPECTED, &ACCEPTED, $mangled);
             }
         }
     };
@@ -652,23 +653,27 @@ macro_rules! __swift_item {
     };
     // `scalar`: a sync call of integers, `bool` and `f64` with a result in registers, no receiver and nothing generic
     // (the proc macro checks): made with no call record.
-    (runtime $how:ident scalar [$(#[$doc:meta])*] [$vis:vis] $name:ident [] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [] $spec:literal) => {
+    (runtime $how:ident scalar [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$(receiver $rthis:ident $rhow:ident $rname:literal)?] $spec:literal) => {
         $(#[$doc])*
-        $vis fn $name($($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
+        $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
             static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::__dispatched($crate::__swift_symbol!($how $spec), $crate::__swift_thunk!($how $spec));
-            FUNCTION.__call_scalar(($($arg,)*), false $(|| $crate::__swift_throws!($throws))?, $crate::__swift_result_type!($how $spec))
+            $crate::__swift_scalar_receiver_check!($($rthis $rhow $rname)?);
+            let this = $crate::__swift_scalar_self!($($this)?);
+            FUNCTION.__call_scalar(this, ($($arg,)*), false $(|| $crate::__swift_throws!($throws))?, $crate::__swift_result_type!($how $spec))
         }
     };
-    (linked $how:ident scalar [$(#[$doc:meta])*] [$vis:vis] $name:ident [] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [] $spec:literal) => {
+    (linked $how:ident scalar [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$(receiver $rthis:ident $rhow:ident $rname:literal)?] $spec:literal) => {
         $(#[$doc])*
-        $vis fn $name($($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
+        $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
             extern "C" {
                 #[link_name = $crate::__swift_symbol!($how $spec)]
                 static ENTRY: u8;
             }
             static FUNCTION: $crate::swift::SwiftFn =
                 unsafe { $crate::swift::SwiftFn::__linked(&raw const ENTRY as *const ::core::ffi::c_void, $crate::__swift_thunk!($how $spec)) };
-            FUNCTION.__call_scalar(($($arg,)*), false $(|| $crate::__swift_throws!($throws))?, $crate::__swift_result_type!($how $spec))
+            $crate::__swift_scalar_receiver_check!($($rthis $rhow $rname)?);
+            let this = $crate::__swift_scalar_self!($($this)?);
+            FUNCTION.__call_scalar(this, ($($arg,)*), false $(|| $crate::__swift_throws!($throws))?, $crate::__swift_result_type!($how $spec))
         }
     };
     (runtime $how:ident sync [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
@@ -797,7 +802,8 @@ macro_rules! __swift_call {
     // (see `ReceiverKind`) before the call is made.
     ($function:ident [$($arg:ident),*] [receiver $this:ident $how:ident $name:literal $($generic:tt)*] $declared:expr) => {{
         static EXPECTED: ::std::sync::OnceLock<::core::option::Option<$crate::swift::SwiftType>> = ::std::sync::OnceLock::new();
-        let checked = $crate::swift::__check_receiver(&*$this, $crate::swift::ReceiverKind::$how, &EXPECTED, $name);
+        static ACCEPTED: ::std::sync::atomic::AtomicPtr<::core::ffi::c_void> = ::std::sync::atomic::AtomicPtr::new(::core::ptr::null_mut());
+        let checked = $crate::swift::__check_receiver(&*$this, $crate::swift::ReceiverKind::$how, &EXPECTED, &ACCEPTED, $name);
         let call = $crate::__swift_call!($function [$($arg),*] [$($generic)*] $declared);
         $crate::swift::CheckedCall::checked(call, checked)
     }};
@@ -930,6 +936,31 @@ macro_rules! __swift_async_pointer {
 macro_rules! __swift_ret {
     () => { () };
     ($ret:ty) => { $ret };
+}
+
+/// The scalar path's receiver check: as the general path's (`receiver this Instance|Exactly|Named "name"`), returning
+/// the mismatch.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __swift_scalar_receiver_check {
+    () => {};
+    ($this:ident $how:ident $name:literal) => {
+        static EXPECTED: ::std::sync::OnceLock<::core::option::Option<$crate::swift::SwiftType>> = ::std::sync::OnceLock::new();
+        static ACCEPTED: ::std::sync::atomic::AtomicPtr<::core::ffi::c_void> = ::std::sync::atomic::AtomicPtr::new(::core::ptr::null_mut());
+        $crate::swift::__check_receiver(&*$this, $crate::swift::ReceiverKind::$how, &EXPECTED, &ACCEPTED, $name)?
+    };
+}
+
+/// The scalar path's `self`: the receiver's pointer, or null.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __swift_scalar_self {
+    () => {
+        ::core::ptr::null_mut()
+    };
+    ($this:ident) => {
+        $crate::swift::ScalarReceiver::receiver($this)
+    };
 }
 
 #[doc(hidden)]

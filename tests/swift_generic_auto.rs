@@ -253,6 +253,11 @@ fn receivers_are_checked() -> Result<(), Failed> {
     let invalid = |r: Result<_, CallError>| matches!(r, Err(CallError::InvalidArgument(_)));
     check(animal_name(&dog("rex").unwrap()).unwrap() == "rex", "a Dog is an Animal")?;
     check(invalid(animal_name(&minted(1).unwrap()).map(|_| ())), "a Minted is not an Animal")?;
+    // A call site keeps the class it last accepted, and only that: a refused one is refused again, another one is
+    // checked in full, the first still accepted.
+    check(invalid(animal_name(&minted(3).unwrap()).map(|_| ())), "nor is another Minted")?;
+    check(animal_name(&dog("fido").unwrap()).unwrap() == "fido", "a Dog again")?;
+    check(invalid(animal_name(&minted(2).unwrap()).map(|_| ())), "a Minted again")?;
     check(meter_value(&meter(2.5).unwrap()).unwrap() == 2.5, "a Meter")?;
     check(invalid(meter_value(&make_boom(1).unwrap()).map(|_| ())), "a Boom is not a Meter")?;
     check(count(&pear_tray(3).unwrap()).unwrap() == 3, "a Tray<String>")?;

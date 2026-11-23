@@ -67,6 +67,14 @@
   - 82.6 → 56.9 ns. 남은 비용은 결과 상자 할당과 일반 경로다.
   - async 규칙은 테스트(`stack_values_for_bound_generics`)가 지킨다. 원래 스택을 덮어쓴 뒤 확인하며, 규칙을 빼면 실패한다.
 
+- **receiver가 있는 sync 호출도 스칼라 경로로 (2026-11-23):**
+  - `self: &SwiftObject`(클래스 인스턴스)와 `self: &SwiftValue`(주소로 넘기는 값)를 `self` 레지스터에 그대로 넣는다. retain도 복사도 하지 않는다.
+  - 바로 실행되는 호출이라 Rust의 빌림이 `self`를 살려 두고, 빌린 `self`는 callee가 바꾸거나 가져갈 수 없다. `consuming`/`mutating` 멤버는 일반 경로로 간다.
+  - 클래스 멤버의 vtable 디스패치는 그 `self`로 그대로 한다.
+  - receiver 타입 검사는 유지한다. 대신 호출 지점마다 마지막으로 통과한 클래스(metadata, 유일함)를 기억해서, 같은 클래스면 전체 cast를 건너뛴다.
+  - 클래스 프로퍼티 67.8 → 9.6 ns, 값 프로퍼티 70.5 → 6.1 ns.
+  - 테스트 `receivers_are_checked`: 거절된 클래스가 기억되면 SIGSEGV로 실패한다.
+
 ## 남은 비용
 
 **sync `Int` 호출 (약 19 ns):**

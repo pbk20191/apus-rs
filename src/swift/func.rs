@@ -13,6 +13,7 @@ use super::value::{IntoSwift, SwiftType, SwiftValue, UninitValue, WitnessTable};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicPtr, Ordering::Relaxed};
 use std::sync::OnceLock;
 
 /// Integer argument registers of the platform's Swift calling convention.
@@ -564,6 +565,7 @@ pub fn __check_receiver<R: ErasedReceiver + ?Sized>(
     receiver: &R,
     kind: ReceiverKind,
     expected: &'static OnceLock<Option<SwiftType>>,
+    accepted: &'static AtomicPtr<c_void>,
     name: &'static str,
 ) -> Result<(), CallError> {
     let mismatch = Err(CallError::InvalidArgument("the receiver is not of the declaration's type"));
@@ -571,10 +573,17 @@ pub fn __check_receiver<R: ErasedReceiver + ?Sized>(
     match kind {
         ReceiverKind::Instance => {
             let Some(object) = receiver.erased_object() else { return mismatch };
+            // `accepted`: the class (metadata, which is unique) of the last instance found to be one; another's is
+            // cast in full (swift_getObjectType, swift_dynamicCastUnknownClass: include/swift/Runtime/Casting.h).
+            let class_of = unsafe { super::rt::swift_getObjectType(object) } as *mut c_void;
+            if class_of == accepted.load(Relaxed) {
+                return Ok(());
+            }
             let class = declared()?;
             if unsafe { super::rt::swift_dynamicCastUnknownClass(object, class.as_ptr()) }.is_null() {
                 return mismatch;
             }
+            accepted.store(class_of, Relaxed);
         }
         ReceiverKind::Exactly => {
             if receiver.erased_type() != Some(declared()?) {

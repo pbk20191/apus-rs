@@ -153,9 +153,10 @@ pub const fn __expect_wrapper<W: SwiftWrapper>(mangled: &str, name: &str, class:
 pub fn __check_wrapper<W: SwiftWrapper>(
     wrapper: &W,
     expected: &'static std::sync::OnceLock<Option<SwiftType>>,
+    accepted: &'static std::sync::atomic::AtomicPtr<std::ffi::c_void>,
     mangled: &'static str,
 ) -> Result<(), CallError> {
-    super::func::__check_receiver(wrapper.erased(), super::func::ReceiverKind::Instance, expected, mangled)
+    super::func::__check_receiver(wrapper.erased(), super::func::ReceiverKind::Instance, expected, accepted, mangled)
 }
 
 const fn same_str(a: &str, b: &str) -> bool {

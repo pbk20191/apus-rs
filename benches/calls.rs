@@ -16,6 +16,8 @@ apus::swift! {
     fn length(s: &str) -> i64;
     #[swift_linked = "Res.benchLength(_: String) -> Int"]
     fn length_of(s: &SwiftString) -> i64;
+    #[swift_linked = "Res.BenchPoint(struct).y: Double { get }"]
+    fn point_y(self: &SwiftValue) -> f64;
     #[swift_linked = "Res.benchPoint(_: Double) -> BenchPoint(struct)"]
     fn point(x: f64) -> SwiftValue;
     #[swift_linked = "Res.benchMax<T: Comparable>(_: T, _: T) -> T", T = "Swift.Int"]
@@ -24,6 +26,8 @@ apus::swift! {
     fn make_box(n: i64) -> SwiftObject;
     #[swift_linked = "Res.benchBoxed(_: BenchBox(class)) -> Int"]
     fn boxed(b: &SwiftObject) -> i64;
+    #[swift_linked = "Res.BenchBox(class).n: Int { get }"]
+    fn box_n(self: &SwiftObject) -> i64;
     #[swift_linked = "Res.benchLoopBoxed(_: Int) -> Int"]
     fn loop_boxed(n: i64) -> i64;
     #[swift_linked = "Res.benchMax<T: Comparable>(_: T, _: T) -> T", T = "Swift.Int"]
@@ -158,12 +162,27 @@ fn main() {
     report("class instance -> Int", rust, swift);
 
     let rust = ns_per_call(N, |n| {
+        for _ in 0..n {
+            black_box(box_n(black_box(&object)).unwrap());
+        }
+    });
+    report("  (a property of it: self)", rust, swift);
+
+    let rust = ns_per_call(N, |n| {
         for i in 0..n {
             black_box(point(i as f64).unwrap());
         }
     });
     let swift = ns_per_call(N, |n| _ = black_box(loop_point(n as i64).unwrap()));
     report("Double -> resilient struct (SwiftValue)", rust, swift);
+
+    let value = point(1.0).unwrap();
+    let rust = ns_per_call(N, |n| {
+        for _ in 0..n {
+            black_box(point_y(black_box(&value)).unwrap());
+        }
+    });
+    report("  (a property of one: self)", rust, swift);
 
     let rust = ns_per_call(N, |n| {
         for i in 0..n {
