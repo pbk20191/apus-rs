@@ -90,6 +90,8 @@ fn declaring_module<'m>(
     if !found.is_empty() {
         return (name, module, found);
     }
+    // Loaded together: SwiftUI's `Text` is in the last of the modules it re-exports.
+    graphs::graphs().prefetch(graphs::reexports(name).iter().map(String::as_str).filter(|m| *m != name));
     for other in graphs::reexports(name).iter().filter(|m| m.as_str() != name) {
         if let Some(graph) = graphs::graphs().module(other) {
             let found: Vec<&Symbol> = graph.find(path).filter(&wanted).collect();

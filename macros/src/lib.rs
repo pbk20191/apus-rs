@@ -233,6 +233,11 @@ pub fn __swift_items(input: TokenStream) -> TokenStream {
         return compile_error("__swift_items: expected `PATH ; items…`");
     };
     let (path, items) = (&tokens[..at], &tokens[at + 1..]);
+    // The modules the block's declarations name, loaded on threads of their own from now on: a graph not yet cached
+    // is extracted while the others are, rather than when its first declaration expands.
+    let mut names = Vec::new();
+    declared_modules(items, &mut names);
+    graphs::graphs().prefetch(names.iter().map(String::as_str));
     let mut out: Vec<TokenTree> = Vec::new();
     let mut emit = |item: &mut Vec<TokenTree>| {
         if item.is_empty() {
@@ -265,6 +270,79 @@ pub fn __swift_items(input: TokenStream) -> TokenStream {
     }
     emit(&mut item);
     out.into_iter().collect()
+}
+
+/// The modules the declarations among `tokens` name: those of `#[swift = "…"]`/`#[swift_linked = "…"]` and of a
+/// typed wrapper's `= "…"` (the first segment of the declaration's path, and an extension's `(extension in M)`).
+fn declared_modules(tokens: &[TokenTree], into: &mut Vec<String>) {
+    let literal_text = |t: &TokenTree| match t {
+        TokenTree::Literal(l) => l.to_string().strip_prefix('"').and_then(|s| s.strip_suffix('"')).map(str::to_string),
+        _ => None,
+    };
+    for (i, token) in tokens.iter().enumerate() {
+        let text = match token {
+            // `#[swift = "…", …]`
+            TokenTree::Group(group) if group.delimiter() == Delimiter::Bracket => {
+                let inner: Vec<TokenTree> = flatten(group.stream());
+                match (inner.first(), inner.get(2)) {
+                    (Some(TokenTree::Ident(name)), Some(spec)) if matches!(name.to_string().as_str(), "swift" | "swift_linked") => literal_text(spec),
+                    _ => None,
+                }
+            }
+            // `class Todo = "…";`
+            TokenTree::Punct(p) if p.as_char() == '=' && i >= 2 && matches!(&tokens[i - 2], TokenTree::Ident(k) if matches!(k.to_string().as_str(), "class" | "struct" | "enum")) => {
+                tokens.get(i + 1).and_then(literal_text)
+            }
+            TokenTree::Group(group) if group.delimiter() == Delimiter::Brace => {
+                declared_modules(&flatten(group.stream()), into);
+                None
+            }
+            _ => None,
+        };
+        for module in text.as_deref().map(modules_of).unwrap_or_default() {
+            if !into.contains(&module) {
+                into.push(module);
+            }
+        }
+    }
+}
+
+/// The modules a declaration's text names first: an extension's (`(extension in M …)`) and its path's first segment,
+/// past modifiers and attributes (`static`, `@MainActor`, `nonisolated(nonsending)`).
+fn modules_of(text: &str) -> Vec<String> {
+    let identifier = |s: &str| s.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect::<String>();
+    let mut modules = Vec::new();
+    let mut rest = text.trim_start();
+    loop {
+        if let Some(after) = rest.strip_prefix("(extension in ") {
+            let module = identifier(after);
+            if !module.is_empty() {
+                modules.push(module);
+            }
+            // Past the extension's closing parenthesis.
+            let mut depth = 1;
+            let Some(end) = after.char_indices().find_map(|(i, c)| {
+                depth += match c { '(' => 1, ')' => -1, _ => 0 };
+                (depth == 0).then_some(i)
+            }) else { break };
+            rest = after[end + 1..].trim_start();
+            continue;
+        }
+        let word = rest.split_whitespace().next().unwrap_or("");
+        let modifier = word.starts_with('@')
+            || word.starts_with("nonisolated")
+            || matches!(word, "static" | "class" | "mutating" | "nonmutating" | "consuming" | "borrowing" | "case" | "prefix" | "postfix" | "infix");
+        if modifier && !word.is_empty() {
+            rest = rest[word.len()..].trim_start();
+            continue;
+        }
+        let module = identifier(rest);
+        if !module.is_empty() && rest[module.len()..].starts_with('.') {
+            modules.push(module);
+        }
+        break;
+    }
+    modules
 }
 
 /// Picks how `swift!` calls a declaration, then expands `PATH! { binding how KIND rest… }`. Input:
@@ -1201,5 +1279,18 @@ pub fn __call_symbol(input: TokenStream) -> TokenStream {
     match apus_mangle::call_symbol(&declaration) {
         Ok(symbol) => TokenTree::Literal(Literal::string(&format!("{symbol}{suffix}"))).into(),
         Err(error) => compile_error(&format!("cannot mangle `{declaration}`: {error}")),
+    }
+}
+
+#[cfg(test)]
+mod prefetch_tests {
+    /// The modules a declaration names first, for loading them ahead.
+    #[test]
+    fn modules_of_declarations() {
+        assert_eq!(super::modules_of("StoreKit.Product.displayName { get }"), ["StoreKit"]);
+        assert_eq!(super::modules_of("static @MainActor SwiftUI.Text(struct).init(verbatim: String)"), ["SwiftUI"]);
+        assert_eq!(super::modules_of("nonisolated(nonsending) Probe.f() async"), ["Probe"]);
+        assert_eq!(super::modules_of("(extension in Foundation where T: P) Swift.Array(struct)<T>.f()"), ["Foundation", "Swift"]);
+        assert!(super::modules_of("f()").is_empty());
     }
 }

@@ -4,7 +4,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::ffi::c_void;
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Fragment {
@@ -89,10 +90,22 @@ impl Module {
 }
 
 pub struct Graphs {
-    modules: Mutex<HashMap<String, Option<&'static Module>>>,
+    /// Each module loaded once: a thread asking for one another is loading waits for it.
+    modules: Mutex<HashMap<String, Arc<OnceLock<Option<&'static Module>>>>>,
 }
 
 pub static GRAPHS: OnceLock<Graphs> = OnceLock::new();
+
+/// libdispatch (libSystem), for loading graphs concurrently.
+mod dispatch {
+    use std::ffi::c_void;
+    /// <sys/qos.h>: `QOS_CLASS_USER_INITIATED`.
+    pub const QOS_CLASS_USER_INITIATED: isize = 0x19;
+    extern "C" {
+        pub fn dispatch_get_global_queue(identifier: isize, flags: usize) -> *mut c_void;
+        pub fn dispatch_async_f(queue: *mut c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
+    }
+}
 
 /// The process's graphs, set as apus-mangle's resolver of kinds left out.
 pub fn graphs() -> &'static Graphs {
@@ -106,10 +119,31 @@ impl Graphs {
     /// emits), else extracted from the SDK once and cached. `None` for the standard library (apus knows its names) and
     /// for a module neither has.
     pub fn module(&self, name: &str) -> Option<&'static Module> {
-        if let Some(known) = self.modules.lock().unwrap_or_else(|e| e.into_inner()).get(name) {
-            return *known;
+        let cell = Arc::clone(self.modules.lock().unwrap_or_else(|e| e.into_inner()).entry(name.to_string()).or_default());
+        *cell.get_or_init(|| Self::load_module(name))
+    }
+
+    /// Starts loading `names` (extracting each graph the cache lacks) on libdispatch's global concurrent queue:
+    /// `swift-symbolgraph-extract` is a process per module, so several take about as long as the longest. Whoever
+    /// asks for one meanwhile waits for its load.
+    pub fn prefetch<'a>(&'static self, names: impl IntoIterator<Item = &'a str>) {
+        struct Load(String, Arc<OnceLock<Option<&'static Module>>>);
+        extern "C" fn run(context: *mut c_void) {
+            let Load(name, cell) = *unsafe { Box::from_raw(context.cast::<Load>()) };
+            cell.get_or_init(|| Graphs::load_module(&name));
         }
-        let loaded = locate(name)
+        for name in names {
+            let cell = Arc::clone(self.modules.lock().unwrap_or_else(|e| e.into_inner()).entry(name.to_string()).or_default());
+            if cell.get().is_none() {
+                let context = Box::into_raw(Box::new(Load(name.to_string(), cell)));
+                // <dispatch/queue.h>: dispatch_get_global_queue, dispatch_async_f.
+                unsafe { dispatch::dispatch_async_f(dispatch::dispatch_get_global_queue(dispatch::QOS_CLASS_USER_INITIATED, 0), context.cast(), run) };
+            }
+        }
+    }
+
+    fn load_module(name: &str) -> Option<&'static Module> {
+        locate(name)
             .and_then(|(file, cached)| match cached {
                 // A copy that cannot be read, its graph's file deleted: extracted again.
                 true => load_cached(&file).or_else(|| {
@@ -119,9 +153,7 @@ impl Graphs {
                 }),
                 false => load(&file),
             })
-            .map(|m| &*Box::leak(Box::new(m)));
-        self.modules.lock().unwrap_or_else(|e| e.into_inner()).insert(name.to_string(), loaded);
-        loaded
+            .map(|m| &*Box::leak(Box::new(m)))
     }
 }
 
@@ -559,6 +591,14 @@ fn load(file: &Path) -> Option<Module> {
 
 #[cfg(test)]
 mod tests {
+    /// Threads asking for a module at once share one load (and one extraction): the same graph for each.
+    #[test]
+    fn one_load_per_module() {
+        let threads: Vec<_> = (0..4).map(|_| std::thread::spawn(|| super::graphs().module("WeatherKit").map(|m| m as *const _ as usize))).collect();
+        let loaded: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+        assert!(loaded[0].is_some() && loaded.iter().all(|m| *m == loaded[0]), "{loaded:?}");
+    }
+
     /// Once its compact copy is written, a cached graph's file and copies in older formats are deleted (SwiftUI's
     /// graph is 500 MB); the copy alone is read after.
     #[test]
