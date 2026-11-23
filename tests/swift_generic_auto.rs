@@ -84,6 +84,8 @@ apus::swift! {
     async fn later_max_int(a: &i64, b: &i64) -> SwiftValue;
     #[swift_linked = "Res.stringLength(_: String) -> Int"]
     fn string_length(s: &SwiftString) -> i64;
+    #[swift_linked = "Res.stringLength(_: String) -> Int"]
+    fn string_length_of_str(s: &str) -> i64;
     #[swift_linked = "Res.keepString(_: consuming String)"]
     fn keep_string(s: &SwiftString);
     #[swift_linked = "Res.keptString() -> String"]
@@ -178,6 +180,10 @@ apus::swift! {
     fn dog_list(names: Vec<String>) -> Vec<Dog>;
     #[swift_linked = "Res.labelOf<T: Named(AnyObject)>(_: T) -> String", T = "Res.Dog(class)"]
     fn label_of(dog: &Dog) -> String;
+    #[swift_linked = "Res.nameOf(_: Animal(class)) -> String"]
+    fn name_of_dog(animal: &Dog) -> String;
+    #[swift_linked = "Res.nameOf(_: Animal(class)) -> String"]
+    fn name_of_minted(animal: &Minted) -> String;
 }
 
 fn typed_wrappers() -> Result<(), Failed> {
@@ -192,7 +198,10 @@ fn typed_wrappers() -> Result<(), Failed> {
     // Another class's wrapper as the receiver: checked by cast.
     check(dogs[0].name().unwrap() == "rex", "Dog.name, an Animal's")?;
     let minted = Minted::try_from(minted(2).unwrap()).unwrap();
-    check(matches!(minted.name(), Err(CallError::InvalidArgument(_))), "a Minted is no Animal")
+    check(matches!(minted.name(), Err(CallError::InvalidArgument(_))), "a Minted is no Animal")?;
+    // Another class's wrapper as an argument too.
+    check(name_of_dog(&dogs[0]).unwrap() == "rex", "a Dog for an Animal")?;
+    check(matches!(name_of_minted(&minted), Err(CallError::InvalidArgument(_))), "a Minted for an Animal")
 }
 
 // Kinds left out: the module's symbol graph gives them (`Named` is class-bound, so `T` is a reference).
@@ -406,6 +415,9 @@ fn swift_strings() -> Result<(), Failed> {
     let long = "a Swift string long enough to need storage of its own";
     let s = SwiftString::new(long);
     check(string_length(&s).unwrap() == long.len() as i64, "borrowed")?;
+    // A `&str` is made a Swift string for each call and released after it: once, or a call would read freed storage.
+    let text = long.repeat(4);
+    check((0..1000).all(|_| string_length_of_str(&text).unwrap() == text.len() as i64), "a &str, again and again")?;
     keep_string(&s).unwrap();
     drop(s);
     check(kept_string().unwrap().to_rust() == long, "a consumed one is Swift's own reference")?;

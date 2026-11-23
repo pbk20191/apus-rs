@@ -1059,8 +1059,8 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     let bare = |t: &str| t.replace(' ', "").rsplit("::").next().unwrap_or_default().to_string();
     let scalar = |t: &str| {
         let t = t.replace(' ', "");
-        matches!(t.as_str(), "i64" | "i32" | "isize" | "u64" | "u32" | "usize" | "bool" | "f64")
-            || t.strip_prefix('&').is_some_and(|object| !object.starts_with("mut") && matches!(bare(object).as_str(), "SwiftObject" | "SwiftString"))
+        matches!(t.as_str(), "i64" | "i32" | "isize" | "u64" | "u32" | "usize" | "bool" | "f64" | "&str" | "String")
+            || t.strip_prefix('&').is_some_and(|object| !object.starts_with("mut") && matches!(bare(object).as_str(), "SwiftObject" | "SwiftString" | "SwiftValue"))
     };
     let in_registers = |t: &str| {
         let t = t.replace(' ', "");
@@ -1073,7 +1073,6 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     // Or a typed wrapper (`&Self`), whose entries (`typed [(value self …) (result …)]`) are all the generic tokens
     // hold: checked as on the general path; its result is the wrapper's type.
     let tokens: Vec<TokenTree> = generic.clone().into_iter().collect();
-    let receiver_name = rust_receiver_name(tail).map(|i| i.to_string());
     let typed_only = tokens.len() == 2
         && matches!(&tokens[0], TokenTree::Ident(i) if i.to_string() == "typed")
         && matches!(&tokens[1], TokenTree::Group(entries) if entries.stream().into_iter().all(|entry| match entry {
@@ -1081,17 +1080,36 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
                 let parts: Vec<TokenTree> = entry.stream().into_iter().collect();
                 match (parts.first(), parts.get(1)) {
                     (Some(TokenTree::Ident(role)), _) if role.to_string() == "result" => true,
-                    (Some(TokenTree::Ident(role)), Some(TokenTree::Ident(who))) if role.to_string() == "value" => {
-                        receiver_name.as_deref() == Some(who.to_string().as_str())
-                    }
+                    (Some(TokenTree::Ident(role)), Some(TokenTree::Ident(_))) if role.to_string() == "value" => true,
                     _ => false,
                 }
             }
             _ => false,
         }));
     let typed_result = typed_only && tokens[1].to_string().contains("result");
+    // The arguments a typed entry names: wrappers, borrowed as they are (`&Todo`).
+    let typed_values: Vec<String> = match (typed_only, tokens.get(1)) {
+        (true, Some(TokenTree::Group(entries))) => entries
+            .stream()
+            .into_iter()
+            .filter_map(|entry| match entry {
+                TokenTree::Group(entry) => {
+                    let parts: Vec<TokenTree> = entry.stream().into_iter().collect();
+                    match (parts.first(), parts.get(1)) {
+                        (Some(TokenTree::Ident(role)), Some(TokenTree::Ident(who))) if role.to_string() == "value" => Some(who.to_string()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let arguments_ok = rust_argument_names(tail).iter().zip(rust_argument_types(tail)).all(|(name, ty)| {
+        scalar(&ty) || (typed_values.contains(&name.to_string()) && ty.replace(' ', "").starts_with('&') && !ty.replace(' ', "").starts_with("&mut"))
+    });
     let receiver_ok = match rust_receiver(tail) {
-        None => generic.is_empty(),
+        None => generic.is_empty() || typed_only,
         Some(ty) => {
             let ty = ty.replace(' ', "");
             let consumes = declared.as_ref().is_none_or(|(_, parsed)| parsed.consumes_self());
@@ -1104,7 +1122,7 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     };
     let kind = if kind == "sync"
         && receiver_ok
-        && rust_argument_types(tail).iter().all(|t| scalar(t))
+        && arguments_ok
         && (in_registers(&rust_return(tail)) || typed_result)
     {
         "scalar".to_string()

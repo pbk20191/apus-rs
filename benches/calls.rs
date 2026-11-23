@@ -24,6 +24,12 @@ apus::swift! {
     fn length(s: &str) -> i64;
     #[swift_linked = "Res.benchLength(_: String) -> Int"]
     fn length_of(s: &SwiftString) -> i64;
+    #[swift_linked = "Res.benchPointX(_: BenchPoint(struct)) -> Double"]
+    fn point_x(p: &SwiftValue) -> f64;
+    #[swift_linked = "Res.benchBoxed(_: BenchBox(class)) -> Int"]
+    fn boxed_wrapped(b: &BenchBox) -> i64;
+    #[swift_linked = "Res.benchLoopPointX(_: Int) -> Double"]
+    fn loop_point_x(n: i64) -> f64;
     #[swift_linked = "Res.BenchPoint(struct).y: Double { get }"]
     fn point_y(self: &SwiftValue) -> f64;
     #[swift_linked = "Res.benchPoint(_: Double) -> BenchPoint(struct)"]
@@ -208,6 +214,21 @@ fn main() {
         }
     });
     report("  (a property of one: self)", rust, swift);
+
+    let rust = ns_per_call(N, |n| {
+        for _ in 0..n {
+            black_box(point_x(black_box(&value)).unwrap());
+        }
+    });
+    let swift = ns_per_call(N, |n| _ = black_box(loop_point_x(n as i64).unwrap()));
+    report("resilient struct argument (&SwiftValue)", rust, swift);
+
+    let rust = ns_per_call(N, |n| {
+        for _ in 0..n {
+            black_box(boxed_wrapped(black_box(&wrapped)).unwrap());
+        }
+    });
+    report("typed wrapper argument (&BenchBox)", rust, swift);
 
     let rust = ns_per_call(N, |n| {
         for i in 0..n {

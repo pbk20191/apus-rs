@@ -238,6 +238,7 @@ public final class Kept {
 public func makeKept() -> [Kept] { [Kept()] }
 public func keptAlive() -> Int { Kept.alive }
 public func makeOneKept() -> Kept { Kept() }
+@inline(never) public func nameOf(_ animal: Animal) -> String { animal.name }
 public func stringLength(_ s: String) -> Int { s.utf8.count }
 public func laterMax<T: Comparable>(_ a: T, _ b: T) async -> T { await Task.yield(); return Swift.max(a, b) }
 nonisolated(unsafe) var keptStringValue = ""
@@ -280,3 +281,5 @@ public class BenchBox { public var n: Int; public init(n: Int) { self.n = n } }
 public func benchMakeBox(_ n: Int) -> BenchBox { BenchBox(n: n) }
 @inline(never) public func benchBoxed(_ b: BenchBox) -> Int { b.n }
 @inline(never) public func benchLoopBoxed(_ n: Int) -> Int { let b = BenchBox(n: 1); var s = 0; for _ in 0..<n { s &+= benchBoxed(b) }; return s }
+@inline(never) public func benchPointX(_ p: BenchPoint) -> Double { p.x }
+@inline(never) public func benchLoopPointX(_ n: Int) -> Double { let p = BenchPoint(x: 1, y: 2); var s = 0.0; for _ in 0..<n { s += benchPointX(p) }; return s }

@@ -84,6 +84,18 @@ impl Erased for SwiftValue {
     }
 }
 
+/// A wrapper as a borrowed argument of the scalar path: what it holds, a reference or a value's address, as a
+/// `&SwiftObject` or `&SwiftValue` is passed.
+impl<W: SwiftWrapper> super::sync::ScalarArg for &W {
+    #[inline]
+    fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, _floats: &mut usize, _made: &mut super::sync::Made) -> bool {
+        let Some(slot) = regs.gpr.get_mut(*ints) else { return false };
+        *slot = self.erased().receiver() as u64;
+        *ints += 1;
+        true
+    }
+}
+
 /// A wrapper as a borrowed receiver of the scalar path: what it holds, its type known (checked when wrapped, and
 /// against the declaration's when compiling, or by cast for another class's wrapper).
 impl<W: SwiftWrapper> super::sync::ScalarReceiver for &W {

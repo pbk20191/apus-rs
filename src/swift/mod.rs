@@ -44,7 +44,7 @@ pub use wrapper::SwiftWrapper;
 pub use wrapper::{Erased, __check_wrapper, __expect_wrapper};
 pub use stream::SwiftStream;
 pub use string::SwiftString;
-pub use sync::{HopTo, ScalarReceiver, SwiftFn, SwiftFnNow, SwiftSyncCall};
+pub use sync::{HopTo, Made, ScalarArg, ScalarReceiver, SwiftFn, SwiftFnNow, SwiftSyncCall};
 pub use value::{IntoSwift, OpaqueResult, Opened, OpenedType, SwiftProtocol, SwiftType, SwiftValue, WitnessTable};
 pub use isolation::Isolation;
 #[doc(hidden)]

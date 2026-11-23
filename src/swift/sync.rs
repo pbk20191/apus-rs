@@ -121,25 +121,67 @@ impl SwiftFn {
     }
 }
 
+/// What the scalar path makes for a call and releases after it: the Swift strings made of `&str` arguments (each one
+/// owned reference, its storage's, released as the general path's `Owned::Bridge` is).
+#[doc(hidden)]
+#[derive(Default)]
+pub struct Made {
+    bridges: [u64; 4],
+    count: usize,
+}
+
+impl Drop for Made {
+    fn drop(&mut self) {
+        for &bridge in &self.bridges[..self.count] {
+            unsafe { super::rt::swift_bridgeObjectRelease(bridge as *mut c_void) };
+        }
+    }
+}
+
+/// A Rust string, made a Swift `String` for the call (two integer registers) and released after it.
+impl ScalarArg for &str {
+    #[inline]
+    fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, _floats: &mut usize, made: &mut Made) -> bool {
+        if *ints + 2 > regs.gpr.len() || made.count == made.bridges.len() {
+            return false;
+        }
+        let string = super::rt::string_from_utf8(self);
+        made.bridges[made.count] = string.words[1];
+        made.count += 1;
+        regs.gpr[*ints] = string.words[0];
+        regs.gpr[*ints + 1] = string.words[1];
+        *ints += 2;
+        true
+    }
+}
+
+impl ScalarArg for String {
+    #[inline]
+    fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, floats: &mut usize, made: &mut Made) -> bool {
+        self.as_str().put(regs, ints, floats, made)
+    }
+}
+
 /// Arguments that go in registers and need nothing kept alive, handed over or checked: integers, `bool`, `f64`, and
 /// borrowed class instances, as [`SwiftArg`](super::func::SwiftArg) lowers them.
 #[doc(hidden)]
 pub trait ScalarArgs {
-    /// Fills the argument registers; `false` if there are more than the registers hold.
-    fn put(self, regs: &mut apus_sys::CallRegs) -> bool;
+    /// Fills the argument registers, keeping in `made` what it makes for the call (released after it); `false` if
+    /// there are more than the registers hold.
+    fn put(self, regs: &mut apus_sys::CallRegs, made: &mut Made) -> bool;
 }
 
 /// One scalar argument: its integer or floating-point register.
 #[doc(hidden)]
 pub trait ScalarArg {
-    fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, floats: &mut usize) -> bool;
+    fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, floats: &mut usize, made: &mut Made) -> bool;
 }
 
 macro_rules! scalar_int {
     ($($t:ty => $via:ty),*) => {$(
         impl ScalarArg for $t {
             #[inline]
-            fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, _floats: &mut usize) -> bool {
+            fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, _floats: &mut usize, _made: &mut Made) -> bool {
                 let Some(slot) = regs.gpr.get_mut(*ints) else { return false };
                 *slot = self as $via as u64; // sign- or zero-extended to the full register
                 *ints += 1;
@@ -152,7 +194,7 @@ scalar_int!(i64 => i64, i32 => i64, isize => i64, u64 => u64, u32 => u64, usize 
 
 impl ScalarArg for f64 {
     #[inline]
-    fn put(self, regs: &mut apus_sys::CallRegs, _ints: &mut usize, floats: &mut usize) -> bool {
+    fn put(self, regs: &mut apus_sys::CallRegs, _ints: &mut usize, floats: &mut usize, _made: &mut Made) -> bool {
         let Some(slot) = regs.fpr.get_mut(*floats) else { return false };
         *slot = self;
         *floats += 1;
@@ -164,7 +206,19 @@ impl ScalarArg for f64 {
 /// consumed one never takes this path: `swift!` sends it through the general one, which hands over +1).
 impl ScalarArg for &SwiftObject {
     #[inline]
-    fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, _floats: &mut usize) -> bool {
+    fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, _floats: &mut usize, _made: &mut Made) -> bool {
+        let Some(slot) = regs.gpr.get_mut(*ints) else { return false };
+        *slot = self.as_ptr() as u64;
+        *ints += 1;
+        true
+    }
+}
+
+/// A value borrowed for a call made right away, passed by address (a resilient struct's): its own address, which
+/// the caller's borrow keeps (a consumed one takes the general path, which hands over a copy).
+impl ScalarArg for &SwiftValue {
+    #[inline]
+    fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, _floats: &mut usize, _made: &mut Made) -> bool {
         let Some(slot) = regs.gpr.get_mut(*ints) else { return false };
         *slot = self.as_ptr() as u64;
         *ints += 1;
@@ -175,7 +229,7 @@ impl ScalarArg for &SwiftObject {
 /// A Swift string borrowed for a call made right away: its two words (a consumed one takes the general path).
 impl ScalarArg for &super::SwiftString {
     #[inline]
-    fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, _floats: &mut usize) -> bool {
+    fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, _floats: &mut usize, _made: &mut Made) -> bool {
         if *ints + 2 > regs.gpr.len() {
             return false;
         }
@@ -214,10 +268,10 @@ macro_rules! scalar_args {
         impl<$($a: ScalarArg),*> ScalarArgs for ($($a,)*) {
             #[inline]
             #[allow(non_snake_case, unused_mut, unused_variables)]
-            fn put(self, regs: &mut apus_sys::CallRegs) -> bool {
+            fn put(self, regs: &mut apus_sys::CallRegs, made: &mut Made) -> bool {
                 let ($($a,)*) = self;
                 let (mut ints, mut floats) = (0, 0);
-                true $(&& $a.put(regs, &mut ints, &mut floats))*
+                true $(&& $a.put(regs, &mut ints, &mut floats, made))*
             }
         }
     )*};
@@ -250,7 +304,8 @@ impl SwiftFn {
         // `this`: the receiver, borrowed (null without one); a class's member is looked up in its vtable through it.
         let function = self.resolve().ok_or(CallError::Unavailable(self.symbol))?.entry(this)?;
         let mut regs = apus_sys::CallRegs { gpr: [0; 8], fpr: [0.0; 8], self_: this, isolation: -1 };
-        if !args.put(&mut regs) {
+        let mut made = Made::default();
+        if !args.put(&mut regs, &mut made) {
             return Err(CallError::InvalidArgument("too many arguments for the argument registers"));
         }
         // A result by address (a resilient struct's: `SwiftValue`) gets its storage, as the general path's does.
