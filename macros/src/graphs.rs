@@ -142,6 +142,9 @@ impl Graphs {
         }
     }
 
+    /// Reads `name`'s graph alone, never another module's: a load waits for no other, so modules that re-export
+    /// each other (SwiftUI and SwiftUICore; SwiftUI even itself) cannot deadlock their loads. What looks at other
+    /// modules (a re-exported type, an inherited protocol) does so once a load is done.
     fn load_module(name: &str) -> Option<&'static Module> {
         locate(name)
             .and_then(|(file, cached)| match cached {
