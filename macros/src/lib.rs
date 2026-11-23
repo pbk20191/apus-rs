@@ -223,6 +223,50 @@ pub fn __returns_self(input: TokenStream) -> TokenStream {
     }
 }
 
+/// `PATH ; items…`: `PATH! { item }` for each item of a `swift!` block: a declaration up to its `;`, or an
+/// `impl Name { … }` block. Each expands on its own, so a block of many declarations nests no deeper than one.
+#[doc(hidden)]
+#[proc_macro]
+pub fn __swift_items(input: TokenStream) -> TokenStream {
+    let tokens: Vec<TokenTree> = input.into_iter().collect();
+    let Some(at) = tokens.iter().position(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ';')) else {
+        return compile_error("__swift_items: expected `PATH ; items…`");
+    };
+    let (path, items) = (&tokens[..at], &tokens[at + 1..]);
+    let mut out: Vec<TokenTree> = Vec::new();
+    let mut emit = |item: &mut Vec<TokenTree>| {
+        if item.is_empty() {
+            return;
+        }
+        out.extend(path.iter().cloned());
+        out.push(TokenTree::Punct(Punct::new('!', Spacing::Alone)));
+        out.push(TokenTree::Group(Group::new(Delimiter::Brace, std::mem::take(item).into_iter().collect())));
+    };
+    let mut item = Vec::new();
+    let mut i = 0;
+    while i < items.len() {
+        let token = &items[i];
+        // `impl Name { … }`: an item with no `;`.
+        if item.is_empty() && matches!(token, TokenTree::Ident(word) if word.to_string() == "impl") {
+            if let (Some(TokenTree::Ident(_)), Some(TokenTree::Group(body))) = (items.get(i + 1), items.get(i + 2)) {
+                if body.delimiter() == Delimiter::Brace {
+                    item.extend(items[i..i + 3].iter().cloned());
+                    emit(&mut item);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        item.push(token.clone());
+        if matches!(token, TokenTree::Punct(p) if p.as_char() == ';') {
+            emit(&mut item);
+        }
+        i += 1;
+    }
+    emit(&mut item);
+    out.into_iter().collect()
+}
+
 /// Picks how `swift!` calls a declaration, then expands `PATH! { binding how KIND rest… }`. Input:
 /// `PATH ; binding how async|sync rest…`, `rest` ending with the declaration. A sync declaration that must run on
 /// an actor (an actor's sync member, `@MainActor`) becomes `hop SelfActor` / `hop Main` when declared `async fn`
@@ -874,12 +918,12 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     let scalar = |t: &str| {
         let t = t.replace(' ', "");
         matches!(t.as_str(), "i64" | "i32" | "isize" | "u64" | "u32" | "usize" | "bool" | "f64")
-            || t.strip_prefix('&').is_some_and(|object| !object.starts_with("mut") && bare(object) == "SwiftObject")
+            || t.strip_prefix('&').is_some_and(|object| !object.starts_with("mut") && matches!(bare(object).as_str(), "SwiftObject" | "SwiftString"))
     };
     let in_registers = |t: &str| {
         let t = t.replace(' ', "");
         matches!(t.as_str(), "" | "()" | "i64" | "i32" | "u64" | "bool" | "f64" | "String" | "Option<i64>" | "Option<String>")
-            || bare(&t) == "SwiftObject"
+            || matches!(bare(&t).as_str(), "SwiftObject" | "SwiftString")
             || t.strip_prefix("Option<").and_then(|t| t.strip_suffix('>')).is_some_and(|t| bare(t) == "SwiftObject")
     };
     let kind = if kind == "sync"
@@ -1042,7 +1086,7 @@ fn wrapper_type(ty: Vec<TokenTree>, optional: bool, array: bool) -> Option<Vec<T
     })?;
     const NOT_WRAPPERS: &[&str] = &[
         "SwiftObject", "SwiftValue", "DirectValue", "Retained", "Existential", "SwiftType", "OpenedType", "Opened",
-        "SwiftError", "SwiftClosure", "WitnessTable", "ErrorSlot", "Isolation", "String", "str", "bool", "i8", "i16",
+        "SwiftError", "SwiftClosure", "WitnessTable", "ErrorSlot", "Isolation", "String", "SwiftString", "str", "bool", "i8", "i16",
         "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize", "f32", "f64",
     ];
     let generic = ty.iter().any(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == '<'));

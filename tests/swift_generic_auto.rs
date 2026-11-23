@@ -5,7 +5,7 @@ mod common;
 #[path = "common/probe.rs"]
 mod probe;
 
-use apus::swift::{spawn, CallError, DirectValue, SwiftIter, SwiftObject, SwiftType, SwiftValue};
+use apus::swift::{spawn, CallError, DirectValue, SwiftIter, SwiftObject, SwiftString, SwiftType, SwiftValue};
 use common::{block, check, Failed, Trial};
 
 apus::swift! {
@@ -71,6 +71,14 @@ apus::swift! {
     fn make_kept() -> DirectValue;
     #[swift_linked = "Res.keptAlive() -> Int"]
     fn kept_alive() -> i64;
+    #[swift_linked = "Res.stringLength(_: String) -> Int"]
+    fn string_length(s: &SwiftString) -> i64;
+    #[swift_linked = "Res.keepString(_: consuming String)"]
+    fn keep_string(s: &SwiftString);
+    #[swift_linked = "Res.keptString() -> String"]
+    fn kept_string() -> SwiftString;
+    #[swift_linked = "Res.stringSumLater(_: String) async -> Int"]
+    async fn string_sum_later(s: &SwiftString) -> i64;
     #[swift_linked = "Res.makeOneKept() -> Kept(class)"]
     fn make_one_kept() -> SwiftObject;
     #[swift_linked = "Res.consumeKept(_: consuming Kept(class)) -> Int"]
@@ -351,6 +359,26 @@ fn a_value_that_does_not_conform() -> Result<(), Failed> {
     Ok(())
 }
 
+/// A `SwiftString` is made once and passed as it is: borrowed by a call made right away, retained for one that
+/// consumes it or may run later.
+fn swift_strings() -> Result<(), Failed> {
+    let long = "a Swift string long enough to need storage of its own";
+    let s = SwiftString::new(long);
+    check(string_length(&s).unwrap() == long.len() as i64, "borrowed")?;
+    keep_string(&s).unwrap();
+    drop(s);
+    check(kept_string().unwrap().to_rust() == long, "a consumed one is Swift's own reference")?;
+    let s = SwiftString::new(long);
+    let later = string_sum_later(&s);
+    drop(s);
+    // Storage freed too early would be reused by these.
+    let noise: Vec<SwiftString> = (0..64).map(|i| SwiftString::new(&format!("{i:>width$}", width = 20 + i))).collect();
+    let n = block(spawn(async move { later.await })).unwrap();
+    drop(noise);
+    let sum: i64 = long.bytes().map(i64::from).sum();
+    check(matches!(n, Ok(got) if got == sum), format!("an async call keeps its own: {n:?}"))
+}
+
 /// A sync call made right away passes a borrowed `&SwiftValue` by its address, but one the callee consumes (an
 /// initializer's) as a copy: the caller's value lives on after the callee and its result are gone.
 fn consumed_arguments_are_copies() -> Result<(), Failed> {
@@ -382,5 +410,6 @@ fn main() {
         Trial::test("kinds_from_symbol_graphs", kinds_from_symbol_graphs),
         Trial::test("declarations_by_name", declarations_by_name),
         Trial::test("consumed_arguments_are_copies", consumed_arguments_are_copies),
+        Trial::test("swift_strings", swift_strings),
     ]);
 }

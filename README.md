@@ -85,9 +85,12 @@ let total: i64 = BUMP.call((5i64,)).on(&counter).await?;          // a method: `
   rule below for `.child()` and `timeout`.
 - The symbol is resolved with `dlsym` on first use. A function missing on the running OS gives
   `CallError::Unavailable` (check with `is_available()`), not a launch failure.
-- Arguments: integers, `bool`, `f64`, `&str`/`String`, `Vec<T>`, `&SwiftObject`, `&SwiftValue`, `SwiftType`,
-  `WitnessTable`. Results: `()`, integers, `bool`, `f64`,
-  `String`, `Option<i64>`, `Option<String>`, `Vec<T>`, `HashMap<K, V>`, `SwiftObject`, `SwiftAny`.
+- Arguments: integers, `bool`, `f64`, `&str`/`String`, `&SwiftString`, `Vec<T>`, `&SwiftObject`, `&SwiftValue`,
+  `SwiftType`, `WitnessTable`. Results: `()`, integers, `bool`, `f64`,
+  `String`, `SwiftString`, `Option<i64>`, `Option<String>`, `Vec<T>`, `HashMap<K, V>`, `SwiftObject`, `SwiftAny`.
+- A `&str` or `String` is made into a Swift `String` for every call. A `SwiftString` (`SwiftString::new(text)`) is
+  one made once and passed as it is, which a string passed again and again saves (about 36 ns to 5 ns a call in
+  `benches/calls.rs`); a `SwiftString` result is kept as Swift's value (`to_rust()` copies the text out).
 - `.throws()` must be added exactly when the Swift function is `throws`.
 - **The Rust types must match the Swift signature; nothing can check them.** A mismatch is undefined behavior.
   Arguments must fit the argument registers (8 integer words on arm64, 6 on x86_64; a `String` takes two).

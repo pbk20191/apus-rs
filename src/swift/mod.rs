@@ -17,6 +17,7 @@ pub(crate) mod rt;
 mod selfcheck;
 mod sequence;
 mod stream;
+mod string;
 mod sync;
 #[cfg(feature = "objc2")]
 mod objc;
@@ -42,6 +43,7 @@ pub use wrapper::SwiftWrapper;
 #[doc(hidden)]
 pub use wrapper::{Erased, __check_wrapper, __expect_wrapper};
 pub use stream::SwiftStream;
+pub use string::SwiftString;
 pub use sync::{HopTo, SwiftFn, SwiftFnNow, SwiftSyncCall};
 pub use value::{IntoSwift, OpaqueResult, Opened, OpenedType, SwiftProtocol, SwiftType, SwiftValue, WitnessTable};
 pub use isolation::Isolation;

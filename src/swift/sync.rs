@@ -172,6 +172,20 @@ impl ScalarArg for &SwiftObject {
     }
 }
 
+/// A Swift string borrowed for a call made right away: its two words (a consumed one takes the general path).
+impl ScalarArg for &super::SwiftString {
+    #[inline]
+    fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, _floats: &mut usize) -> bool {
+        if *ints + 2 > regs.gpr.len() {
+            return false;
+        }
+        regs.gpr[*ints] = self.0.words[0];
+        regs.gpr[*ints + 1] = self.0.words[1];
+        *ints += 2;
+        true
+    }
+}
+
 macro_rules! scalar_args {
     ($($($a:ident)*;)*) => {$(
         impl<$($a: ScalarArg),*> ScalarArgs for ($($a,)*) {

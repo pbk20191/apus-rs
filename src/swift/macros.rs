@@ -397,6 +397,16 @@
 /// ```
 #[macro_export]
 macro_rules! swift {
+    ($($items:tt)*) => {
+        $crate::__swift_items! { $crate::__swift_one ; $($items)* }
+    };
+}
+
+/// One item of `swift!` (which `__swift_items!` splits its input into, so that a block of many declarations does not
+/// nest an expansion for each and reach the recursion limit).
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __swift_one {
     () => {};
 
     // A typed wrapper: a Rust type standing for one Swift class, struct or enum.

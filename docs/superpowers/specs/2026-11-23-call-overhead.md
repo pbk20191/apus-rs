@@ -52,6 +52,12 @@
   - `class instance -> Int`: 6.9 ns(Swift 4.2 ns).
   - 결과는 레지스터로 오는 `String`, `SwiftObject`, `Option<…>`도 이 경로로 받는다.
 
+- **`SwiftString` (사용자가 고르는 경로):**
+  - 한 번 만든 Swift 문자열을 그대로 넘긴다.
+  - 바로 실행되는 호출에서는 빌려서 넘기고(스칼라 경로), consume되거나 나중에 실행되는 호출에는 +1 복사본을 넘긴다.
+  - `String -> Int`: 36.1 → 4.5 ns.
+  - 두 규칙은 테스트(`swift_strings`)가 지킨다. 각 규칙을 빼면 테스트가 실패한다(SIGBUS, 내용 불일치).
+
 ## 남은 비용
 
 **sync `Int` 호출 (약 19 ns):**

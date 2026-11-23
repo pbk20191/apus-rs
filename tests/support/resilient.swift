@@ -238,6 +238,11 @@ public final class Kept {
 public func makeKept() -> [Kept] { [Kept()] }
 public func keptAlive() -> Int { Kept.alive }
 public func makeOneKept() -> Kept { Kept() }
+public func stringLength(_ s: String) -> Int { s.utf8.count }
+nonisolated(unsafe) var keptStringValue = ""
+@inline(never) public func keepString(_ s: consuming String) { keptStringValue = s }
+public func keptString() -> String { keptStringValue }
+public func stringSumLater(_ s: String) async -> Int { await Task.yield(); return s.utf8.reduce(0) { $0 + Int($1) } }
 @inline(never) public func consumeKept(_ k: consuming Kept) -> Int { _ = consume k; return 1 }
 public struct Flag<V> {
     public var value: V

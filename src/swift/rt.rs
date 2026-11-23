@@ -40,6 +40,12 @@ pub unsafe fn string_to_rust(s: &SwiftString) -> String {
     out
 }
 
+/// Copies a Swift `String` value into `dest` (+1 on its storage).
+pub unsafe fn copy_string(dest: &mut SwiftString, source: &SwiftString) {
+    let metadata = metadata_of(&STRING_METADATA);
+    value_witnesses(metadata).initialize_with_copy.unwrap()((dest as *mut SwiftString).cast(), (source as *const SwiftString).cast_mut().cast(), metadata);
+}
+
 /// Destroys a Swift `String` value.
 pub unsafe fn destroy_string(s: &mut SwiftString) {
     let metadata = metadata_of(&STRING_METADATA);
