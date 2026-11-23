@@ -26,6 +26,8 @@ apus::swift! {
     fn boxed(b: &SwiftObject) -> i64;
     #[swift_linked = "Res.benchLoopBoxed(_: Int) -> Int"]
     fn loop_boxed(n: i64) -> i64;
+    #[swift_linked = "Res.benchMax<T: Comparable>(_: T, _: T) -> T", T = "Swift.Int"]
+    fn max_stack(a: &i64, b: &i64) -> SwiftValue;
     #[swift_linked = "Res.benchAddAsync(_: Int, _: Int) async -> Int"]
     async fn add_async(a: i64, b: i64) -> i64;
 
@@ -171,6 +173,13 @@ fn main() {
     });
     let swift = ns_per_call(N, |n| _ = black_box(loop_max(n as i64).unwrap()));
     report("bound generic <T: Comparable> T, T -> T", rust, swift);
+
+    let rust = ns_per_call(N, |n| {
+        for i in 0..n {
+            black_box(max_stack(&(i as i64), &0).unwrap());
+        }
+    });
+    report("  (arguments from the stack: &i64)", rust, swift);
 
     let rust = ns_per_call(N, |n| {
         block(spawn(async move {

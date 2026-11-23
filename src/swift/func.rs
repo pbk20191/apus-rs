@@ -388,6 +388,22 @@ impl SwiftArg for &SwiftValue {
     }
 }
 
+/// A generic parameter's value bound to `Int`, `Double` or `Bool`, from a Rust `&i64`, `&f64` or `&bool` (laid out
+/// as the Swift type is): passed by its own address to a call made right away, by a copy's to one that may run
+/// later. `swift!` wraps such an argument, having checked the bound type.
+pub struct StackArg<'a, T>(pub &'a T);
+
+impl<T: IntoSwift + Copy> SwiftArg for StackArg<'_, T> {
+    fn lower(&self, into: &mut ArgLowering) {
+        if into.now {
+            return into.int(self.0 as *const T as u64);
+        }
+        let copy = SwiftValue::new(*self.0);
+        into.int(copy.as_ptr() as u64);
+        into.owned.push(Owned::Value(copy));
+    }
+}
+
 /// An `any P` argument (optional or not). A class existential, whose protocols are class-bound, is passed in
 /// registers as its reference and witness tables; any other existential by address, as a `&SwiftValue` is. `swift!`
 /// wraps an argument declared `any P`; a generic parameter's value goes by address whatever its type, so pass that

@@ -517,6 +517,9 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     }
     // Bound generic parameters: the bound types' metadata and witness tables, found by name when the call is made;
     // the result's type with the bindings substituted. A value of type `T` goes by address whatever `T` is bound to.
+    // Arguments of a generic parameter bound to `Int`, `Double` or `Bool` given as a Rust `&i64`, `&f64` or `&bool`
+    // (whose layout is the Swift type's): wrapped in `StackArg`, passed by their own address.
+    let mut stack_args: Vec<usize> = Vec::new();
     if let (Some((declaration, parsed)), Some(plan)) = (&declared, &concrete) {
         if rust_args.len() != parsed.formal_count() {
             return item_compile_error(&format!(
@@ -527,12 +530,30 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             return item_compile_error(&format!("`{declaration}`: bound generic parameters with nonisolated(nonsending): pass them explicitly"));
         }
         let by_address = |ty: &str| ty.replace(' ', "").starts_with('&') && !ty.replace(' ', "").starts_with("&mut") && ty.ends_with("SwiftValue");
+        let stack = |ty: &str| match ty.replace(' ', "").as_str() {
+            "&i64" => Some(("Si", "Swift.Int")),
+            "&f64" => Some(("Sd", "Swift.Double")),
+            "&bool" => Some(("Sb", "Swift.Bool")),
+            _ => None,
+        };
         for (i, (address, ty)) in plan.by_address.iter().zip(&argument_types).enumerate() {
             if *address && !by_address(ty) {
-                return item_compile_error(&format!(
-                    "`{declaration}`: parameter {} is a generic parameter's value, which goes by address whatever type is bound: declare it `&SwiftValue`",
-                    i + 1
-                ));
+                match (stack(ty), plan.argument_types.get(i).cloned().flatten()) {
+                    (Some((mangled, _)), Some(bound)) if bound == mangled => stack_args.push(i),
+                    (Some((_, swift)), _) => {
+                        return item_compile_error(&format!(
+                            "`{declaration}`: parameter {} takes `{}` only when its generic parameter is bound to `{swift}`",
+                            i + 1,
+                            ty.replace(' ', "")
+                        ))
+                    }
+                    _ => {
+                        return item_compile_error(&format!(
+                            "`{declaration}`: parameter {} is a generic parameter's value, which goes by address whatever type is bound: declare it `&SwiftValue` (or `&i64`, `&f64`, `&bool` when bound to `Swift.Int`, `Swift.Double`, `Swift.Bool`)",
+                            i + 1
+                        ))
+                    }
+                }
             }
         }
         if plan.result_by_address && !rust_return(tail).ends_with("SwiftValue") {
@@ -675,6 +696,10 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
             Ok(kinds) => kinds,
             Err(error) => return item_compile_error(&format!("`{declaration}`: {error}")),
         };
+        let stacked = stack_args.iter().filter_map(|&i| rust_args.get(i)).map(|name| {
+            let tokens = [TokenTree::Ident(name.clone()), TokenTree::Ident(proc_macro::Ident::new("StackArg", proc_macro::Span::call_site()))];
+            TokenTree::Group(Group::new(Delimiter::Parenthesis, tokens.into_iter().collect()))
+        });
         let wrapped: Vec<TokenTree> = kinds
             .iter()
             .zip(&rust_args)
@@ -694,6 +719,7 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
                 tokens.extend(shape.map(|shape| TokenTree::Literal(Literal::string(shape))));
                 Some(TokenTree::Group(Group::new(Delimiter::Parenthesis, tokens.into_iter().collect())))
             })
+            .chain(stacked)
             .collect();
         if !wrapped.is_empty() {
             let mut front: TokenStream = [

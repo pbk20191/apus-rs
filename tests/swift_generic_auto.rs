@@ -71,6 +71,12 @@ apus::swift! {
     fn make_kept() -> DirectValue;
     #[swift_linked = "Res.keptAlive() -> Int"]
     fn kept_alive() -> i64;
+    #[swift_linked = "Res.benchMax<T: Comparable>(_: T, _: T) -> T", T = "Swift.Int"]
+    fn max_int(a: &i64, b: &i64) -> SwiftValue;
+    #[swift_linked = "Res.benchMax<T: Comparable>(_: T, _: T) -> T", T = "Swift.Double"]
+    fn max_double(a: &f64, b: &f64) -> SwiftValue;
+    #[swift_linked = "Res.laterMax<T: Comparable>(_: T, _: T) async -> T", T = "Swift.Int"]
+    async fn later_max_int(a: &i64, b: &i64) -> SwiftValue;
     #[swift_linked = "Res.stringLength(_: String) -> Int"]
     fn string_length(s: &SwiftString) -> i64;
     #[swift_linked = "Res.keepString(_: consuming String)"]
@@ -359,6 +365,27 @@ fn a_value_that_does_not_conform() -> Result<(), Failed> {
     Ok(())
 }
 
+/// A generic parameter bound to `Int`, `Double` or `Bool` takes a Rust `&i64`, `&f64` or `&bool`: its address for a
+/// call made right away, a copy's for one that may run later.
+fn stack_values_for_bound_generics() -> Result<(), Failed> {
+    check(max_int(&3, &7).unwrap().get::<i64>() == Some(7), "Int from the stack")?;
+    check(max_double(&2.5, &-1.0).unwrap().get::<f64>() == Some(2.5), "Double from the stack")?;
+    #[inline(never)]
+    fn made_in_a_frame_since_gone() -> apus::swift::SwiftCall<SwiftValue> {
+        let (a, b) = (11i64, 5i64);
+        later_max_int(&a, &b)
+    }
+    #[inline(never)]
+    fn scribble() {
+        let mut stack = [0x55u8; 4096];
+        std::hint::black_box(&mut stack);
+    }
+    let later = made_in_a_frame_since_gone();
+    scribble();
+    let got = block(spawn(async move { later.await })).unwrap();
+    check(matches!(&got, Ok(v) if v.get::<i64>() == Some(11)), format!("an async call keeps copies: {got:?}"))
+}
+
 /// A `SwiftString` is made once and passed as it is: borrowed by a call made right away, retained for one that
 /// consumes it or may run later.
 fn swift_strings() -> Result<(), Failed> {
@@ -411,5 +438,6 @@ fn main() {
         Trial::test("declarations_by_name", declarations_by_name),
         Trial::test("consumed_arguments_are_copies", consumed_arguments_are_copies),
         Trial::test("swift_strings", swift_strings),
+        Trial::test("stack_values_for_bound_generics", stack_values_for_bound_generics),
     ]);
 }

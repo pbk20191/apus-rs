@@ -389,7 +389,9 @@ missing, `NotConforming` if it does not conform), and a `SwiftValue` or class re
 must hold exactly that type (`InvalidArgument` otherwise; for an object of a subclass, bind the subclass). The
 function is still generic, so a value of type `T` goes by address whatever is bound (`&SwiftValue`, `-> SwiftValue`;
 `swift!` refuses another Rust type), and `T` may appear only as a parameter or result itself or among a type's
-generic arguments (not in `T?`, a tuple or a closure). A class-bound `T` takes a class.
+generic arguments (not in `T?`, a tuple or a closure). A class-bound `T` takes a class. A `T` bound to `Swift.Int`,
+`Swift.Double` or `Swift.Bool` may take a Rust `&i64`, `&f64` or `&bool` instead, laid out as the Swift type is: its own
+address goes to a call made right away (no `SwiftValue` to make), a copy's to one that may run later.
 
 Bindings name every generic parameter, a generic type's too, which specializes the call:
 
