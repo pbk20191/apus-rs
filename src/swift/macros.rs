@@ -660,7 +660,7 @@ macro_rules! __swift_item {
     };
     // `scalar`: a sync call of integers, `bool` and `f64` with a result in registers, no receiver and nothing generic
     // (the proc macro checks): made with no call record.
-    (runtime $how:ident scalar [$(#[$doc:meta])*] [$vis:vis $($unsafety:ident)?] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$(receiver $rthis:ident $rhow:ident $rname:literal)? $(typed [$($entry:tt)*])?] $spec:literal) => {
+    (runtime $how:ident scalar [$(#[$doc:meta])*] [$vis:vis $($unsafety:ident)?] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$(typed [$($entry:tt)*])? $(receiver $rthis:ident $rhow:ident $rname:literal)? $(classself $cname:literal)? $(selftype $sthis:ident [$($f:ident),*] [$($g:ident),*] [$($n:literal)?])?] $spec:literal) => {
         $(#[$doc])*
         $vis $($unsafety)? fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
             static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::__dispatched($crate::__swift_symbol!($how $spec), $crate::__swift_thunk!($how $spec));
@@ -673,11 +673,11 @@ macro_rules! __swift_item {
                 $($crate::__swift_typed!(checked $entry);)*
                 checked?;
             )?
-            let this = $crate::__swift_scalar_self!($($this)?);
-            FUNCTION.__call_scalar(this, ($($arg,)*), false $(|| $crate::__swift_throws!($throws))?, $crate::__swift_result_type!($how $spec))
+            let this = $crate::__swift_scalar_self!($($this)? $(classself $cname)?);
+            $crate::__swift_scalar_call!(FUNCTION this [$($arg),*] [$(selftype $sthis [$($f),*] [$($g),*] [$($n)?])?] [$($throws)?] $crate::__swift_result_type!($how $spec))
         }
     };
-    (linked $how:ident scalar [$(#[$doc:meta])*] [$vis:vis $($unsafety:ident)?] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$(receiver $rthis:ident $rhow:ident $rname:literal)? $(typed [$($entry:tt)*])?] $spec:literal) => {
+    (linked $how:ident scalar [$(#[$doc:meta])*] [$vis:vis $($unsafety:ident)?] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$(typed [$($entry:tt)*])? $(receiver $rthis:ident $rhow:ident $rname:literal)? $(classself $cname:literal)? $(selftype $sthis:ident [$($f:ident),*] [$($g:ident),*] [$($n:literal)?])?] $spec:literal) => {
         $(#[$doc])*
         $vis $($unsafety)? fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
             extern "C" {
@@ -695,8 +695,8 @@ macro_rules! __swift_item {
                 $($crate::__swift_typed!(checked $entry);)*
                 checked?;
             )?
-            let this = $crate::__swift_scalar_self!($($this)?);
-            FUNCTION.__call_scalar(this, ($($arg,)*), false $(|| $crate::__swift_throws!($throws))?, $crate::__swift_result_type!($how $spec))
+            let this = $crate::__swift_scalar_self!($($this)? $(classself $cname)?);
+            $crate::__swift_scalar_call!(FUNCTION this [$($arg),*] [$(selftype $sthis [$($f),*] [$($g),*] [$($n)?])?] [$($throws)?] $crate::__swift_result_type!($how $spec))
         }
     };
     // `scalargeneric`: a sync call with bound generic parameters (`concrete …`, no typed-throws slot, no closures),
@@ -1027,7 +1027,8 @@ macro_rules! __swift_scalar_receiver_check {
     };
 }
 
-/// The scalar path's `self`: the receiver's pointer, or null.
+/// The scalar path's `self`: the receiver's pointer, a class's metadata (its initializers and static members, the
+/// class found by name once), or null.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __swift_scalar_self {
@@ -1037,6 +1038,26 @@ macro_rules! __swift_scalar_self {
     ($this:ident) => {
         $crate::swift::ScalarReceiver::receiver($this)
     };
+    (classself $name:literal) => {{
+        static CLASS: ::std::sync::OnceLock<::core::option::Option<$crate::swift::SwiftType>> = ::std::sync::OnceLock::new();
+        $crate::swift::__declared_class(&CLASS, $name)?.as_ptr() as *mut ::core::ffi::c_void
+    }};
+}
+
+/// The scalar path's call: its arguments, and for a generic struct's member `Self`'s metadata after the formal ones
+/// (a result of the type's parameter `n` of that type).
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __swift_scalar_call {
+    ($function:ident $this:ident [$($arg:ident),*] [] [$($throws:ident)?] $declared:expr) => {
+        $function.__call_scalar($this, ($($arg,)*), false $(|| $crate::__swift_throws!($throws))?, $declared)
+    };
+    ($function:ident $this:ident [$($arg:ident),*] [selftype $s:ident [$($f:ident),*] [$($g:ident),*] [$($n:literal)?]] [$($throws:ident)?] $declared:expr) => {{
+        let __apus_self_type = $crate::swift::__self_type(&$s);
+        let declared = $declared;
+        $(let declared = declared.of_type(__apus_self_type.generic_argument($n));)?
+        $function.__call_scalar($this, ($($f,)* __apus_self_type, $($g,)*), false $(|| $crate::__swift_throws!($throws))?, declared)
+    }};
 }
 
 #[doc(hidden)]

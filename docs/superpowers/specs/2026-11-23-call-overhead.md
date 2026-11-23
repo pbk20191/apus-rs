@@ -94,6 +94,13 @@
   - 그와 별개로 넘긴 제네릭 인자 목록을 인라인 배열에 담아, 일반 경로에서도 매 호출 할당이 없다.
   - 스택 값 82 → 28.9 ns, `&SwiftValue` 인자 82 → 54 ns(남은 것은 벤치마크가 반복마다 만드는 `SwiftValue::new` 두 번과 결과 상자).
 
+- **클래스 init/static 멤버, 제네릭 struct 멤버도 스칼라 경로로:**
+  - 클래스 init/static: `self`(클래스 metadata)를 호출 지점마다 한 번 찾는다.
+  - 제네릭 struct 멤버: receiver의 타입 metadata를 정식 인자 뒤에 넣는다.
+  - init 인자 중 consume되는 것이 모두 정수나 `f64`면 가져가는 것이 복사일 뿐이라 이 경로를 탄다. 다른 consume 인자가 있으면 일반 경로로 간다.
+  - 클래스 init 53.4 → 25.7 ns(Swift의 객체 할당 포함), 제네릭 struct 프로퍼티 75.4 → 6.7 ns.
+  - 기존 테스트가 지킨다(`Self` metadata를 틀리게 하면 3개 실패).
+
 ## 남은 비용
 
 **sync `Int` 호출 (약 19 ns):**

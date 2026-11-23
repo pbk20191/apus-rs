@@ -30,6 +30,12 @@ apus::swift! {
     fn boxed_wrapped(b: &BenchBox) -> i64;
     #[swift_linked = "Res.benchLoopPointX(_: Int) -> Double"]
     fn loop_point_x(n: i64) -> f64;
+    #[swift_linked = "Res.BenchBox(class).init(n: Int)"]
+    fn new_box(n: i64) -> SwiftObject;
+    #[swift_linked = "Res.Tray(struct)<T>.count: Int { get }"]
+    fn tray_count(self: &SwiftValue) -> i64;
+    #[swift_linked = "Res.pearTray(count: Int) -> Tray(struct)<String>"]
+    fn pear_tray(n: i64) -> SwiftValue;
     #[swift_linked = "Res.BenchPoint(struct).y: Double { get }"]
     fn point_y(self: &SwiftValue) -> f64;
     #[swift_linked = "Res.benchPoint(_: Double) -> BenchPoint(struct)"]
@@ -229,6 +235,21 @@ fn main() {
         }
     });
     report("typed wrapper argument (&BenchBox)", rust, swift);
+
+    let rust = ns_per_call(N, |n| {
+        for i in 0..n {
+            black_box(new_box(i as i64).unwrap());
+        }
+    });
+    report("class initializer (self: the class)", rust, swift);
+
+    let tray = pear_tray(3).unwrap();
+    let rust = ns_per_call(N, |n| {
+        for _ in 0..n {
+            black_box(tray_count(black_box(&tray)).unwrap());
+        }
+    });
+    report("generic struct's property (Self's metadata)", rust, swift);
 
     let rust = ns_per_call(N, |n| {
         for i in 0..n {

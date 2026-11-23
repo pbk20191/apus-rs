@@ -1070,92 +1070,88 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     };
     // A receiver too: a borrowed `&SwiftObject` or `&SwiftValue` that the member does not consume, whose check is all
     // the generic tokens hold (`receiver this Instance "…"`).
-    // Or a typed wrapper (`&Self`), whose entries (`typed [(value self …) (result …)]`) are all the generic tokens
-    // hold: checked as on the general path; its result is the wrapper's type.
+    // What the scalar path takes, read in the order the tokens are made (each put in front):
+    // `[typed [(value who …) (result …)]] [receiver this Kind "name"] [classself "name"] [selftype this [f…] [g…] [n]]
+    // [consumed [args…]]`: typed wrappers (checked as on the general path), a type-erased receiver's check, a class's
+    // initializer's or static member's class as `self`, a generic struct's member's `Self` metadata after its formal
+    // arguments, and arguments consumed (dropped from the tokens when all are integers or `f64`: taking one copies it).
     let tokens: Vec<TokenTree> = generic.clone().into_iter().collect();
-    let typed_only = tokens.len() == 2
-        && matches!(&tokens[0], TokenTree::Ident(i) if i.to_string() == "typed")
-        && matches!(&tokens[1], TokenTree::Group(entries) if entries.stream().into_iter().all(|entry| match entry {
-            TokenTree::Group(entry) => {
-                let parts: Vec<TokenTree> = entry.stream().into_iter().collect();
-                match (parts.first(), parts.get(1)) {
-                    (Some(TokenTree::Ident(role)), _) if role.to_string() == "result" => true,
-                    (Some(TokenTree::Ident(role)), Some(TokenTree::Ident(_))) if role.to_string() == "value" => true,
-                    _ => false,
-                }
-            }
-            _ => false,
-        }));
-    let typed_result = typed_only && tokens[1].to_string().contains("result");
-    // The arguments a typed entry names: wrappers, borrowed as they are (`&Todo`).
-    let typed_values: Vec<String> = match (typed_only, tokens.get(1)) {
-        (true, Some(TokenTree::Group(entries))) => entries
-            .stream()
-            .into_iter()
-            .filter_map(|entry| match entry {
-                TokenTree::Group(entry) => {
+    let trivial = |t: &str| matches!(t.replace(' ', "").as_str(), "i64" | "i32" | "isize" | "u64" | "u32" | "usize" | "bool" | "f64");
+    let argument_types: Vec<(String, String)> = rust_argument_names(tail).iter().map(|n| n.to_string()).zip(rust_argument_types(tail)).collect();
+    let mut scalar_generic: Vec<TokenTree> = Vec::new();
+    let (mut typed_values, mut typed_result, mut erased_check, mut self_type) = (Vec::<String>::new(), false, false, false);
+    let scalar_shape = (|| {
+        let mut rest: &[TokenTree] = &tokens;
+        if let [TokenTree::Ident(t), TokenTree::Group(entries), tail @ ..] = rest {
+            if t.to_string() == "typed" {
+                for entry in entries.stream() {
+                    let TokenTree::Group(entry) = entry else { return false };
                     let parts: Vec<TokenTree> = entry.stream().into_iter().collect();
-                    match (parts.first(), parts.get(1)) {
-                        (Some(TokenTree::Ident(role)), Some(TokenTree::Ident(who))) if role.to_string() == "value" => Some(who.to_string()),
-                        _ => None,
+                    match (parts.first().map(|p| p.to_string()), parts.get(1)) {
+                        (Some(role), _) if role == "result" => typed_result = true,
+                        (Some(role), Some(TokenTree::Ident(who))) if role == "value" => typed_values.push(who.to_string()),
+                        _ => return false,
                     }
                 }
-                _ => None,
-            })
-            .collect(),
-        _ => Vec::new(),
-    };
-    let arguments_ok = rust_argument_names(tail).iter().zip(rust_argument_types(tail)).all(|(name, ty)| {
-        scalar(&ty) || (typed_values.contains(&name.to_string()) && ty.replace(' ', "").starts_with('&') && !ty.replace(' ', "").starts_with("&mut"))
-    });
+                scalar_generic.extend(rest[..2].iter().cloned());
+                rest = tail;
+            }
+        }
+        if let [TokenTree::Ident(r), TokenTree::Ident(_), TokenTree::Ident(_), TokenTree::Literal(_), tail @ ..] = rest {
+            if r.to_string() == "receiver" {
+                erased_check = true;
+                scalar_generic.extend(rest[..4].iter().cloned());
+                rest = tail;
+            }
+        }
+        if let [TokenTree::Ident(c), TokenTree::Literal(_), tail @ ..] = rest {
+            if c.to_string() == "classself" {
+                scalar_generic.extend(rest[..2].iter().cloned());
+                rest = tail;
+            }
+        }
+        if let [TokenTree::Ident(st), TokenTree::Ident(_), TokenTree::Group(_), TokenTree::Group(_), TokenTree::Group(_), tail @ ..] = rest {
+            if st.to_string() == "selftype" {
+                self_type = true;
+                scalar_generic.extend(rest[..5].iter().cloned());
+                rest = tail;
+            }
+        }
+        if let [TokenTree::Ident(c), TokenTree::Group(names), tail @ ..] = rest {
+            if c.to_string() == "consumed" {
+                let all_trivial = names.stream().into_iter().all(|name| {
+                    argument_types.iter().any(|(n, t)| *n == name.to_string() && trivial(t))
+                });
+                if !all_trivial {
+                    return false;
+                }
+                rest = tail;
+            }
+        }
+        rest.is_empty()
+    })();
     let receiver_ok = match rust_receiver(tail) {
-        None => generic.is_empty() || typed_only,
+        None => !self_type,
         Some(ty) => {
             let ty = ty.replace(' ', "");
             let consumes = declared.as_ref().is_none_or(|(_, parsed)| parsed.consumes_self());
             let erased = ty.strip_prefix('&').is_some_and(|t| !t.starts_with("mut") && matches!(bare(t).as_str(), "SwiftObject" | "SwiftValue"));
-            let check_only = tokens.is_empty()
-                || (tokens.len() == 4 && matches!(&tokens[0], TokenTree::Ident(i) if i.to_string() == "receiver"));
-            let wrapper = ty.starts_with('&') && !ty.starts_with("&mut") && typed_only;
-            !consumes && ((erased && check_only) || wrapper)
+            let name = rust_receiver_name(tail).map(|n| n.to_string());
+            let wrapper = ty.starts_with('&') && !ty.starts_with("&mut") && name.is_some_and(|n| typed_values.contains(&n));
+            let by_value = ty.replace(' ', "").ends_with("SwiftValue");
+            !consumes && (erased || wrapper) && (!self_type || by_value) && (erased || !erased_check)
         }
     };
-    // A bound generic call (`[wrapped [(a StackArg)…]] concrete [names] [protocols] [types] [witnesses] [superclasses]
-    // [same types] [] [result?] [checks]`): its arguments scalar, stack values or by address, no receiver, no
-    // typed-throws slot, no closures.
-    let concrete_only = {
-        let (wrapped, rest) = match tokens.as_slice() {
-            [TokenTree::Ident(w), TokenTree::Group(entries), rest @ ..] if w.to_string() == "wrapped" => (Some(entries), rest),
-            rest => (None, rest),
-        };
-        let stack_only = wrapped.is_none_or(|entries| {
-            entries.stream().into_iter().all(|e| matches!(e, TokenTree::Group(g) if g.stream().into_iter().nth(1).is_some_and(|w| w.to_string() == "StackArg")))
-        });
-        stack_only
-            && rest.len() == 10
-            && matches!(&rest[0], TokenTree::Ident(c) if c.to_string() == "concrete")
-            && matches!(&rest[7], TokenTree::Group(error) if error.stream().is_empty())
-    };
-    let stack = |t: &str| matches!(t.replace(' ', "").as_str(), "&i64" | "&f64" | "&bool");
-    if kind == "sync"
-        && concrete_only
-        && rust_receiver(tail).is_none()
-        && rust_argument_types(tail).iter().all(|t| scalar(t) || stack(t))
-        && in_registers(&rust_return(tail))
-    {
+    let arguments_ok = argument_types.iter().all(|(name, ty)| {
+        scalar(ty) || (typed_values.contains(name) && ty.replace(' ', "").starts_with('&') && !ty.replace(' ', "").starts_with("&mut"))
+    });
+    let typed_result = typed_result;
+    let scalar_path = kind == "sync" && scalar_shape && receiver_ok && arguments_ok && (in_registers(&rust_return(tail)) || typed_result);
+    if scalar_path {
         let mut body: Vec<TokenTree> = vec![TokenTree::Ident(binding.clone()), TokenTree::Ident(how.clone())];
-        body.push(TokenTree::Ident(proc_macro::Ident::new("scalargeneric", proc_macro::Span::call_site())));
-        return route_body(path, body, tail, unchecked, generic);
+        body.push(TokenTree::Ident(proc_macro::Ident::new("scalar", proc_macro::Span::call_site())));
+        return route_body(path, body, tail, unchecked, scalar_generic.into_iter().collect());
     }
-    let kind = if kind == "sync"
-        && receiver_ok
-        && arguments_ok
-        && (in_registers(&rust_return(tail)) || typed_result)
-    {
-        "scalar".to_string()
-    } else {
-        kind
-    };
     // Built from the token trees themselves: `$crate` in `path` does not survive a trip through text.
     let mut body: Vec<TokenTree> = vec![TokenTree::Ident(binding.clone()), TokenTree::Ident(how.clone())];
     body.extend(kind.parse::<TokenStream>().expect("kind tokens"));

@@ -243,6 +243,18 @@ impl<T: super::value::IntoSwift + Copy> ScalarArg for super::func::StackArg<'_, 
     }
 }
 
+/// Type metadata (`Self`'s, of a generic struct's member): one register, kept for an opaque or `Self` result's type.
+impl ScalarArg for SwiftType {
+    #[inline]
+    fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, _floats: &mut usize, made: &mut Made) -> bool {
+        let Some(slot) = regs.gpr.get_mut(*ints) else { return false };
+        *slot = self.as_ptr() as u64;
+        *ints += 1;
+        made.generics.push(self.as_ptr());
+        true
+    }
+}
+
 /// A Swift string borrowed for a call made right away: its two words (a consumed one takes the general path).
 impl ScalarArg for &super::SwiftString {
     #[inline]
