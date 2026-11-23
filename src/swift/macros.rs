@@ -644,7 +644,8 @@ macro_rules! __swift_item {
         $(#[$doc])*
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
             static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::__dispatched($crate::__swift_symbol!($how $spec), $crate::__swift_thunk!($how $spec));
-            let call = $crate::__swift_call!(FUNCTION [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
+            let now = FUNCTION.__now();
+            let call = $crate::__swift_call!(now [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::__bind_sync($this, call, $crate::__swift_consumes_self!($how $spec));)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call.invoke()
@@ -660,7 +661,8 @@ macro_rules! __swift_item {
             // A static: what it looks up (a class member's dispatch) is kept for the next call.
             static FUNCTION: $crate::swift::SwiftFn =
                 unsafe { $crate::swift::SwiftFn::__linked(&raw const ENTRY as *const ::core::ffi::c_void, $crate::__swift_thunk!($how $spec)) };
-            let call = $crate::__swift_call!(FUNCTION [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
+            let now = FUNCTION.__now();
+            let call = $crate::__swift_call!(now [$($arg),*] [$($generic)*] $crate::__swift_result_type!($how $spec));
             $(let call = $crate::swift::__bind_sync($this, call, $crate::__swift_consumes_self!($how $spec));)?
             $(let call = $crate::__swift_throws!($throws, call);)?
             call.invoke()

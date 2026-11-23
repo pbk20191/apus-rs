@@ -229,6 +229,14 @@ public struct Pair<A, B> {
     public func sum() -> Int where A == Int, B == Int { first + second }
     public var text: String { "\(first) \(second)" }
 }
+// Counts its live instances: a consumed argument must be a copy, leaving the caller's (swift_generic_auto).
+public final class Kept {
+    nonisolated(unsafe) static var alive = 0
+    init() { Kept.alive += 1 }
+    deinit { Kept.alive -= 1 }
+}
+public func makeKept() -> [Kept] { [Kept()] }
+public func keptAlive() -> Int { Kept.alive }
 public struct Flag<V> {
     public var value: V
     public init() where V == Bool { value = true }

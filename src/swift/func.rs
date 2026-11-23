@@ -225,6 +225,10 @@ pub struct ArgLowering {
     pub(crate) borrows: bool,
     /// The generic arguments passed (metadata, witness tables), in order: what an opaque result type depends on.
     pub(crate) generic_args: Vec<*const c_void>,
+    /// The call is made before the arguments' borrows end: a borrowed value need not be copied.
+    pub(crate) now: bool,
+    /// An argument the callee consumes is being lowered (`Consumed`): it takes what is lowered, so a copy.
+    pub(crate) consuming: bool,
 }
 
 impl ArgLowering {
@@ -241,6 +245,8 @@ impl ArgLowering {
             failure: None,
             borrows: false,
             generic_args: Vec::new(),
+            now: false,
+            consuming: false,
         }
     }
 
@@ -372,7 +378,11 @@ impl SwiftArg for ErrorSlot {
 /// A value passed by address: an argument of generic type, or a large or resilient struct.
 impl SwiftArg for &SwiftValue {
     fn lower(&self, into: &mut ArgLowering) {
-        let copy = (*self).clone(); // the call may outlive the borrow
+        // Borrowed by a call made right away: its address (the callee may neither change nor keep it).
+        if into.now && !into.consuming {
+            return into.int(self.as_ptr() as u64);
+        }
+        let copy = (*self).clone(); // the call may outlive the borrow, or the callee consumes it
         into.int(copy.as_ptr() as u64);
         into.owned.push(Owned::Value(copy));
     }
@@ -661,7 +671,9 @@ pub struct Consumed<A>(pub A);
 impl<A: SwiftArg> SwiftArg for Consumed<A> {
     fn lower(&self, into: &mut ArgLowering) {
         let start = into.owned.len();
+        let consuming = std::mem::replace(&mut into.consuming, true);
         self.0.lower(into);
+        into.consuming = consuming;
         hand_over(&mut into.owned, start);
     }
 }

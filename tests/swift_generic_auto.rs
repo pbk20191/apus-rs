@@ -65,6 +65,12 @@ apus::swift! {
     fn heaviest(self: &SwiftValue) -> i64;
     #[swift_linked = "Res.Pair(struct)<A, B>.init(second: B) where A == Int", B = "Swift.String"]
     fn pair_of_string(second: &SwiftValue) -> SwiftValue;
+    #[swift_linked = "Res.Pair(struct)<A, B>.init(second: B) where A == Int", B = "[Res.Kept(class)]"]
+    fn pair_of_kept(second: &SwiftValue) -> SwiftValue;
+    #[swift_linked = "Res.makeKept() -> [Kept(class)]"]
+    fn make_kept() -> DirectValue;
+    #[swift_linked = "Res.keptAlive() -> Int"]
+    fn kept_alive() -> i64;
     #[swift_linked = "Res.Pair(struct)<A, B>.init(second: B) where A == Int", B = "Swift.Int"]
     fn pair_of_int(second: &SwiftValue) -> SwiftValue;
     #[swift_linked = "static Res.Pair(struct)<A, B>.tag(_: B) -> String where A == Int", B = "Swift.String"]
@@ -341,6 +347,17 @@ fn a_value_that_does_not_conform() -> Result<(), Failed> {
     Ok(())
 }
 
+/// A sync call made right away passes a borrowed `&SwiftValue` by its address, but one the callee consumes (an
+/// initializer's) as a copy: the caller's value lives on after the callee and its result are gone.
+fn consumed_arguments_are_copies() -> Result<(), Failed> {
+    let kept = make_kept().unwrap().0;
+    check(kept_alive().unwrap() == 1, "one Kept made")?;
+    drop(pair_of_kept(&kept).unwrap());
+    check(kept_alive().unwrap() == 1, "the caller's array still holds its Kept")?;
+    drop(kept);
+    check(kept_alive().unwrap() == 0, "gone with the caller's array")
+}
+
 fn main() {
     common::run(vec![
         Trial::test("automatic_generic_arguments", automatic_generic_arguments),
@@ -353,5 +370,6 @@ fn main() {
         Trial::test("typed_wrappers", typed_wrappers),
         Trial::test("kinds_from_symbol_graphs", kinds_from_symbol_graphs),
         Trial::test("declarations_by_name", declarations_by_name),
+        Trial::test("consumed_arguments_are_copies", consumed_arguments_are_copies),
     ]);
 }

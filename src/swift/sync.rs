@@ -68,9 +68,11 @@ impl SwiftFn {
         self.resolve().is_some()
     }
 
+    /// `now`: the call is made before the arguments' borrows end (see [`SwiftFnNow`]).
     #[inline]
-    fn prepare<R>(&self, args: impl SwiftArgs, slot: IndirectSlot, indirect: bool) -> SwiftSyncCall<R> {
+    fn prepare<R>(&self, args: impl SwiftArgs, slot: IndirectSlot, indirect: bool, now: bool) -> SwiftSyncCall<R> {
         let mut lowering = ArgLowering::new(false);
+        lowering.now = now;
         args.lower(&mut lowering);
         SwiftSyncCall { function: self.resolve(), symbol: self.symbol, lowering, slot, indirect, throws: false, invalid: None, result: PhantomData }
     }
@@ -85,10 +87,15 @@ impl SwiftFn {
     #[doc(hidden)]
     #[inline]
     pub fn call_declared<R: SwiftRet>(&self, args: impl SwiftArgs, result_type: super::func::DeclaredResult) -> SwiftSyncCall<R> {
+        self.declared(args, result_type, false)
+    }
+
+    #[inline]
+    fn declared<R: SwiftRet>(&self, args: impl SwiftArgs, result_type: super::func::DeclaredResult, now: bool) -> SwiftSyncCall<R> {
         match R::result_slot(result_type) {
-            Ok((slot, indirect)) => self.prepare(args, slot, indirect),
+            Ok((slot, indirect)) => self.prepare(args, slot, indirect, now),
             Err(error) => {
-                let mut call = self.prepare((), IndirectSlot::inline(), false);
+                let mut call = self.prepare((), IndirectSlot::inline(), false, false);
                 call.invalid = Some(error);
                 call
             }
@@ -97,13 +104,39 @@ impl SwiftFn {
 
     /// Like [`call`](Self::call) for a result returned by address: a generic, large or resilient value of `ty`.
     pub fn call_returning(&self, ty: SwiftType, args: impl SwiftArgs) -> SwiftSyncCall<SwiftValue> {
-        self.prepare(args, IndirectSlot::boxed(UninitValue::new(ty), false), true)
+        self.prepare(args, IndirectSlot::boxed(UninitValue::new(ty), false), true, false)
+    }
+
+    /// The function for a call made right away (what `swift!` generates for a sync function it invokes at once).
+    #[doc(hidden)]
+    #[inline]
+    pub const fn __now(&'static self) -> SwiftFnNow {
+        SwiftFnNow(self)
     }
 
     /// Like [`call`](Self::call) for a result of `ty` returned in registers (at most four words of integers
     /// and references: arrays, dictionaries, small structs), kept as an opaque value.
     pub fn call_direct(&self, ty: SwiftType, args: impl SwiftArgs) -> SwiftSyncCall<SwiftValue> {
-        self.prepare(args, IndirectSlot::boxed(UninitValue::new(ty), true), false)
+        self.prepare(args, IndirectSlot::boxed(UninitValue::new(ty), true), false, false)
+    }
+}
+
+/// A synchronous function called right away, while its arguments are still borrowed: a value it borrows by address
+/// (`&SwiftValue`) is passed as it is rather than copied, as for a call that may run later. What `swift!` uses for
+/// a sync function's call that it invokes at once.
+#[doc(hidden)]
+#[derive(Clone, Copy)]
+pub struct SwiftFnNow(&'static SwiftFn);
+
+impl SwiftFnNow {
+    #[inline]
+    pub fn call_declared<R: SwiftRet>(self, args: impl SwiftArgs, result_type: super::func::DeclaredResult) -> SwiftSyncCall<R> {
+        self.0.declared(args, result_type, true)
+    }
+
+    #[inline]
+    pub fn call_returning(self, ty: SwiftType, args: impl SwiftArgs) -> SwiftSyncCall<SwiftValue> {
+        self.0.prepare(args, IndirectSlot::boxed(UninitValue::new(ty), false), true, true)
     }
 }
 
