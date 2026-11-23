@@ -109,7 +109,17 @@ impl Graphs {
         if let Some(known) = self.modules.lock().unwrap_or_else(|e| e.into_inner()).get(name) {
             return *known;
         }
-        let loaded = locate(name).and_then(|(file, cached)| if cached { load_cached(&file) } else { load(&file) }).map(|m| &*Box::leak(Box::new(m)));
+        let loaded = locate(name)
+            .and_then(|(file, cached)| match cached {
+                // A copy that cannot be read, its graph's file deleted: extracted again.
+                true => load_cached(&file).or_else(|| {
+                    let (index, data) = compact_files(&file);
+                    let (_, _) = (std::fs::remove_file(index), std::fs::remove_file(data));
+                    extract_into(name, file.parent()?).and_then(|file| load_cached(&file))
+                }),
+                false => load(&file),
+            })
+            .map(|m| &*Box::leak(Box::new(m)));
         self.modules.lock().unwrap_or_else(|e| e.into_inner()).insert(name.to_string(), loaded);
         loaded
     }
@@ -318,13 +328,28 @@ fn locate(module: &str) -> Option<(PathBuf, bool)> {
 /// USRs and paths (`.apus3.idx`), and the symbols (`.apus3.dat`), each read when looked up. The graph is tens or
 /// hundreds of megabytes (SwiftUI's: 500), which every crate naming the module would otherwise read whole.
 fn load_cached(file: &Path) -> Option<Module> {
-    let (index, data) = (file.with_extension("apus3.idx"), file.with_extension("apus3.dat"));
+    let (index, data) = compact_files(file);
     if let Some(module) = load_compact(&index, &data) {
         return Some(module);
     }
     let module = load(file)?;
-    let _ = save_compact(&module, &index, &data);
+    // The copy written, the graph's file and copies in older formats go (SwiftUI's graph: 500 MB).
+    if save_compact(&module, &index, &data).is_ok() {
+        let _ = std::fs::remove_file(file);
+        for old in ["apus", "apus2"] {
+            let _ = std::fs::remove_file(file.with_extension(format!("{old}.idx")));
+            let _ = std::fs::remove_file(file.with_extension(format!("{old}.dat")));
+        }
+    }
     Some(module)
+}
+
+/// The compact copy's format, part of its files' names: a new one leaves an older copy unread.
+const COMPACT: &str = "apus3";
+
+/// A graph's compact copy: its index and its data.
+fn compact_files(file: &Path) -> (PathBuf, PathBuf) {
+    (file.with_extension(format!("{COMPACT}.idx")), file.with_extension(format!("{COMPACT}.dat")))
 }
 
 type IndexEntry = (String, String, Vec<String>, u64, u64);
@@ -373,13 +398,23 @@ fn extract(module: &str) -> Option<PathBuf> {
     (sdk, version).hash(&mut hasher);
     let dir = std::env::temp_dir().join("apus-symbolgraphs").join(format!("{:016x}", hasher.finish()));
     let file = dir.join(format!("{module}.symbols.json"));
-    let missing = dir.join(format!("{module}.missing"));
-    if file.exists() {
+    // Extracted before: the graph's file, or (once read) its compact copy, the file then deleted.
+    if file.exists() || compact_files(&file).0.exists() {
         return Some(file);
     }
-    if missing.exists() {
+    if dir.join(format!("{module}.missing")).exists() {
         return None;
     }
+    extract_into(module, &dir)
+}
+
+/// Extracts `module`'s graph from the SDK into `dir` (`{module}.symbols.json`), or remembers there that the SDK has
+/// no such module.
+fn extract_into(module: &str, dir: &Path) -> Option<PathBuf> {
+    let sdk = crate::sdk::sdk()?;
+    let version = crate::sdk::sdk_version()?;
+    let file = dir.join(format!("{module}.symbols.json"));
+    let missing = dir.join(format!("{module}.missing"));
     let work = dir.join(format!("{module}.{}.tmp", std::process::id()));
     std::fs::create_dir_all(&work).ok()?;
     let arch = if cfg!(target_arch = "aarch64") { "arm64" } else { "x86_64" };
@@ -524,13 +559,29 @@ fn load(file: &Path) -> Option<Module> {
 
 #[cfg(test)]
 mod tests {
+    /// Once its compact copy is written, a cached graph's file and copies in older formats are deleted (SwiftUI's
+    /// graph is 500 MB); the copy alone is read after.
+    #[test]
+    fn cache_keeps_the_compact_copy_only() {
+        let dir = std::env::temp_dir().join(format!("apus-cache-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = super::extract_into("SwiftData", &dir).expect("the SDK's SwiftData graph");
+        let stale = file.with_extension("apus2.idx");
+        std::fs::write(&stale, "[]").unwrap();
+        let first = super::load_cached(&file).unwrap().symbols().count();
+        assert!(!file.exists() && !stale.exists(), "the graph's file and an older copy are deleted");
+        assert!(file.with_extension(format!("{}.idx", super::COMPACT)).exists());
+        assert_eq!(super::load_cached(&file).unwrap().symbols().count(), first, "read again from the copy");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A graph read from its compact copy holds what the graph itself gives.
     #[test]
     fn compact_copy() {
-        let file = super::extract("SwiftData").expect("the SDK's SwiftData graph");
-        let full = super::load(&file).unwrap();
         let dir = std::env::temp_dir().join(format!("apus-compact-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        let file = super::extract_into("SwiftData", &dir).expect("the SDK's SwiftData graph");
+        let full = super::load(&file).unwrap();
         let (index, data) = (dir.join("SwiftData.idx"), dir.join("SwiftData.dat"));
         super::save_compact(&full, &index, &data).unwrap();
         let read = super::load_compact(&index, &data).unwrap();
