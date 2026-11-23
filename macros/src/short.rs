@@ -59,7 +59,9 @@ pub fn expand(text: &str) -> Result<Option<String>, String> {
             "swift.func" | "swift.method" | "swift.type.method" | "swift.init" | "swift.property" | "swift.type.property" | "swift.subscript" | "swift.type.subscript"
         )
     };
-    let found: Vec<&Symbol> = module.find(&path).filter(callable).collect();
+    // Not in the module itself: in one it re-exports (SwiftUI's `Text`, declared in SwiftUICore), whose name the
+    // declaration then gives (its symbol is mangled with the module it was first defined in all the same).
+    let (module_name, module, found) = declaring_module(short.module, module, &path, callable);
     let symbol = match found.as_slice() {
         [one] => *one,
         [] => return Err(format!("`{text}`: {} has no `{}`", short.module, path.join("."))),
@@ -73,7 +75,30 @@ pub fn expand(text: &str) -> Result<Option<String>, String> {
     if (property || subscript) != short.accessor.is_some() {
         return Err(format!("`{text}`: a property or subscript is written with `{{ get }}` or `{{ set }}`, anything else without"));
     }
-    rewrite(short.module, module, &short.context, symbol, short.accessor).map(Some).map_err(|e| format!("`{text}`: {e}"))
+    rewrite(module_name, module, &short.context, symbol, short.accessor).map(Some).map_err(|e| format!("`{text}`: {e}"))
+}
+
+/// The symbols at `path` that `wanted` accepts, in `module` (named `name`) or else in the first module it re-exports
+/// that has some, with that module's name and graph.
+fn declaring_module<'m>(
+    name: &'m str,
+    module: &'m Module,
+    path: &'m [&'m str],
+    wanted: impl Fn(&&Symbol) -> bool,
+) -> (&'m str, &'m Module, Vec<&'m Symbol>) {
+    let found: Vec<&Symbol> = module.find(path).filter(&wanted).collect();
+    if !found.is_empty() {
+        return (name, module, found);
+    }
+    for other in graphs::reexports(name).iter().filter(|m| m.as_str() != name) {
+        if let Some(graph) = graphs::graphs().module(other) {
+            let found: Vec<&Symbol> = graph.find(path).filter(&wanted).collect();
+            if !found.is_empty() {
+                return (other.as_str(), graph, found);
+            }
+        }
+    }
+    (name, module, Vec::new())
 }
 
 fn declaration_text(fragments: &[Fragment]) -> String {
@@ -1167,8 +1192,8 @@ pub fn expected_symbol(text: &str) -> Option<String> {
     let module = graphs::graphs().module(short.module)?;
     let mut path: Vec<&str> = short.context.clone();
     path.push(&short.title);
-    let symbol = module.find(&path).find(|s| s.kind != "swift.typealias" && graphs::type_kind(&s.kind).is_none())?;
-    usr_symbol(&symbol.usr, short.accessor)
+    let (_, _, found) = declaring_module(short.module, module, &path, |s| s.kind != "swift.typealias" && graphs::type_kind(&s.kind).is_none());
+    usr_symbol(&found.first()?.usr, short.accessor)
 }
 
 /// The symbol a graph entry's USR names (see [`expected_symbol`]).
@@ -1367,6 +1392,15 @@ mod tests {
         assert!(expanded.contains("ticks: () -> some SwiftUI.SliderTickContent<Value == V>"), "{expanded}");
         let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
         assert_eq!(Some(mangled), super::usr_symbol(&symbol.usr, None), "{expanded}");
+    }
+
+    /// A type the module re-exports from another (SwiftUI's `Text`, declared in SwiftUICore) is found there.
+    #[test]
+    fn reexported_types() {
+        let text = "SwiftUI.Text.init(verbatim:)";
+        let expanded = super::expand(text).unwrap().unwrap();
+        let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(symbol), super::expected_symbol(text), "{expanded}");
     }
 
     /// The graph leaves out `__shared` and `_const`, which the symbol keeps (`h`, `Yt`): an initializer's parameter

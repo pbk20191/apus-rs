@@ -168,6 +168,13 @@ required-features = ["test-probe"]
 [workspace]
 members = [".", "sys", "mangle", "macros", "builder", "examples/swift-data"]
 
+# swift! reads a framework's symbol graph (SwiftUI's: 500 MB of JSON) the first time it names the framework; an
+# unoptimized proc macro takes several seconds over it (README: Build time).
+[profile.dev.package.apus-macros]
+opt-level = 3
+[profile.dev.package.serde_json]
+opt-level = 3
+
 [[test]]
 name = "swift_enum"
 harness = false

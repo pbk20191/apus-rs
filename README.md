@@ -310,10 +310,24 @@ println!("{}", products.description());                                     // S
   `TOTAL.call::<i64>(()).on_value(&big).invoke()?` (a getter of a struct passed by address).
 
 **Symbol graphs.** A declaration need not spell everything out when its module has a symbol graph: an SDK
-module's is extracted once (`swift-symbolgraph-extract`, about four seconds, cached under the temporary directory per
-SDK) with a compact copy beside it (written the first time, up to ten seconds for SwiftUI's 500 MB graph): an index
-read by each build (SwiftUI's in about 0.2 s) and the symbols, each read when looked up. A program's own module's
-graph is emitted by `apus-build` (and found through `APUS_SYMBOL_GRAPHS`).
+module's is extracted once (`swift-symbolgraph-extract`, cached under the temporary directory per SDK; SwiftUI's
+takes about nine seconds) with a compact copy beside it, written the first time without the copies of protocol
+extension members the graph shows on each conforming type (95% of SwiftUI's): an index read by each build and the
+symbols, each read when looked up. A program's own module's graph is emitted by `apus-build` (and found through
+`APUS_SYMBOL_GRAPHS`).
+
+**Build time.** Reading a framework's graph the first time takes an unoptimized proc macro several seconds
+(SwiftUI's: about six); optimizing `apus-macros` and `serde_json` makes it about one, for about half a second more
+on a clean build:
+
+```toml
+[profile.dev.package.apus-macros]
+opt-level = 3
+[profile.dev.package.serde_json]
+opt-level = 3
+```
+
+Once read, a build of a crate with forty declarations takes about 0.1 s more than without them.
 
 - Kinds may be left out: `SwiftData.ModelContext.fetch<T: PersistentModel>(_: FetchDescriptor<T>) throws -> [T]`
   (`ModelContext` is a class, `PersistentModel` class-bound, as `(class)` and `(AnyObject)` would say). A kind or mark

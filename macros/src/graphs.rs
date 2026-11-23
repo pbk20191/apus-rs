@@ -315,10 +315,10 @@ fn locate(module: &str) -> Option<(PathBuf, bool)> {
 }
 
 /// An SDK module's graph from its compact copy beside it, written the first time: an index of its symbols' kinds,
-/// USRs and paths (`.apus2.idx`), and the symbols (`.apus2.dat`), each read when looked up. The graph is tens or
+/// USRs and paths (`.apus3.idx`), and the symbols (`.apus3.dat`), each read when looked up. The graph is tens or
 /// hundreds of megabytes (SwiftUI's: 500), which every crate naming the module would otherwise read whole.
 fn load_cached(file: &Path) -> Option<Module> {
-    let (index, data) = (file.with_extension("apus2.idx"), file.with_extension("apus2.dat"));
+    let (index, data) = (file.with_extension("apus3.idx"), file.with_extension("apus3.dat"));
     if let Some(module) = load_compact(&index, &data) {
         return Some(module);
     }
@@ -405,94 +405,117 @@ fn extract(module: &str) -> Option<PathBuf> {
 
 /// The parts of a graph apus reads; the rest (documentation, locations, relationships, availability) is skipped.
 mod raw {
+    //! Strings borrowed from the file's bytes where they need no unescaping: only the symbols kept are copied.
     use serde::Deserialize;
+    use std::borrow::Cow;
 
     #[derive(Deserialize)]
-    pub struct Graph {
-        pub symbols: Vec<Symbol>,
+    pub struct Graph<'a> {
+        #[serde(borrow)]
+        pub symbols: Vec<Symbol<'a>>,
     }
 
     #[derive(Deserialize)]
-    pub struct Symbol {
-        pub kind: Named,
-        pub identifier: Identifier,
-        #[serde(rename = "pathComponents", default)]
-        pub path: Vec<String>,
-        #[serde(rename = "declarationFragments", default)]
-        pub fragments: Vec<Fragment>,
-        #[serde(rename = "swiftGenerics", default)]
-        pub generics: Option<Generics>,
-        #[serde(rename = "swiftExtension", default)]
-        pub extension: Option<Extension>,
+    pub struct Symbol<'a> {
+        #[serde(borrow)]
+        pub kind: Named<'a>,
+        #[serde(borrow)]
+        pub identifier: Identifier<'a>,
+        #[serde(rename = "pathComponents", default, borrow)]
+        pub path: Vec<Cow<'a, str>>,
+        #[serde(rename = "declarationFragments", default, borrow)]
+        pub fragments: Vec<Fragment<'a>>,
+        #[serde(rename = "swiftGenerics", default, borrow)]
+        pub generics: Option<Generics<'a>>,
+        #[serde(rename = "swiftExtension", default, borrow)]
+        pub extension: Option<Extension<'a>>,
     }
 
     #[derive(Deserialize)]
-    pub struct Named {
-        pub identifier: String,
+    pub struct Named<'a> {
+        #[serde(borrow)]
+        pub identifier: Cow<'a, str>,
     }
 
     #[derive(Deserialize)]
-    pub struct Identifier {
-        pub precise: String,
+    pub struct Identifier<'a> {
+        #[serde(borrow)]
+        pub precise: Cow<'a, str>,
     }
 
     #[derive(Deserialize)]
-    pub struct Fragment {
-        pub kind: String,
-        pub spelling: String,
-        #[serde(rename = "preciseIdentifier", default)]
-        pub precise: Option<String>,
+    pub struct Fragment<'a> {
+        #[serde(borrow)]
+        pub kind: Cow<'a, str>,
+        #[serde(borrow)]
+        pub spelling: Cow<'a, str>,
+        #[serde(rename = "preciseIdentifier", default, borrow)]
+        pub precise: Option<Cow<'a, str>>,
     }
 
     #[derive(Deserialize, Default)]
-    pub struct Generics {
-        #[serde(default)]
-        pub parameters: Vec<Parameter>,
-        #[serde(default)]
-        pub constraints: Vec<Constraint>,
+    pub struct Generics<'a> {
+        #[serde(default, borrow)]
+        pub parameters: Vec<Parameter<'a>>,
+        #[serde(default, borrow)]
+        pub constraints: Vec<Constraint<'a>>,
     }
 
     #[derive(Deserialize)]
-    pub struct Parameter {
-        pub name: String,
+    pub struct Parameter<'a> {
+        #[serde(borrow)]
+        pub name: Cow<'a, str>,
         pub depth: u64,
     }
 
     #[derive(Deserialize)]
-    pub struct Constraint {
-        pub kind: String,
-        pub lhs: String,
-        pub rhs: String,
-        #[serde(rename = "rhsPrecise", default)]
-        pub rhs_precise: Option<String>,
+    pub struct Constraint<'a> {
+        #[serde(borrow)]
+        pub kind: Cow<'a, str>,
+        #[serde(borrow)]
+        pub lhs: Cow<'a, str>,
+        #[serde(borrow)]
+        pub rhs: Cow<'a, str>,
+        #[serde(rename = "rhsPrecise", default, borrow)]
+        pub rhs_precise: Option<Cow<'a, str>>,
     }
 
     #[derive(Deserialize)]
-    pub struct Extension {
-        #[serde(rename = "extendedModule", default)]
-        pub extended_module: String,
-        #[serde(default)]
-        pub constraints: Vec<Constraint>,
+    pub struct Extension<'a> {
+        #[serde(rename = "extendedModule", default, borrow)]
+        pub extended_module: Cow<'a, str>,
+        #[serde(default, borrow)]
+        pub constraints: Vec<Constraint<'a>>,
     }
 }
 
 fn load(file: &Path) -> Option<Module> {
     let bytes = std::fs::read(file).ok()?;
     let graph: raw::Graph = serde_json::from_slice(&bytes).ok()?;
-    let constraints = |list: Vec<raw::Constraint>| list.into_iter().map(|c| (c.kind, c.lhs, c.rhs, c.rhs_precise)).collect();
+    let owned = |c: std::borrow::Cow<str>| c.into_owned();
+    let constraints = |list: Vec<raw::Constraint>| {
+        list.into_iter().map(|c| (owned(c.kind), owned(c.lhs), owned(c.rhs), c.rhs_precise.map(owned))).collect()
+    };
+    // A protocol extension's member shown again on each conforming type (`…::SYNTHESIZED::…`, 95% of SwiftUI's
+    // graph): called through the protocol, never by such a copy, whose USR is no symbol.
     let symbols = graph
         .symbols
         .into_iter()
+        .filter(|s| !s.identifier.precise.contains("::SYNTHESIZED::"))
         .map(|s| {
             let generics = s.generics.unwrap_or_default();
             Symbol {
-                kind: s.kind.identifier,
-                usr: s.identifier.precise,
-                path: s.path,
-                fragments: s.fragments.into_iter().map(|f| Fragment { kind: f.kind, spelling: f.spelling, precise: f.precise }).collect(),
-                params: generics.parameters.into_iter().map(|p| (p.name, p.depth)).collect(),
+                kind: owned(s.kind.identifier),
+                usr: owned(s.identifier.precise),
+                path: s.path.into_iter().map(owned).collect(),
+                fragments: s
+                    .fragments
+                    .into_iter()
+                    .map(|f| Fragment { kind: owned(f.kind), spelling: owned(f.spelling), precise: f.precise.map(owned) })
+                    .collect(),
+                params: generics.parameters.into_iter().map(|p| (owned(p.name), p.depth)).collect(),
                 constraints: constraints(generics.constraints),
-                extension: s.extension.map(|e| Extension { extended_module: e.extended_module, constraints: constraints(e.constraints) }),
+                extension: s.extension.map(|e| Extension { extended_module: owned(e.extended_module), constraints: constraints(e.constraints) }),
             }
         })
         .collect();
