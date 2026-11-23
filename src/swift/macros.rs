@@ -656,7 +656,7 @@ macro_rules! __swift_item {
         $(#[$doc])*
         $vis fn $name($($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
             static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::__dispatched($crate::__swift_symbol!($how $spec), $crate::__swift_thunk!($how $spec));
-            FUNCTION.__call_scalar(($($arg,)*), false $(|| $crate::__swift_throws!($throws))?)
+            FUNCTION.__call_scalar(($($arg,)*), false $(|| $crate::__swift_throws!($throws))?, $crate::__swift_result_type!($how $spec))
         }
     };
     (linked $how:ident scalar [$(#[$doc:meta])*] [$vis:vis] $name:ident [] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [] $spec:literal) => {
@@ -668,7 +668,7 @@ macro_rules! __swift_item {
             }
             static FUNCTION: $crate::swift::SwiftFn =
                 unsafe { $crate::swift::SwiftFn::__linked(&raw const ENTRY as *const ::core::ffi::c_void, $crate::__swift_thunk!($how $spec)) };
-            FUNCTION.__call_scalar(($($arg,)*), false $(|| $crate::__swift_throws!($throws))?)
+            FUNCTION.__call_scalar(($($arg,)*), false $(|| $crate::__swift_throws!($throws))?, $crate::__swift_result_type!($how $spec))
         }
     };
     (runtime $how:ident sync [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {

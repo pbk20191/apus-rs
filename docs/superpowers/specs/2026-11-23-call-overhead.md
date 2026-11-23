@@ -15,7 +15,7 @@
 |---|---|---|---|
 | `Int, Int -> Int` | 29.1 | 7.5 | 0.8 |
 | `String -> Int` | 49.4 | 40.4 | 0.8 |
-| `Double -> 복원력 있는 struct`(`SwiftValue`) | 45.3 | 35.5 | 0.8 |
+| `Double -> 복원력 있는 struct`(`SwiftValue`) | 45.3 | 21.5 | 0.8 |
 | 바인딩된 제네릭 `<T: Comparable>` | 131.2 | 81.7 | 0.8 |
 | async `Int, Int -> Int` (Task 안) | 207.8 | 113.3 | 5.5 |
 
@@ -51,6 +51,8 @@
   - consume되는 인자가 있으면 proc macro가 일반 경로로 보낸다(+1을 넘겨야 하므로). 테스트 `consumed_arguments_are_copies`가 이를 지킨다. 이 조건을 빼면 테스트가 실패한다.
   - `class instance -> Int`: 6.9 ns(Swift 4.2 ns).
   - 결과는 레지스터로 오는 `String`, `SwiftObject`, `Option<…>`도 이 경로로 받는다.
+  - 주소로 받는 결과(`SwiftValue`: 프레임워크 struct, `some P`)와 `DirectValue`도 이 경로로 받는다. macro가 아는 결과 타입으로 저장소를 잡고, trampoline을 indirect 모드로 부른다.
+  - `Double -> 복원력 있는 struct`: 35.4 → 21.5 ns. 남은 비용의 약 1/4은 결과 상자 할당이다.
 
 - **`SwiftString` (사용자가 고르는 경로):**
   - 한 번 만든 Swift 문자열을 그대로 넘긴다.

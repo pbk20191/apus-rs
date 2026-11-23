@@ -949,7 +949,7 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
     let in_registers = |t: &str| {
         let t = t.replace(' ', "");
         matches!(t.as_str(), "" | "()" | "i64" | "i32" | "u64" | "bool" | "f64" | "String" | "Option<i64>" | "Option<String>")
-            || matches!(bare(&t).as_str(), "SwiftObject" | "SwiftString")
+            || matches!(bare(&t).as_str(), "SwiftObject" | "SwiftString" | "SwiftValue" | "DirectValue")
             || t.strip_prefix("Option<").and_then(|t| t.strip_suffix('>')).is_some_and(|t| bare(t) == "SwiftObject")
     };
     let kind = if kind == "sync"

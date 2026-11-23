@@ -217,20 +217,24 @@ impl SwiftFn {
     /// such a call (the same lowering as the general path, which keeps what other arguments need).
     #[doc(hidden)]
     #[inline]
-    pub fn __call_scalar<R: SwiftRet>(&'static self, args: impl ScalarArgs, throws: bool) -> Result<R, CallError> {
+    pub fn __call_scalar<R: SwiftRet>(&'static self, args: impl ScalarArgs, throws: bool, result_type: super::func::DeclaredResult) -> Result<R, CallError> {
         let function = self.resolve().ok_or(CallError::Unavailable(self.symbol))?.entry(std::ptr::null_mut())?;
         let mut regs = apus_sys::CallRegs { gpr: [0; 8], fpr: [0.0; 8], self_: std::ptr::null_mut(), isolation: -1 };
         if !args.put(&mut regs) {
             return Err(CallError::InvalidArgument("too many arguments for the argument registers"));
         }
+        // A result by address (a resilient struct's: `SwiftValue`) gets its storage, as the general path's does.
+        let (mut slot, indirect) = R::result_slot(result_type)?;
+        slot.resolve(&[])?;
         let mut ret = RetRegs::new();
-        let kind = if R::float() { KIND_FLOATS } else { KIND_INTEGERS };
+        let kind = if indirect { KIND_INDIRECT } else if R::float() { KIND_FLOATS } else { KIND_INTEGERS };
         unsafe {
-            apus_sys::rs_call_sync(function, &regs, std::ptr::null_mut(), &mut ret.0, kind);
+            let address = if indirect { slot.address() } else { std::ptr::null_mut() };
+            apus_sys::rs_call_sync(function, &regs, address, &mut ret.0, kind);
             if throws && !ret.0.error.is_null() {
                 return Err(CallError::Swift(SwiftError::from_raw(ret.0.error)));
             }
-            Ok(R::lift(&ret, &mut IndirectSlot::inline()))
+            Ok(R::lift(&ret, &mut slot))
         }
     }
 }
