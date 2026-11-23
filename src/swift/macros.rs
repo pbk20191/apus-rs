@@ -787,7 +787,7 @@ macro_rules! __swift_call {
     // `concrete [name…] [protocol…] [type…] [([subject] protocol layout)…] [(type class)…] [([subject] type)…]
     // [error?] [result?] [(argument function type)…]`: generic parameters bound to concrete types. The call looks
     // up each name and protocol once; the rest refer to them by index: the metadata passed, the witness tables
-    // (of a bound type `[i]`, or of its associated type `[i protocol "…TL" "…Tl"]`), the superclass and associated
+    // (of a bound type `[i]`, or of its associated type `[i (protocol "…TL" "…Tl")…]`), the superclass and associated
     // type requirements it checks, a typed-throws error type, and the arguments whose type names a bound parameter.
     (@ $function:ident [$($arg:ident),*] $o:tt [concrete [$($n:literal)*] [$($p:literal)*] [$($t:literal)*] [$(([$($ws:tt)*] $wp:literal $wl:ident))*] [$(($sa:literal $sb:literal))*] [$(([$($ss:tt)*] $se:literal))*] [$($err:literal)?] [$($result:literal)?] [$(($ca:ident $cf:ident $ct:literal))*] $($closures:tt)*] $declared:expr) => {{
         static NAMES: [$crate::swift::Named; <[&str]>::len(&[$($n),*])] = [$(($n, ::std::sync::OnceLock::new())),*];
@@ -825,15 +825,16 @@ macro_rules! __swift_call {
     };
 }
 
-/// What a bound declaration's witness table or check is about: `i` a bound type, `i p "…TL" "…Tl"` its associated type.
+/// What a bound declaration's witness table or check is about: `i` a bound type, `i (p "…TL" "…Tl")…` its
+/// associated type, a step for each name of its path.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __swift_bound_subject {
     ($i:literal) => {
         $crate::swift::BoundSubject::Named($i)
     };
-    ($i:literal $p:literal $base:literal $descriptor:literal) => {
-        $crate::swift::BoundSubject::Associated($i, $p, $base, $descriptor)
+    ($i:literal $(($p:literal $base:literal $descriptor:literal))+) => {
+        $crate::swift::BoundSubject::Associated($i, &[$(($p, $base, $descriptor)),+])
     };
 }
 

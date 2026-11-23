@@ -70,6 +70,14 @@
     AppIntents 2558 → 2718, SwiftUI 1919 → 1947).
   - 제네릭 subscript의 `where`는 접근자 앞에 쓴다(`-> T.Value? where T.Value: Sendable { get }`, 2026-11-23,
     Foundation 3876 → 3901).
+  - 중첩 associated type(`OptionsProvider.DefaultValue.ValueType`, 2026-11-23): 경로로 파싱하고, Mangling.rst의
+    `assoc-type-list`(`1A_1BQZ`, `QY`, 요구사항 `RP`/`RT`)로 mangle한다(swiftc 스파이크로 확인). 두 번째 이름부터 그 이름을
+    선언한 프로토콜을 `(of P)`로 쓴다. rewrite는 이것을 associated type USR에서 읽는데, graph에 없는 `_IntentValue` 같은
+    프로토콜은 USR의 단어 치환(`0D4Type`)까지 풀어서 읽는다. 바인딩된 호출은 단계마다 `swift_conformsToProtocol` 후
+    `swift_getAssociatedTypeWitness`로 찾는다(첫 단계와 같은 방법). 같은 타입 요구사항은 짧은 경로가 앞에 온다.
+    AppIntents 2718 → 2908, SwiftUI 1947 → 1958, Foundation 3901 → 3910.
+    남은 불일치(거부됨): 기반 타입의 프로토콜을 선언이 다 보여 주지 않는 경우. 상속(`F.FormatInput: BinaryFloatingPoint`이면
+    `Strideable`은 빠진다)과 프로토콜 자신의 요구사항(`AttributedStringKey.Value`의 `Hashable`)이다. 약 30개.
   - `@export(implementation)`와 `dynamic`도 지운다. 심볼은 `.tbd`로 검사한다.
 - `Void`가 typealias 분기에 먼저 걸리던 것을 고쳤다.
 - 가져온 C 타입과 Objective-C 클래스의 Swift extension:

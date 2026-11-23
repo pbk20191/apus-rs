@@ -172,11 +172,12 @@ fn find((name, found): &'static Named) -> Result<SwiftType, Refused> {
 }
 
 /// What a witness table or check is about: a bound type (an index into the call's names), or one's associated type
-/// (the type, the protocol whose conformance gives it, the protocol's `…TL` and the associated type's `…Tl` symbols).
+/// (the type, then a step for each name of its path: the protocol whose conformance gives it, the protocol's `…TL`
+/// and the associated type's `…Tl` symbols).
 #[doc(hidden)]
 pub enum BoundSubject {
     Named(usize),
-    Associated(usize, usize, &'static str, &'static str),
+    Associated(usize, &'static [(usize, &'static str, &'static str)]),
 }
 
 /// `names` and `protocols`: everything the call looks up, which the rest refer to by index. `types`: the metadata
@@ -200,11 +201,14 @@ pub fn __concrete_args(
     let subject = |subject: &BoundSubject| -> Result<SwiftType, Refused> {
         match *subject {
             BoundSubject::Named(i) => name(i),
-            BoundSubject::Associated(i, p, base, descriptor) => {
-                let ty = name(i)?;
-                let protocol = &protocols[p];
-                let Some(conformance) = ty.conformance(protocol) else { return Err(not_conforming(ty, protocol)) };
-                ty.associated_type(conformance, base, descriptor).ok_or(Refused::Missing(descriptor))
+            BoundSubject::Associated(i, path) => {
+                let mut ty = name(i)?;
+                for &(p, base, descriptor) in path {
+                    let protocol = &protocols[p];
+                    let Some(conformance) = ty.conformance(protocol) else { return Err(not_conforming(ty, protocol)) };
+                    ty = ty.associated_type(conformance, base, descriptor).ok_or(Refused::Missing(descriptor))?;
+                }
+                Ok(ty)
             }
         }
     };

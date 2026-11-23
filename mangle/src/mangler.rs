@@ -35,6 +35,8 @@ struct Mangler {
     /// How many protocols the signature requires of each generic parameter, and the protocols written for
     /// associated types (`T.Value(of P)`).
     protocol_counts: HashMap<GenericParam, usize>,
+    /// The protocols (not marker protocols) the declaration requires of each associated type (`T.A: Q`).
+    member_protocols: HashMap<(GenericParam, String), std::collections::HashSet<(String, String)>>,
     associated: HashMap<(GenericParam, String), Protocol>,
 }
 
@@ -382,12 +384,11 @@ impl Mangler {
                 if self.try_substitution(&key) {
                     return Ok(());
                 }
-                self.identifier(name)?;
-                self.associated_protocol(*param, name)?;
+                let nested = self.associated_path(*param, name)?;
                 if *param == (GenericParam { depth: 0, index: 0 }) {
-                    self.push("Qz");
+                    self.push(if nested { "QZ" } else { "Qz" });
                 } else {
-                    self.push("Qy");
+                    self.push(if nested { "QY" } else { "Qy" });
                     self.param_index(*param);
                 }
                 self.add_substitution(key);
@@ -416,11 +417,38 @@ impl Mangler {
         }
     }
 
+    /// ASTMangler::appendAssocType: an associated type's names, each with its protocol where needed, and `_` after
+    /// the first when there are several (`assoc-type-list`); whether there are.
+    fn associated_path(&mut self, param: GenericParam, path: &str) -> Result<bool, String> {
+        let mut end = 0;
+        for (i, name) in path.split('.').enumerate() {
+            end += name.len() + usize::from(i > 0);
+            self.identifier(name)?;
+            self.associated_protocol(param, &path[..end])?;
+            if i == 0 && path.contains('.') {
+                self.push("_");
+            }
+        }
+        Ok(path.contains('.'))
+    }
+
     /// ASTMangler::appendRequirement
     /// ASTMangler::appendAssociatedTypeName: an associated type of a parameter that the signature requires to
     /// conform to more than one protocol is followed by the protocol that declares it.
     fn associated_protocol(&mut self, param: GenericParam, name: &str) -> Result<(), String> {
-        if self.protocol_counts.get(&param).copied().unwrap_or(0) < 2 {
+        let several = match name.rsplit_once('.') {
+            None => self.protocol_counts.get(&param).copied().unwrap_or(0) >= 2,
+            // A nested one's base (`T.A` of `T.A.B`): the protocols the declaration requires of it, and the one that
+            // declares `B` (written `(of P)`; its own requirement signature's are not known here).
+            Some((base, _)) => {
+                let mut protocols = self.member_protocols.get(&(param, base.to_string())).cloned().unwrap_or_default();
+                if let Some(protocol) = self.associated.get(&(param, name.to_string())) {
+                    protocols.insert((protocol.module.clone(), protocol.name.clone()));
+                }
+                protocols.len() >= 2
+            }
+        };
+        if !several {
             return Ok(());
         }
         let protocol = self.associated.get(&(param, name.to_string())).cloned().ok_or_else(|| {
@@ -442,14 +470,14 @@ impl Mangler {
     }
 
     fn requirement(&mut self, requirement: &Requirement) -> Result<(), String> {
-        let (subject, plain, with_substitution, on_associated_type) = match requirement {
+        let (subject, plain, with_substitution, on_associated_type, on_nested_associated_type) = match requirement {
             Requirement::Conforms(subject, protocol) => {
                 self.protocol(protocol)?;
-                (subject, "R", "RQ", "Rp")
+                (subject, "R", "RQ", "Rp", "RP")
             }
             Requirement::SameType(subject, ty) => {
                 self.ty(ty)?;
-                (subject, "Rs", "RS", "Rt")
+                (subject, "Rs", "RS", "Rt", "RT")
             }
             // docs/ABI/Mangling.rst: `type 'Rb' GENERIC-PARAM-INDEX` (base class); `'Rl' GENERIC-PARAM-INDEX
             // LAYOUT-CONSTRAINT` with `C` for a class. The parser allows them on generic parameters only.
@@ -479,10 +507,9 @@ impl Mangler {
                 if self.try_substitution(&key) {
                     self.push(with_substitution);
                 } else {
-                    self.identifier(name)?;
-                    self.associated_protocol(*param, name)?;
+                    let nested = self.associated_path(*param, name)?;
                     self.add_substitution(key);
-                    self.push(on_associated_type);
+                    self.push(if nested { on_nested_associated_type } else { on_associated_type });
                     self.generic_param_index(*param);
                 }
             }
@@ -594,7 +621,8 @@ pub(crate) fn sorted_requirements(requirements: &[Requirement]) -> Vec<Requireme
         };
         let subject = match subject {
             Subject::Param(param) => (0, *param, String::new()),
-            Subject::Member(param, name) => (1, *param, name.clone()),
+            // A shorter path first (`T.C` before `T.A.B`: compareDependentTypes compares bases first).
+            Subject::Member(param, name) => (1 + name.matches('.').count(), *param, name.clone()),
         };
         (subject, kind, protocol)
     });
@@ -697,19 +725,35 @@ pub(crate) fn protocol_descriptor(protocol: &Protocol) -> Result<String, String>
     Ok(m.buffer)
 }
 
+/// The protocols (not marker protocols) the declaration requires of each associated type.
+fn member_protocols(decl: &Decl) -> HashMap<(GenericParam, String), std::collections::HashSet<(String, String)>> {
+    let mut protocols: HashMap<_, std::collections::HashSet<_>> = HashMap::new();
+    for requirement in all_requirements(decl) {
+        if let Requirement::Conforms(Subject::Member(param, name), protocol) = requirement {
+            if !protocol.is_marker() {
+                protocols.entry((*param, name.clone())).or_default().insert((protocol.module.clone(), protocol.name.clone()));
+            }
+        }
+    }
+    protocols
+}
+
+/// Every requirement of the declaration's generic signature: its context's, its extensions', its own.
+fn all_requirements(decl: &Decl) -> impl Iterator<Item = &Requirement> {
+    decl.context_requirements
+        .iter()
+        .chain(decl.context_extension.iter().flat_map(|e| e.requirements.iter()))
+        .chain(decl.extension.iter().flat_map(|e| e.requirements.iter()))
+        .chain(decl.requirements.iter())
+}
+
 /// The protocols (not marker protocols) the declaration's whole generic signature requires of each parameter.
 fn protocol_counts(decl: &Decl) -> HashMap<GenericParam, usize> {
     let mut conformances = std::collections::HashSet::new();
     if let Some((_, Kind::Protocol)) = decl.context.last() {
         conformances.insert((GenericParam { depth: 0, index: 0 }, None));
     }
-    let requirements = decl
-        .context_requirements
-        .iter()
-        .chain(decl.context_extension.iter().flat_map(|e| e.requirements.iter()))
-        .chain(decl.extension.iter().flat_map(|e| e.requirements.iter()))
-        .chain(decl.requirements.iter());
-    for requirement in requirements {
+    for requirement in all_requirements(decl) {
         match requirement {
             Requirement::Conforms(Subject::Param(param), protocol) if !protocol.is_marker() => {
                 conformances.insert((*param, Some(protocol.clone())));
@@ -730,6 +774,7 @@ pub fn mangle(decl: &Decl) -> Result<String, String> {
         buffer: "$s".into(),
         strip_markers: decl.preconcurrency,
         protocol_counts: protocol_counts(decl),
+        member_protocols: member_protocols(decl),
         associated: decl.associated_protocols.iter().cloned().collect(),
         ..Default::default()
     };

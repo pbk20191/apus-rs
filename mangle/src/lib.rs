@@ -39,6 +39,7 @@ impl std::error::Error for Error {}
 /// @preconcurrency …   (its symbol leaves out @Sendable, global actors in function types and `Sendable` requirements)
 /// [(extension in Module [where …])] Module.Type(kind)[<T, …>]….init[<U: P>]([label|_]: Type, …) [async] [throws] [-> Type?]
 /// … T.Value(of P) …   (an associated type of a parameter with several protocols names its protocol)
+/// … T.A.B(of P) …   (a nested associated type: a name after the first names the protocol declaring it)
 /// … Predicate(struct)<Pack{T}> …   (a variadic generic type's pack argument)
 /// Module.Outer(kind).(extension in Module [where …]) Inner(kind)….member   (a type declared in an extension that is
 ///     part of its context: a constrained one, or one in another module than the extended type's)
@@ -46,7 +47,7 @@ impl std::error::Error for Error {}
 /// ```
 ///
 /// - Types: standard library names (`Int`, `String`, `Bool`, `Double`, `UInt8`, …), `[T]`, `[K: V]`, `Set<T>`,
-///   `T?`, tuples, `Any`, `AnyObject`, `any Proto`, generic parameters and `T.Associated`.
+///   `T?`, tuples, `Any`, `AnyObject`, `any Proto`, generic parameters, `T.Associated` and `T.A.B`.
 /// - Other types name their kind: `Cart(struct)`, `Customer(class)`, `Color(enum)`; `(actor)` is accepted too.
 ///   A bare name belongs to the declaration's module; `Other.Name(kind)` names another module; nested types are
 ///   `Outer(kind).Inner(kind)`. Generic arguments follow the kind: `Box(struct)<Int>`.
@@ -159,6 +160,12 @@ fn nominal_ref(ty: &ast::Ty) -> Option<NominalRef> {
         }),
         _ => None,
     }
+}
+
+/// The standard library or _Concurrency protocol a substitution stands for (`T` of `s:ST`: `Sequence`; `ci`:
+/// `AsyncSequence`).
+pub fn substituted_protocol(substitution: &str) -> Option<&'static str> {
+    names::substituted_protocol(substitution)
 }
 
 /// A protocol's descriptor symbol (`…Mp`, documented mangling) from its name: `"$s9SwiftData15PersistentModelMp"` for
@@ -615,23 +622,35 @@ impl Declaration {
         let subject_param = |subject: &Subject| match subject {
             Subject::Param(param) | Subject::Member(param, _) => *param,
         };
-        // The protocol declaring an associated type: the one written (`T.Value(of P)`), or the parameter's one.
+        // An associated type, a step for each name of its path (`T.A.B`): the protocol declaring the name, the one
+        // written (`.B(of P)`) or the only one its base is required to conform to.
         let associated = |param: GenericParam, member: &str| -> Result<BoundType, Error> {
-            let protocol = match decl.associated_protocols.iter().find(|((p, n), _)| *p == param && n == member) {
-                Some((_, protocol)) => protocol.clone(),
-                None => {
-                    let mut protocols = requirements.iter().filter_map(|r| match r {
-                        Requirement::Conforms(Subject::Param(p), protocol) if *p == param && !protocol.is_marker() => Some(protocol),
-                        _ => None,
-                    });
-                    match (protocols.next(), protocols.next()) {
-                        (Some(protocol), None) => protocol.clone(),
-                        _ => return Err(Error(format!("`{member}`: name the protocol that declares it, `.{member}(of P)`"))),
+            let mut path = Vec::new();
+            let mut end = 0;
+            for (i, name) in member.split('.').enumerate() {
+                let of = &member[..end];
+                end += name.len() + usize::from(i > 0);
+                let prefix = &member[..end];
+                let protocol = match decl.associated_protocols.iter().find(|((p, n), _)| *p == param && n == prefix) {
+                    Some((_, protocol)) => protocol.clone(),
+                    None => {
+                        let mut protocols = requirements.iter().filter_map(|r| match r {
+                            Requirement::Conforms(Subject::Param(p), protocol) if i == 0 && *p == param && !protocol.is_marker() => Some(protocol),
+                            Requirement::Conforms(Subject::Member(p, n), protocol) if i > 0 && *p == param && n == of && !protocol.is_marker() => {
+                                Some(protocol)
+                            }
+                            _ => None,
+                        });
+                        match (protocols.next(), protocols.next()) {
+                            (Some(protocol), None) => protocol.clone(),
+                            _ => return Err(Error(format!("`{prefix}`: name the protocol that declares `{name}`, `.{name}(of P)`"))),
+                        }
                     }
-                }
-            };
-            let (base, descriptor) = mangler::associated_type_symbols(&protocol, member).map_err(Error)?;
-            Ok(BoundType::Associated { ty: bound_name(param)?, protocol: mangler::protocol_descriptor(&protocol).map_err(Error)?, base, descriptor })
+                };
+                let (base, descriptor) = mangler::associated_type_symbols(&protocol, name).map_err(Error)?;
+                path.push(AssociatedStep { protocol: mangler::protocol_descriptor(&protocol).map_err(Error)?, base, descriptor });
+            }
+            Ok(BoundType::Associated { ty: bound_name(param)?, path })
         };
         let mut witnesses = Vec::new();
         let mut superclasses = Vec::new();
@@ -1388,9 +1407,17 @@ pub struct ConcretePlan {
 pub enum BoundType {
     /// A bound type, by its mangled name.
     Named(String),
-    /// An associated type of the bound type `ty`, found through its conformance to `protocol` (a descriptor symbol)
-    /// by the protocol's requirement base (`…TL`) and the associated type's descriptor (`…Tl`).
-    Associated { ty: String, protocol: String, base: String, descriptor: String },
+    /// An associated type of the bound type `ty` (`T.A`, or `T.A.B` for a nested one), found a step for each name.
+    Associated { ty: String, path: Vec<AssociatedStep> },
+}
+
+/// A step to an associated type: through the conformance to `protocol` (a descriptor symbol), by the protocol's
+/// requirement base (`…TL`) and the associated type's descriptor (`…Tl`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssociatedStep {
+    pub protocol: String,
+    pub base: String,
+    pub descriptor: String,
 }
 
 /// The requirements of the extension a declaration is in.
@@ -1691,7 +1718,7 @@ mod isolation_tests {
 
     #[test]
     fn bind_specializes_generic_types_and_requirements() {
-        use super::{BoundType, Declaration, ProtocolLayout};
+        use super::{AssociatedStep, BoundType, Declaration, ProtocolLayout};
         let bind = |d: &str, b: &[(&str, &str)]| Declaration::parse(d).unwrap().bind(b);
         let error = |d: &str, b: &[(&str, &str)]| bind(d, b).unwrap_err().to_string();
         let named = |n: &str| BoundType::Named(n.into());
@@ -1717,11 +1744,19 @@ mod isolation_tests {
         let two = bind("M.two<T: Hashable & Comparable>(_: T) -> Int", &[("T", "Swift.Int")]).unwrap();
         assert_eq!(two.witnesses, [(named("Si"), "$sSLMp".into(), ProtocolLayout::Any), (named("Si"), "$sSHMp".into(), ProtocolLayout::Any)]);
         // Associated types: a conformance's witness table, or the type checked.
-        let element = BoundType::Associated { ty: "Say1M1SVG".into(), protocol: "$sSTMp".into(), base: "$sSTTL".into(), descriptor: "$s7ElementSTTl".into() };
+        let step = |protocol: &str, base: &str, descriptor: &str| AssociatedStep { protocol: protocol.into(), base: base.into(), descriptor: descriptor.into() };
+        let element = BoundType::Associated { ty: "Say1M1SVG".into(), path: vec![step("$sSTMp", "$sSTTL", "$s7ElementSTTl")] };
         let conforming = bind("M.f<S: Sequence>(_: S) -> Int where S.Element: P", &[("S", "[M.S(struct)]")]).unwrap();
         assert_eq!(conforming.witnesses, [(named("Say1M1SVG"), "$sSTMp".into(), ProtocolLayout::Any), (element.clone(), "$s1M1PMp".into(), ProtocolLayout::Either)]);
         let same = bind("M.f<S: Sequence>(_: S) -> Int where S.Element == String", &[("S", "[M.S(struct)]")]).unwrap();
         assert_eq!(same.same_types, [(element, "SS".to_string())]);
+        // A nested one, step by step: the protocol declaring each name, written `(of P)` or the base's only one.
+        let nested = bind("M.f<S: Sequence>(_: S) -> Int where S.Element.ID(of Identifiable) == String", &[("S", "[M.S(struct)]")]).unwrap();
+        let path = vec![step("$sSTMp", "$sSTTL", "$s7ElementSTTl"), step("$ss12IdentifiableMp", "$ss12IdentifiableTL", "$s2IDs12IdentifiableTl")];
+        assert_eq!(nested.same_types, [(BoundType::Associated { ty: "Say1M1SVG".into(), path }, "SS".to_string())]);
+        assert!(error("M.f<S: Sequence>(_: S) -> Int where S.Element.ID == String", &[("S", "[M.S(struct)]")]).contains("(of P)"));
+        let required = bind("M.f<S: Sequence>(_: S) -> Int where S.Element: Identifiable, S.Element.ID == String", &[("S", "[M.S(struct)]")]).unwrap();
+        assert_eq!(required.same_types, nested.same_types);
         // A superclass, checked when the call is made; a typed error's type.
         let sup = bind("M.k<T: Animal(class)>(_: T) -> Int", &[("T", "M.Dog(class)")]).unwrap();
         assert_eq!(sup.superclasses, [("1M3DogC".to_string(), "1M6AnimalC".to_string())]);

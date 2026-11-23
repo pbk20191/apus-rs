@@ -85,6 +85,10 @@ apus::swift! {
     fn joined_ints(s: &SwiftValue) -> String; // refused before the call: [Int]'s Element is not String
     #[swift_linked = "Res.described<S: Sequence>(_: S) -> String where S.Element: CustomStringConvertible", S = "[Swift.Int]"]
     fn described(s: &SwiftValue) -> String;
+    #[swift_linked = "Res.flattened<S: Sequence>(_: S) -> String where S.Element: Sequence, S.Element.Element == String", S = "[[Swift.String]]"]
+    fn flattened(s: &SwiftValue) -> String;
+    #[swift_linked = "Res.flattened<S: Sequence>(_: S) -> String where S.Element: Sequence, S.Element.Element == String", S = "[[Swift.Int]]"]
+    fn flattened_ints(s: &SwiftValue) -> String; // refused before the call: [[Int]]'s Element.Element is not String
     #[swift_linked = "Res.renamed<T: Animal(class)>(_: T, suffix: String) -> T", T = "Probe.Minted(class)"]
     fn renamed_minted(x: &SwiftObject, suffix: &str) -> SwiftObject; // refused before the call: Minted is no Animal
     #[swift_linked = "Probe.genericTypedSync<E: Error>(_: Bool, _: E) throws(E) -> Int", E = "Probe.Boom(struct)"]
@@ -286,6 +290,11 @@ fn specialized_generics() -> Result<(), Failed> {
     let numbers = SwiftValue::new(vec![1i64, 2]);
     check(matches!(joined_ints(&numbers), Err(CallError::InvalidArgument(_))), "[Int]'s Element is not String")?;
     check(described(&numbers).unwrap() == "1+2", "S.Element: CustomStringConvertible")?;
+    // A nested associated type, found a step at a time.
+    let rows = SwiftValue::new(vec![vec!["a".to_string()], vec!["b".to_string(), "c".to_string()]]);
+    check(flattened(&rows).unwrap() == "a,b,c", "S.Element.Element == String")?;
+    let grid = SwiftValue::new(vec![vec![1i64]]);
+    check(matches!(flattened_ints(&grid), Err(CallError::InvalidArgument(_))), "[[Int]]'s Element.Element is not String")?;
     check(matches!(renamed_minted(&minted(1).unwrap(), "!"), Err(CallError::InvalidArgument(_))), "Minted is no Animal")?;
     let boom = make_boom(5).unwrap();
     check(typed_bound(false, &boom).unwrap() == 42, "throws(Boom), not thrown")?;

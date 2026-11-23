@@ -511,11 +511,15 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         let bracket = |tokens: Vec<TokenTree>| TokenTree::Group(Group::new(Delimiter::Bracket, tokens.into_iter().collect()));
         let paren = |tokens: Vec<TokenTree>| TokenTree::Group(Group::new(Delimiter::Parenthesis, tokens.into_iter().collect()));
         let ident = |text: &str| TokenTree::Ident(proc_macro::Ident::new(text, proc_macro::Span::call_site()));
-        // `[type]`, or `[type protocol "…TL" "…Tl"]` for an associated type.
+        // `[type]`, or `[type (protocol "…TL" "…Tl")…]` for an associated type, a step for each name of its path.
         let subject = |on: &apus_mangle::BoundType, names: &mut Vec<String>, protocols: &mut Vec<String>| match on {
             apus_mangle::BoundType::Named(name) => bracket(vec![index(names, name)]),
-            apus_mangle::BoundType::Associated { ty, protocol, base, descriptor } => {
-                bracket(vec![index(names, ty), index(protocols, protocol), literal(base), literal(descriptor)])
+            apus_mangle::BoundType::Associated { ty, path } => {
+                let mut tokens = vec![index(names, ty)];
+                for step in path {
+                    tokens.push(paren(vec![index(protocols, &step.protocol), literal(&step.base), literal(&step.descriptor)]));
+                }
+                bracket(tokens)
             }
         };
         let types = plan.types.iter().map(|t| index(&mut names, t)).collect();

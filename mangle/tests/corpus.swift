@@ -206,6 +206,17 @@ extension Showing where Self: Opening, Self.Value: Leafy { public func perform()
 public func mixw<T: Opening>(_ t: T, _ v: T.Value) where T: Leafy, T.Value: Leafy {}
 public func seqw<T: Sequence>(_ t: T, _ e: T.Element) where T: Hashable, T.Element: Hashable {}
 public func amark<T: Opening & Sendable>(_ t: T, _ v: T.Value) {}
+// A nested associated type (`T.A.B`): each name after the first, with its protocol when its base has several.
+public protocol NQ { associatedtype B }
+public protocol NR { associatedtype B }
+public protocol NP { associatedtype A: NQ }
+public func nest1<T: NP>(_ t: T, _ x: T.A.B) {}
+public func nest2<T: NP>(_ x: T) where T.A.B == Int {}
+public func nest3<T: NP>(_ x: T) where T.A.B: Hashable {}
+public func nest4<T: NP, U: NP>(_ x: T, _ u: U, _ y: U.A.B, _ z: U.A.B) {}
+public func nest5<T: NP>(_ t: T, _ x: T.A.B) where T.A: NR {}
+public protocol NS { associatedtype C: NQ }
+public func nest7<T: NP, U: NS>(_ t: T, _ u: U) where U.C == T.A.B {}
 // A member type of a generic type: each level of the path takes its own arguments.
 public struct GOuter<T> { public struct Inner { public init() {} }; public enum E<U> { case a } }
 public struct GTwo<A, B> { public struct W {} }

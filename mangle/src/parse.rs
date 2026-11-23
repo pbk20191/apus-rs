@@ -375,9 +375,7 @@ impl<'a> Parser<'a> {
         let first = self.identifier()?;
         if let Some(param) = self.generic_param(&first) {
             if !self.at_metatype_suffix() && self.eat_path_dot() {
-                let name = self.identifier()?;
-                self.associated_protocol(param, &name)?;
-                return Ok(Ty::Member(param, name));
+                return Ok(Ty::Member(param, self.member_path(param)?));
             }
             return Ok(Ty::Param(param));
         }
@@ -519,11 +517,21 @@ impl<'a> Parser<'a> {
         let name = self.identifier()?;
         let param = self.generic_param(&name).ok_or_else(|| format!("`{name}` is not a generic parameter"))?;
         if self.eat_path_dot() {
-            let name = self.identifier()?;
-            self.associated_protocol(param, &name)?;
-            return Ok(Subject::Member(param, name));
+            return Ok(Subject::Member(param, self.member_path(param)?));
         }
         Ok(Subject::Param(param))
+    }
+
+    /// An associated type's path after `T.` (`A`, or `A.B` for a nested one), each name with its `(of P)`.
+    fn member_path(&mut self, param: GenericParam) -> Parsed<String> {
+        let mut path = self.identifier()?;
+        self.associated_protocol(param, &path)?;
+        while !self.at_metatype_suffix() && self.eat_path_dot() {
+            path.push('.');
+            path.push_str(&self.identifier()?);
+            self.associated_protocol(param, &path)?;
+        }
+        Ok(path)
     }
 
     /// `(of P)` after an associated type's name: the protocol that declares it, which its symbol names when the
@@ -572,10 +580,12 @@ impl<'a> Parser<'a> {
             let subject = self.subject()?;
             if self.eat("==") {
                 let ty = self.ty()?;
-                // Canonical form anchors a same-type requirement on the earlier, shorter type.
+                // Canonical form anchors a same-type requirement on the shorter, then earlier type (compareDependentTypes:
+                // `U.C` before `T.A.B`).
+                let key = |param: GenericParam, name: &str| (name.matches('.').count(), param);
                 into.push(match (subject, ty) {
                     (Subject::Member(param, name), Ty::Param(other)) => Requirement::SameType(Subject::Param(other), Ty::Member(param, name)),
-                    (Subject::Member(param, name), Ty::Member(other, other_name)) if other < param => {
+                    (Subject::Member(param, name), Ty::Member(other, other_name)) if key(other, &other_name) < key(param, &name) => {
                         Requirement::SameType(Subject::Member(other, other_name), Ty::Member(param, name))
                     }
                     (subject, ty) => Requirement::SameType(subject, ty),

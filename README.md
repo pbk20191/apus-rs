@@ -225,6 +225,13 @@ static (extension in _Concurrency where Success == Never, Failure == Never)
 - An associated type of a parameter that has several protocols (marker protocols such as `Sendable` aside) names
   the protocol that declares it, as its symbol does: `T.Value(of Opening)` in
   `M.f<T: Opening & Hashable>(_: T, _: T.Value(of Opening))`; without it the declaration is refused.
+- A nested associated type (`T.A.B`) is written as a path, and a name after the first takes `(of P)`, the protocol
+  that declares it, unless the declaration requires one protocol of its base (`where S.Element: Sequence,
+  S.Element.Element == String`). A bound call finds it a step at a time, through each protocol's conformance. Its
+  symbol names that protocol where the base has several (the declaration's and the one `(of P)` names); protocols the
+  base gets from its own protocol's requirements, and one a written protocol inherits, are not known: such a symbol
+  differs, and is refused (by the SDK's exports, or the linker for a module of your own). Declarations by name write
+  `(of P)` themselves.
 - `@preconcurrency` declarations: their symbols leave out `@Sendable`, global actors in function types and `Sendable`
   requirements.
 - A member type of a generic type takes each level's arguments where Swift writes them:

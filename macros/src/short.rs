@@ -303,10 +303,155 @@ fn rewrite(module_name: &str, module: &Module, context: &[&str], symbol: &Symbol
         let at = if accessor.is_some() { body.rfind(" {").unwrap_or(body.len()) } else { body.len() };
         body.insert_str(at, &format!(" where {}", rest.join(", ")));
     }
+    let (body, extension) = (nested_protocols(&body, fragments, &all_params), nested_protocols(&extension, fragments, &all_params));
     let modifiers = if modifiers.is_empty() { String::new() } else { format!("{} ", modifiers.join(" ")) };
     let declaration = |body: &str| format!("{modifiers}{extension}{prefix}.{body}");
     let body = parameter_marks(&body, usr_symbol(&symbol.usr, accessor).as_deref(), &declaration);
     Ok(declaration(&body))
+}
+
+/// `text` with the protocol declaring each name of a nested associated type after the first written
+/// (`T.A.B(of P)`), as the declaration's fragments name it by USR: a bound call looks the type up through it, and
+/// the mangler names it where the name's base has several protocols.
+fn nested_protocols(text: &str, fragments: &[Fragment], params: &[&str]) -> String {
+    fn associated(n: Option<&Fragment>) -> Option<&Fragment> {
+        n.filter(|n| n.kind == "typeIdentifier" && n.precise.as_deref().is_some_and(|u| u.ends_with("Qa")))
+    }
+    let dot = |n: Option<&Fragment>| n.is_some_and(|n| n.kind == "text" && n.spelling == ".");
+    let mut paths: Vec<(String, String)> = Vec::new();
+    for (i, f) in fragments.iter().enumerate() {
+        if !(params.contains(&f.spelling.as_str()) || f.spelling == "Self") || (i > 0 && dot(fragments.get(i - 1))) {
+            continue;
+        }
+        let (mut plain, mut written) = (f.spelling.clone(), f.spelling.clone());
+        let mut j = i;
+        let mut level = 0;
+        while let Some(name) = associated(fragments.get(j + 2)).filter(|_| dot(fragments.get(j + 1))) {
+            level += 1;
+            plain = format!("{plain}.{}", name.spelling);
+            written = format!("{written}.{}", name.spelling);
+            if level > 1 {
+                if let Some(protocol) = declaring_protocol(name.precise.as_deref().unwrap_or(""), &name.spelling) {
+                    written = format!("{written}(of {protocol})");
+                }
+            }
+            j += 2;
+        }
+        if level > 1 && !paths.iter().any(|(p, _)| *p == plain) {
+            paths.push((plain, written));
+        }
+    }
+    // A longer path first; one already written with its protocols is followed by `(`.
+    paths.sort_by_key(|(plain, _)| std::cmp::Reverse(plain.len()));
+    let mut text = text.to_string();
+    for (plain, written) in paths {
+        let mut out = String::new();
+        let mut rest = text.as_str();
+        while let Some(at) = rest.find(&plain) {
+            let before = if at > 0 { rest[..at].chars().last() } else { out.chars().last() };
+            let after = rest[at + plain.len()..].chars().next();
+            let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+            out.push_str(&rest[..at]);
+            if word(before) || before == Some('.') || word(after) || after == Some('(') {
+                out.push_str(&plain);
+            } else {
+                out.push_str(&written);
+            }
+            rest = &rest[at + plain.len()..];
+        }
+        out.push_str(rest);
+        text = out;
+    }
+    text
+}
+
+/// The protocol that declares an associated type, from the associated type's USR (`s:10AppIntents12_IntentValueP0D4TypeQa`:
+/// `AppIntents._IntentValue`; `s:ST7ElementQa`: `Sequence`), as a declaration writes it.
+fn declaring_protocol(usr: &str, name: &str) -> Option<String> {
+    // Its module's graph names it by its path (`_IntentValue`, `ValueType`), whose USR may abbreviate words.
+    let module = graphs::usr_module(usr)?;
+    if let Some(symbol) = graphs::graphs().module(&module).and_then(|m| m.by_usr(usr, Some("swift.associatedtype")).next()) {
+        return (symbol.path.len() == 2).then(|| format!("{module}.{}", symbol.path[0]));
+    }
+    // Not in a graph (an underscored protocol, `_IntentValue`, or the standard library's): read from the USR.
+    let mangled = usr.strip_prefix("s:")?.strip_suffix("Qa")?;
+    if let Some(rest) = mangled.strip_prefix('S') {
+        let len = if rest.starts_with('c') { 2 } else { 1 };
+        return apus_mangle::substituted_protocol(rest.get(..len)?).map(str::to_string).filter(|_| demangled_identifier(&rest[len..], &mut Vec::new()) == Some((name.into(), "")));
+    }
+    let mut words = Vec::new();
+    let (module, rest) = match mangled.strip_prefix('s') {
+        Some(rest) if rest.starts_with(|c: char| c.is_ascii_digit()) => ("Swift".to_string(), rest),
+        _ => demangled_identifier(mangled, &mut words)?,
+    };
+    let (protocol, rest) = demangled_identifier(rest, &mut words)?;
+    let (associated, rest) = demangled_identifier(rest.strip_prefix('P')?, &mut words)?;
+    (associated == name && rest.is_empty()).then(|| format!("{module}.{protocol}"))
+}
+
+/// The identifier `text` starts with (`10AppIntents`, or `0D4Type` with a word substitution: Mangling.rst
+/// "identifier"), and the rest; `words` are the words of those before it, as ManglingUtils.h's mangleIdentifier
+/// collects them (a word starts at a letter and ends before `_` or an uppercase letter after a lowercase one).
+fn demangled_identifier<'a>(text: &'a str, words: &mut Vec<String>) -> Option<(String, &'a str)> {
+    fn literal(text: &str) -> Option<(&str, &str)> {
+        let digits = text.chars().take_while(char::is_ascii_digit).count();
+        let len: usize = text[..digits].parse().ok().filter(|&len| len > 0)?;
+        Some((text.get(digits..digits + len)?, &text[digits + len..]))
+    }
+    let (identifier, rest) = match text.strip_prefix('0') {
+        None => literal(text).map(|(identifier, rest)| (identifier.to_string(), rest))?,
+        Some(mut rest) => {
+            let mut identifier = String::new();
+            loop {
+                match rest.chars().next()? {
+                    c if c.is_ascii_digit() => {
+                        let (part, after) = literal(rest)?;
+                        identifier.push_str(part);
+                        rest = after;
+                    }
+                    c if c.is_ascii_lowercase() => {
+                        identifier.push_str(words.get((c as u8 - b'a') as usize)?);
+                        rest = &rest[1..];
+                    }
+                    c if c.is_ascii_uppercase() => {
+                        identifier.push_str(words.get((c as u8 - b'A') as usize)?);
+                        rest = &rest[1..];
+                        // The last substitution: a literal tail, or `0` if the identifier ends with it.
+                        match rest.strip_prefix('0') {
+                            Some(after) => rest = after,
+                            None if rest.starts_with(|c: char| c.is_ascii_digit()) => {
+                                let (part, after) = literal(rest)?;
+                                identifier.push_str(part);
+                                rest = after;
+                            }
+                            None => {}
+                        }
+                        break;
+                    }
+                    _ => return None,
+                }
+            }
+            (identifier, rest)
+        }
+    };
+    let bytes = identifier.as_bytes();
+    let mut start = None;
+    for position in 0..=bytes.len() {
+        let ch = bytes.get(position).copied().unwrap_or(0);
+        if let Some(at) = start {
+            if ch == b'_' || ch == 0 || (!bytes[position - 1].is_ascii_uppercase() && ch.is_ascii_uppercase()) {
+                let word = &identifier[at..position];
+                if word.len() >= 2 && !words.iter().any(|w| w == word) && words.len() < 26 {
+                    words.push(word.to_string());
+                }
+                start = None;
+            }
+        }
+        if start.is_none() && !ch.is_ascii_digit() && ch != b'_' && ch != 0 {
+            start = Some(position);
+        }
+    }
+    Some((identifier, rest))
 }
 
 /// `body` with `_const` and `__shared` written on the parameters its symbol marks so (`Yt`, `h`), which the graph's
@@ -1152,6 +1297,15 @@ mod tests {
         assert!(expanded.contains("D: Foundation.DataProtocol"), "{expanded}");
         let symbol = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
         assert_eq!(Some(symbol), super::expected_symbol(text), "{expanded}");
+        // A nested one names the protocol declaring each name after the first, which a bound call looks up.
+        let module = crate::graphs::graphs().module("AppIntents").unwrap();
+        let usr = "s:10AppIntents15IntentParameterCAA10Foundation16AttributedStringV9ValueTypeRtzrlE5title11description07requestH6Dialog23inputConnectionBehavior15optionsProviderACyxGAD09LocalizedG8ResourceV_APSgAA0cM0VSgAA05InputoP0OYtqd__tcAA014DynamicOptionsR0Rd__AF07DefaultH0_AGRTd__lufc";
+        let symbol = module.by_usr(usr, None).next().unwrap();
+        let path: Vec<&str> = symbol.path.iter().map(String::as_str).collect();
+        let expanded = super::rewrite("AppIntents", module, &path[..path.len() - 1], symbol, None).unwrap();
+        assert!(expanded.contains("where OptionsProvider.DefaultValue.ValueType(of AppIntents._IntentValue) == Foundation.AttributedString(struct)"), "{expanded}");
+        let mangled = apus_mangle::Declaration::parse(&expanded).unwrap().symbol().unwrap();
+        assert_eq!(Some(mangled), super::usr_symbol(&symbol.usr, None), "{expanded}");
     }
 
     /// A nested type in a signature: its module once, each enclosing type with its kind.

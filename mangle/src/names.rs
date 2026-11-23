@@ -84,6 +84,19 @@ pub fn standard_protocol(name: &str) -> Option<&'static str> {
     })
 }
 
+/// The protocol a substitution (`T` of `ST`, `ci` of `Sci`) stands for: `standard_protocol` and
+/// `concurrency_protocol` the other way.
+pub fn substituted_protocol(substitution: &str) -> Option<&'static str> {
+    const NAMES: [&str; 29] = [
+        "BinaryFloatingPoint", "Encodable", "Decodable", "FloatingPoint", "RandomNumberGenerator", "Hashable", "Numeric",
+        "BidirectionalCollection", "RandomAccessCollection", "Comparable", "Collection", "MutableCollection",
+        "RangeReplaceableCollection", "Equatable", "Sequence", "IteratorProtocol", "UnsignedInteger", "RangeExpression",
+        "Strideable", "RawRepresentable", "StringProtocol", "SignedInteger", "BinaryInteger", "Actor", "Executor",
+        "SerialExecutor", "TaskExecutor", "AsyncIteratorProtocol", "AsyncSequence",
+    ];
+    NAMES.into_iter().find(|name| standard_protocol(name).or_else(|| concurrency_protocol(name)) == Some(substitution))
+}
+
 /// `Sc<letter>` protocols of the _Concurrency module.
 pub fn concurrency_protocol(name: &str) -> Option<&'static str> {
     Some(match name {

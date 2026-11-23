@@ -237,6 +237,7 @@ public struct Flag<V> {
 public func rank<T: Hashable & Comparable>(_ a: T, _ b: T) -> Int { a < b ? -1 : (a == b ? 0 : 1) }
 public func joined<S: Sequence>(_ s: S) -> String where S.Element == String { s.joined(separator: ",") }
 public func described<S: Sequence>(_ s: S) -> String where S.Element: CustomStringConvertible { s.map(\.description).joined(separator: "+") }
+public func flattened<S: Sequence>(_ s: S) -> String where S.Element: Sequence, S.Element.Element == String { s.flatMap { $0 }.joined(separator: ",") }
 // A class-bound existential (tests/swift_class_bound.rs): Swift passes and returns it as its reference and witness
 // table, in registers.
 public func anyNamed(_ name: String) -> any Named { Dog(name: name) }
