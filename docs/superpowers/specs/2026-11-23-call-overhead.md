@@ -13,7 +13,7 @@
 
 | 경우 | 처음 | 지금 | Swift |
 |---|---|---|---|
-| `Int, Int -> Int` | 29.1 | 18.8 | 0.8 |
+| `Int, Int -> Int` | 29.1 | 7.5 | 0.8 |
 | `String -> Int` | 49.4 | 40.4 | 0.8 |
 | `Double -> 복원력 있는 struct`(`SwiftValue`) | 45.3 | 35.5 | 0.8 |
 | 바인딩된 제네릭 `<T: Comparable>` | 131.2 | 81.7 | 0.8 |
@@ -42,6 +42,12 @@
     - API를 직접 쓰는 경우.
   - consume되는 인자가 복사되는지는 테스트(`consumed_arguments_are_copies`)로 지킨다. 복사를 빼면 SIGSEGV가 난다.
 
+- **스칼라 sync 경로:**
+  - 인자가 정수·`bool`·`f64`뿐이고 결과가 레지스터로 오며, receiver·제네릭·검사·래핑이 없는 sync 호출을 proc macro가 `scalar` 경로로 보낸다.
+  - 이 경로는 호출 기록 없이 레지스터만 채워 trampoline을 부른다(`SwiftFn::__call_scalar`).
+  - 인자를 레지스터에 넣는 방식(부호·0 확장)은 일반 경로와 같고, 새 ABI 가정은 없다.
+  - `Int, Int -> Int`: 19.6 → 7.5 ns. trampoline만은 3.9 ns다.
+
 ## 남은 비용
 
 **sync `Int` 호출 (약 19 ns):**
@@ -60,10 +66,7 @@
 
 ## 다음 후보 (아직 안 함)
 
-1. **스칼라 인자의 sync 호출 빠른 경로:**
-   - `swift!`가 인자·결과가 정수·실수뿐인 호출에 대해 `ArgLowering`이나 `Owned` 없이 레지스터만 채워 `rs_call_sync`를 부르는 코드를 생성한다.
-   - ABI 가정은 지금과 같다. 같은 trampoline을 쓴다.
-   - 10 ns 이하가 목표다.
+1. ~~스칼라 인자의 sync 호출 빠른 경로~~ (위 "스칼라 sync 경로"로 완료).
 2. **Rust `extern "C"`로 직접 부르기:**
    - swiftself, swifterror, swiftasync 파라미터가 없고, 스칼라만 받고, 스칼라 하나를 돌려주는 함수에 한정한다.
    - clang/LLVM의 swiftcall 구현에서는 이런 함수가 C 규약과 같다. 그래도 owner의 판단이 필요하다.

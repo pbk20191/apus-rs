@@ -121,6 +121,94 @@ impl SwiftFn {
     }
 }
 
+/// Arguments that go in registers and need nothing kept alive, handed over or checked: integers, `bool`, `f64`, as
+/// [`SwiftArg`](super::func::SwiftArg) lowers them.
+#[doc(hidden)]
+pub trait ScalarArgs {
+    /// Fills the argument registers; `false` if there are more than the registers hold.
+    fn put(self, regs: &mut apus_sys::CallRegs) -> bool;
+}
+
+/// One scalar argument: its integer or floating-point register.
+#[doc(hidden)]
+pub trait ScalarArg {
+    fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, floats: &mut usize) -> bool;
+}
+
+macro_rules! scalar_int {
+    ($($t:ty => $via:ty),*) => {$(
+        impl ScalarArg for $t {
+            #[inline]
+            fn put(self, regs: &mut apus_sys::CallRegs, ints: &mut usize, _floats: &mut usize) -> bool {
+                let Some(slot) = regs.gpr.get_mut(*ints) else { return false };
+                *slot = self as $via as u64; // sign- or zero-extended to the full register
+                *ints += 1;
+                true
+            }
+        }
+    )*};
+}
+scalar_int!(i64 => i64, i32 => i64, isize => i64, u64 => u64, u32 => u64, usize => u64, bool => u64);
+
+impl ScalarArg for f64 {
+    #[inline]
+    fn put(self, regs: &mut apus_sys::CallRegs, _ints: &mut usize, floats: &mut usize) -> bool {
+        let Some(slot) = regs.fpr.get_mut(*floats) else { return false };
+        *slot = self;
+        *floats += 1;
+        true
+    }
+}
+
+macro_rules! scalar_args {
+    ($($($a:ident)*;)*) => {$(
+        impl<$($a: ScalarArg),*> ScalarArgs for ($($a,)*) {
+            #[inline]
+            #[allow(non_snake_case, unused_mut, unused_variables)]
+            fn put(self, regs: &mut apus_sys::CallRegs) -> bool {
+                let ($($a,)*) = self;
+                let (mut ints, mut floats) = (0, 0);
+                true $(&& $a.put(regs, &mut ints, &mut floats))*
+            }
+        }
+    )*};
+}
+scalar_args! {
+    ;
+    A;
+    A B;
+    A B C;
+    A B C D;
+    A B C D E;
+    A B C D E F;
+    A B C D E F G;
+    A B C D E F G H;
+}
+
+impl SwiftFn {
+    /// A call whose arguments are all [`ScalarArgs`] and whose result comes back in registers, made right away with
+    /// no call record: the registers filled, the trampoline called, the result read. What `swift!` generates for
+    /// such a call (the same lowering as the general path, which keeps what other arguments need).
+    #[doc(hidden)]
+    #[inline]
+    pub fn __call_scalar<R: SwiftRet>(&'static self, args: impl ScalarArgs, throws: bool) -> Result<R, CallError> {
+        let function = self.resolve().ok_or(CallError::Unavailable(self.symbol))?.entry(std::ptr::null_mut())?;
+        let mut regs = apus_sys::CallRegs { gpr: [0; 8], fpr: [0.0; 8], self_: std::ptr::null_mut(), isolation: -1 };
+        if !args.put(&mut regs) {
+            return Err(CallError::InvalidArgument("too many arguments for the argument registers"));
+        }
+        let mut ret = RetRegs::new();
+        let kind = if R::float() { KIND_FLOATS } else { KIND_INTEGERS };
+        unsafe {
+            apus_sys::rs_call_sync(function, &regs, std::ptr::null_mut(), &mut ret.0, kind);
+            if throws && !ret.0.error.is_null() {
+                return Err(CallError::Swift(SwiftError::from_raw(ret.0.error)));
+            }
+            Ok(R::lift(&ret, &mut IndirectSlot::inline()))
+        }
+    }
+}
+
 /// A synchronous function called right away, while its arguments are still borrowed: a value it borrows by address
 /// (`&SwiftValue`) is passed as it is rather than copied, as for a call that may run later. What `swift!` uses for
 /// a sync function's call that it invokes at once.

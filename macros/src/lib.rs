@@ -868,6 +868,19 @@ pub fn __swift_route(input: TokenStream) -> TokenStream {
         (other, None) => other.to_string(),
         (other, _) => other.to_string(),
     };
+    // A sync call of integers, `bool` and `f64` with a result in registers, no receiver and nothing generic, checked
+    // or wrapped: made with no call record (`SwiftFn::__call_scalar`).
+    let scalar = |t: &str| matches!(t, "i64" | "i32" | "isize" | "u64" | "u32" | "usize" | "bool" | "f64");
+    let kind = if kind == "sync"
+        && generic.is_empty()
+        && rust_receiver(tail).is_none()
+        && rust_argument_types(tail).iter().all(|t| scalar(t))
+        && matches!(rust_return(tail).as_str(), "" | "()" | "i64" | "i32" | "u64" | "bool" | "f64")
+    {
+        "scalar".to_string()
+    } else {
+        kind
+    };
     // Built from the token trees themselves: `$crate` in `path` does not survive a trip through text.
     let mut body: Vec<TokenTree> = vec![TokenTree::Ident(binding.clone()), TokenTree::Ident(how.clone())];
     body.extend(kind.parse::<TokenStream>().expect("kind tokens"));

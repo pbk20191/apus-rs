@@ -640,6 +640,27 @@ macro_rules! __swift_item {
             call
         }
     };
+    // `scalar`: a sync call of integers, `bool` and `f64` with a result in registers, no receiver and nothing generic
+    // (the proc macro checks): made with no call record.
+    (runtime $how:ident scalar [$(#[$doc:meta])*] [$vis:vis] $name:ident [] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [] $spec:literal) => {
+        $(#[$doc])*
+        $vis fn $name($($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
+            static FUNCTION: $crate::swift::SwiftFn = $crate::swift::SwiftFn::__dispatched($crate::__swift_symbol!($how $spec), $crate::__swift_thunk!($how $spec));
+            FUNCTION.__call_scalar(($($arg,)*), false $(|| $crate::__swift_throws!($throws))?)
+        }
+    };
+    (linked $how:ident scalar [$(#[$doc:meta])*] [$vis:vis] $name:ident [] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [] $spec:literal) => {
+        $(#[$doc])*
+        $vis fn $name($($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
+            extern "C" {
+                #[link_name = $crate::__swift_symbol!($how $spec)]
+                static ENTRY: u8;
+            }
+            static FUNCTION: $crate::swift::SwiftFn =
+                unsafe { $crate::swift::SwiftFn::__linked(&raw const ENTRY as *const ::core::ffi::c_void, $crate::__swift_thunk!($how $spec)) };
+            FUNCTION.__call_scalar(($($arg,)*), false $(|| $crate::__swift_throws!($throws))?)
+        }
+    };
     (runtime $how:ident sync [$(#[$doc:meta])*] [$vis:vis] $name:ident [$($this:ident : $receiver:ty)?] [$($arg:ident : $ty:ty),*] [$($throws:ident)?] [$($ret:ty)?] [$($generic:tt)*] $spec:literal) => {
         $(#[$doc])*
         $vis fn $name($($this: $receiver,)? $($arg: $ty),*) -> ::core::result::Result<$crate::__swift_ret!($($ret)?), $crate::swift::CallError> {
@@ -904,6 +925,7 @@ macro_rules! __swift_ret {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __swift_throws {
+    (throws) => { true };
     (throws, $call:expr) => { $call.throws() };
     ($other:ident, $call:expr) => { compile_error!(concat!("expected `throws`, found `", stringify!($other), "`")) };
 }
