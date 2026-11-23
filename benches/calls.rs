@@ -67,6 +67,26 @@ fn report(name: &str, rust: f64, swift: f64) {
     println!("{name:<40} {rust:>9.1} ns   (Swift: {swift:>7.1} ns, ×{:.1})", rust / swift.max(0.01));
 }
 
+extern "C" {
+    #[link_name = "$s3Res8benchAddyS2i_SitF"]
+    static BENCH_ADD: u8;
+}
+
+/// The floor of apus's sync path: its register trampoline called with registers filled by hand, nothing else.
+fn trampoline_floor(n: usize) {
+    let mut regs = apus_sys::CallRegs { gpr: [0; 8], fpr: [0.0; 8], self_: std::ptr::null_mut(), isolation: -1 };
+    let mut ret: apus_sys::RetRegs = unsafe { std::mem::zeroed() };
+    let function = (&raw const BENCH_ADD).cast::<std::ffi::c_void>();
+    let mut s = 0u64;
+    for i in 0..n {
+        regs.gpr[0] = black_box(s);
+        regs.gpr[1] = i as u64;
+        unsafe { apus_sys::rs_call_sync(function, &regs, std::ptr::null_mut(), &mut ret, 0) };
+        s = ret.gpr[0];
+    }
+    black_box(s);
+}
+
 fn main() {
     const N: usize = 1_000_000;
     // `APUS_BENCH_SPIN=add|generic|async`: one case, long enough to profile (`sample <pid>`).
@@ -99,6 +119,8 @@ fn main() {
     });
     let swift = ns_per_call(N, |n| _ = black_box(loop_add(n as i64).unwrap()));
     report("Int, Int -> Int", rust, swift);
+    let floor = ns_per_call(N, trampoline_floor);
+    report("  (apus trampoline alone)", floor, swift);
 
     let rust = ns_per_call(N, |n| {
         for _ in 0..n {
