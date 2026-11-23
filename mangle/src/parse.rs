@@ -965,9 +965,12 @@ impl<'a> Parser<'a> {
                 params.push(Param { label, ty, inout, variadic, isolated, ownership, compile_time_const });
             }
             let is_async = self.eat_keyword("async");
-            let mut throws = self.eat_keyword("throws");
+            // `rethrows` is mangled and called as `throws` (owner-accepted 2026-11-23: its symbol has the same `K`, and
+            // swiftc passes such a function as a `throws` function value without a thunk).
+            let rethrows = self.eat_keyword("rethrows");
+            let mut throws = rethrows || self.eat_keyword("throws");
             // `throws(E)`; `throws(any Error)` is plain `throws`, `throws(Never)` no `throws` at all.
-            let typed_error = if throws && self.eat("(") {
+            let typed_error = if throws && !rethrows && self.eat("(") {
                 let ty = self.ty()?;
                 self.expect(")")?;
                 match ty {

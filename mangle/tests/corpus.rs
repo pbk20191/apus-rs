@@ -240,6 +240,8 @@ const DECLARATIONS: &[&str] = &[
     "Probe.nest4<T: NP, U: NP>(_: T, _: U, _: U.A.B, _: U.A.B)",
     "Probe.nest5<T: NP>(_: T, _: T.A.B(of NQ)) where T.A: NR",
     "Probe.nest7<T: NP, U: NS>(_: T, _: U) where U.C == T.A.B",
+    "Probe.rt1(_: (Int) throws -> Bool) rethrows -> Int",
+    "Probe.rt2(_: () async throws -> Int) async rethrows -> Int",
     "Probe.gf1(_: GOuter(struct)<Int>.Inner(struct))",
     "Probe.gf2<V>(_: GOuter(struct)<V>.Inner(struct), _: GOuter(struct)<V>.Inner(struct))",
     "Probe.gf3(_: GOuter(struct)<Int>.E(enum)<String>)",

@@ -302,6 +302,7 @@ public struct StructError: Error {
 @inline(never) public func applyConcrete(_ f: (Int) async -> Int) async -> Int { await f(20) + 1 }
 @inline(never) public func applyGeneric<T>(_ x: T, _ f: (T) async -> T) async -> T { await f(x) }
 @inline(never) public func applySync(_ f: (Int) -> Int) -> Int { f(3) * 10 }
+@inline(never) public func applyRethrowing(_ f: (Int) throws -> Int) rethrows -> Int { try f(3) * 10 }
 @inline(never) public func applySyncDouble(_ f: (Double, Int) -> Double) -> Double { f(1.5, 2) }
 @inline(never) public func applyMain(_ f: @MainActor (Int) async -> Int) async -> Int { await f(1) }
 @inline(never) public func applyEscaping(_ f: @escaping @Sendable (Int, String) async throws -> String) async throws -> String {

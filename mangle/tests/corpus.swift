@@ -282,3 +282,6 @@ extension Made { public init(sd: sending Counter) { self.init(x: 0) } }
 public protocol Owning: AnyObject {}
 public func cb0<T: Owning>(_ x: T) {}
 public func cb1<T: Owning & Hashable>(_ x: T, _ y: [T]) -> T { x }
+// `rethrows`: mangled and called as `throws` (owner-accepted 2026-11-23).
+public func rt1(_ f: (Int) throws -> Bool) rethrows -> Int { try f(1) ? 1 : 0 }
+public func rt2(_ f: () async throws -> Int) async rethrows -> Int { try await f() }

@@ -36,7 +36,8 @@ Judge every change by two questions, in this order:
   passed and returned as its raw integer, like the C enum Objective-C sees. (2026-11-22) A type's parameter that an
   extension or a member's `where` fixes to a type (`where A == Int`) is no generic argument: a struct's or enum's
   static member or initializer takes the others only, and an instance member whose parameters are all fixed takes no
-  `Self` metadata. Apple's
+  `Self` metadata. (2026-11-23) A `rethrows` function is mangled and called as a `throws` one (the same `K`; swiftc
+  passes it as a `throws` function value without a thunk). Apple's
   frameworks are compiled this way, so ABI stability fixes it.
 - Anything else (runtime internals, compiler-computed layouts of non-resilient types, private SPI, behavior observed
   but not documented) is **not** built on silently: stop and tell the owner what is unguaranteed and the alternatives,

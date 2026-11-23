@@ -203,6 +203,8 @@ the standard library spelled out:
   (`total: Int { get async throws }` is `async fn total(self: &SwiftValue) throws -> i64`): `swift!` refuses a mismatch,
   which would call an async function the sync way or leave a thrown error unread. A sync member that must run on its
   actor is the exception: it is `async fn` in Rust, and apus hops there.
+- A `rethrows` function is called as a `throws` one (`fn f(g: &SwiftClosure) throws -> i64`): its symbol is the same, and
+  a closure's error comes back through it.
 - Ownership: a `consuming` (`__owned`) or `sending` parameter, every initializer parameter not marked `borrowing`,
   and a setter's new value are passed +1, and `swift!` hands them over. A `sending` result is returned as any result
   is; in a closure type, `-> sending R` is accepted, a `sending` parameter refused (Swift would hand the closure it +1). A `consuming func` takes a copy of `self` (or an

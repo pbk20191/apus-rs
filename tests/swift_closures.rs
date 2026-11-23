@@ -21,6 +21,8 @@ apus::swift! {
     async fn apply_generic(x: &SwiftValue, f: &SwiftClosure) -> SwiftValue;
     #[swift_linked = "Probe.applySync(_: (Int) -> Int) -> Int"]
     fn apply_sync(f: &SwiftClosure) -> i64;
+    #[swift_linked = "Probe.applyRethrowing(_: (Int) throws -> Int) rethrows -> Int"]
+    fn apply_rethrowing(f: &SwiftClosure) throws -> i64;
     #[swift_linked = "Probe.applySyncDouble(_: (Double, Int) -> Double) -> Double"]
     fn apply_sync_double(f: &SwiftClosure) -> f64;
     #[swift_linked = "Probe.applySyncGeneric<T>(_: T, _: (T) -> T) -> T"]
@@ -71,7 +73,17 @@ fn sync_closures() -> Result<(), Failed> {
     check(matches!(result, Ok(r) if r == 3.0), format!("sync Double {result:?}"))?;
     let g = SwiftClosure::new_sync(|x: ByAddress<i64>| ByAddress(x.0 + 1));
     let result = apply_sync_generic(&SwiftValue::new(41i64), &g).map(|v| v.get::<i64>());
-    check(matches!(result, Ok(Some(42))), format!("sync generic {result:?}"))
+    check(matches!(result, Ok(Some(42))), format!("sync generic {result:?}"))?;
+    // `rethrows`: called as `throws`; the closure's error comes back through it.
+    let fine = SwiftClosure::new_sync(|x: i64| Ok::<_, SwiftError>(x + 4));
+    let n = apply_rethrowing(&fine);
+    check(matches!(n, Ok(70)), format!("rethrows, not thrown {n:?}"))?;
+    let failing = SwiftClosure::new_sync(|_: i64| match throw_struct(9) {
+        Err(CallError::Swift(error)) => Err::<i64, _>(error),
+        other => panic!("throwStruct: {other:?}"),
+    });
+    let thrown = apply_rethrowing(&failing);
+    check(matches!(&thrown, Err(CallError::Swift(e)) if e.description().contains("code: 9")), format!("rethrown {thrown:?}"))
 }
 
 /// Called twice at once (`async let`); the second call rethrows a Swift error.
